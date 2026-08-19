@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TokenTrail — Marathon direction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Mono:wght@400;500;600&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-ui,sans-serif}
+.topbar{position:sticky;top:0;z-index:60;display:flex;gap:8px;align-items:center;padding:12px 20px;
+  background:rgba(10,10,9,.92);backdrop-filter:blur(12px);border-bottom:1px solid #24241f}
+.topbar b{font-size:13px;margin-right:10px}
+.topbar a{font-size:12px;color:#8a8a80;text-decoration:none;padding:5px 11px;border:1px solid #2c2c26;border-radius:2px}
+.topbar a:hover{color:#ff4d00;border-color:#ff4d00}
+.caption{padding:44px 24px 14px;max-width:1240px;margin:0 auto}
+.caption .tag{font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:#ff4d00}
+.caption h2{font-size:27px;margin:10px 0 6px;letter-spacing:-.5px}
+.caption p{color:#8f8f85;font-size:14px;margin:0;max-width:78ch;line-height:1.65}
+.caption p b{color:#e8e4d9;font-weight:600}
+.frame{max-width:1240px;margin:0 auto 20px;height:812px;overflow:hidden;position:relative;
+  display:flex;flex-direction:column}
+
+/* ══════════ SHARED MARATHON SYSTEM ══════════ */
+.m{--bone:#e8e4d9;--ink:#0d0d0b;--org:#ff4d00;--cyn:#00c2c2;--acd:#c8e600;--mag:#ff1f6f;
+   --base:var(--bone);--fg:var(--ink);--rule:var(--ink);--dim:rgba(13,13,11,.55);--hair:rgba(13,13,11,.16);
+   background:var(--base);color:var(--fg);border:2px solid var(--rule)}
+.m.dk{--base:#0d0d0b;--fg:#e8e4d9;--rule:#e8e4d9;--dim:rgba(232,228,217,.5);--hair:rgba(232,228,217,.17)}
+
+.m .nav{display:flex;align-items:stretch;height:52px;flex:none;border-bottom:2px solid var(--rule)}
+.m .nav .mk{font:400 21px/1 'Anton';letter-spacing:.4px;text-transform:uppercase;display:flex;align-items:center;
+  padding:0 18px;border-right:2px solid var(--rule);background:var(--org);color:#fff}
+.m .nav a{display:flex;align-items:center;gap:6px;padding:0 13px;text-decoration:none;color:var(--fg);
+  font:600 11px/1 'Inter Tight';letter-spacing:.9px;text-transform:uppercase;opacity:.45;transition:.15s;
+  border-right:1px solid var(--hair)}
+.m .nav a u{text-decoration:none;font:400 11px 'IBM Plex Mono',monospace;opacity:.6}
+.m .nav a:hover{opacity:1;background:var(--hair)}
+.m .nav a.on{opacity:1;background:var(--fg);color:var(--base)}
+.m .nav a.on u{color:var(--org);opacity:1}
+.m .nav .sy{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 16px;border-left:2px solid var(--rule);
+  font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:1.2px;text-transform:uppercase}
+.m .nav .sy i{width:7px;height:7px;background:var(--acd);animation:bl 2s steps(1) infinite}
+@keyframes bl{0%,60%{opacity:1}61%,100%{opacity:.25}}
+
+/* corner registration marks */
+.reg{position:relative}
+.reg::before,.reg::after{content:'';position:absolute;width:9px;height:9px;pointer-events:none}
+.reg::before{top:5px;left:5px;border-top:2px solid var(--org);border-left:2px solid var(--org)}
+.reg::after{bottom:5px;right:5px;border-bottom:2px solid var(--org);border-right:2px solid var(--org)}
+.fig{font:500 9px/1 'IBM Plex Mono',monospace;letter-spacing:1.6px;text-transform:uppercase;opacity:.5}
+.hz{background-image:repeating-linear-gradient(45deg,var(--ink) 0 6px,var(--acd) 6px 12px)}
+
+/* hero band */
+.m .band{flex:none;display:grid;grid-template-columns:1.06fr .94fr;border-bottom:2px solid var(--rule)}
+.m .hero{padding:16px 22px 14px;border-right:2px solid var(--rule);position:relative;overflow:hidden}
+.m .hero .kick{display:flex;justify-content:space-between;align-items:baseline;
+  font:600 10px/1 'Inter Tight';letter-spacing:1.7px;text-transform:uppercase}
+.m .hero .kick s{text-decoration:none;color:var(--org)}
+.m .hero .n{font:400 104px/.8 'Anton';letter-spacing:-2px;margin:15px 0 0;display:flex;align-items:flex-start;
+  font-variant-numeric:tabular-nums}
+.m .hero .n u{text-decoration:none;font-size:38px;color:var(--org);margin-left:4px}
+.m .hero .sp{margin-top:12px;height:30px}
+.m .hero .sp svg{width:100%;height:30px;display:block}
+.m .quad{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+.m .q{padding:13px 17px;border-right:2px solid var(--rule);border-bottom:2px solid var(--rule);position:relative}
+.m .q:nth-child(2n){border-right:none}.m .q:nth-child(n+3){border-bottom:none}
+.m .q .k{font:600 9px/1 'Inter Tight';letter-spacing:1.4px;text-transform:uppercase;opacity:.6}
+.m .q .v{font:400 38px/1 'Anton';margin-top:8px;letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.m .q .h{font:400 10px/1 'IBM Plex Mono',monospace;margin-top:7px;opacity:.52}
+.m .q.org{background:var(--org);color:#fff}.m .q.org .k,.m .q.org .h{opacity:.82}
+.m .q.cyn{background:var(--cyn);color:var(--ink)}
+.m .q.acd{background:var(--acd);color:var(--ink)}
+
+/* seismograph */
+.m .seis{flex:1;min-height:0;display:flex;flex-direction:column;padding:13px 22px 8px;
+  border-bottom:2px solid var(--rule);position:relative}
+.m .seis .hd{display:flex;justify-content:space-between;align-items:baseline;flex:none}
+.m .seis .hd h3{font:600 11px/1 'Inter Tight';letter-spacing:1.6px;text-transform:uppercase;margin:0}
+.m .seis .hd .rt{display:flex;gap:14px;align-items:baseline}
+.m .seis .hd .rt b{font:500 10px 'IBM Plex Mono',monospace;letter-spacing:1px;color:var(--org)}
+.m .seis .plot{flex:1;min-height:0;margin-top:9px;position:relative}
+.m .seis .plot svg{width:100%;height:100%;display:block}
+.m .seis .ax{display:flex;justify-content:space-between;flex:none;padding-top:5px;border-top:2px solid var(--rule);
+  font:500 9px/1 'IBM Plex Mono',monospace;letter-spacing:1.4px;opacity:.5}
+
+/* lower split */
+.m .low{flex:none;display:grid;grid-template-columns:1.5fr 1fr;border-bottom:2px solid var(--rule)}
+.m .bars{padding:13px 22px 15px;border-right:2px solid var(--rule)}
+.m .bars h3,.m .srcs h3{font:600 11px/1 'Inter Tight';letter-spacing:1.6px;text-transform:uppercase;margin:0 0 11px;
+  display:flex;justify-content:space-between}
+.m .bars .r{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.m .bars .r i{width:19px;height:19px;flex:none;display:flex;align-items:center;justify-content:center;
+  font:400 11px 'Anton';color:#fff}
+.m .bars .r span{width:132px;font:500 12px 'Inter Tight';overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.m .bars .r .tr{flex:1;height:11px;background:var(--hair)}
+.m .bars .r .tr div{height:100%}
+.m .bars .r b{width:52px;text-align:right;font:500 12px 'IBM Plex Mono',monospace}
+.m .srcs{padding:13px 18px 15px;display:flex;flex-direction:column}
+.m .srcs .g{display:grid;grid-template-columns:1fr 1fr;gap:5px;flex:1}
+.m .srcs .g div{border:2px solid var(--rule);padding:7px 9px;display:flex;flex-direction:column;justify-content:space-between}
+.m .srcs .g div .n{font:400 20px/1 'Anton';letter-spacing:-.5px}
+.m .srcs .g div .l{font:500 8px/1.3 'IBM Plex Mono',monospace;letter-spacing:.9px;text-transform:uppercase;opacity:.55}
+
+.m .quote{flex:none;padding:12px 22px;background:var(--fg);color:var(--base);display:flex;align-items:center;gap:16px}
+.m .quote .fg{font:500 9px 'IBM Plex Mono',monospace;letter-spacing:1.6px;color:var(--org);flex:none}
+.m .quote p{margin:0;font:500 13px/1.4 'Inter Tight'}
+.m .quote p b{color:var(--acd);font-weight:700}
+
+/* ══════════ DENSE TABLE FRAME ══════════ */
+.m .thd{flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:15px 22px 13px;
+  border-bottom:2px solid var(--rule)}
+.m .thd h1{font:400 40px/1 'Anton';letter-spacing:-1px;margin:0;text-transform:uppercase}
+.m .thd .sub{font:400 11px 'IBM Plex Mono',monospace;opacity:.55;margin-top:5px;letter-spacing:.6px}
+.m .thd .pills{display:flex;gap:0}
+.m .thd .pills button{font:600 10px 'Inter Tight';letter-spacing:1.1px;text-transform:uppercase;
+  padding:7px 13px;border:2px solid var(--rule);background:none;color:var(--fg);cursor:pointer;margin-left:-2px}
+.m .thd .pills button.on{background:var(--fg);color:var(--base)}
+.m .tw{flex:1;min-height:0;overflow:hidden}
+.m table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.m thead th{font:600 9px/1 'Inter Tight';letter-spacing:1.3px;text-transform:uppercase;text-align:left;
+  padding:9px 12px;border-bottom:2px solid var(--rule);opacity:.6;white-space:nowrap}
+.m th.n,.m td.n{text-align:right}
+.m tbody td{padding:8px 12px;border-bottom:1px solid var(--hair);font:500 12px 'Inter Tight'}
+.m tbody tr:hover td{background:var(--hair)}
+.m td.rk{font:400 14px 'Anton';width:34px;text-align:center;color:#fff}
+.m td .mn{font:600 12.5px 'Inter Tight'}
+.m td .sr{font:400 9px 'IBM Plex Mono',monospace;letter-spacing:.7px;opacity:.5;text-transform:uppercase;margin-top:2px}
+.m td.mono{font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:11.5px}
+.m td .sk{display:block}
+.m .shbar{height:9px;background:var(--hair);width:64px;display:inline-block;vertical-align:middle}
+.m .shbar div{height:100%}
+
+/* still / motion */
+.still .up{opacity:1!important;transform:none!important;animation:none!important}
+.still .trc{stroke-dashoffset:0!important;transition:none!important}
+.still .nav .sy i{animation:none!important}
+.up{opacity:0;transform:translateY(10px)}
+.revealed .up{animation:u .55s cubic-bezier(.2,.7,.3,1) forwards}
+@keyframes u{to{opacity:1;transform:none}}
+.trc{stroke-dasharray:4000;stroke-dashoffset:4000}
+.revealed .trc{transition:stroke-dashoffset 1.8s cubic-bezier(.3,0,.15,1);stroke-dashoffset:0}
+.gw{transform:scaleX(0);transform-origin:left}
+.revealed .gw{animation:gw .9s cubic-bezier(.2,.75,.3,1) forwards}
+@keyframes gw{to{transform:scaleX(1)}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <b>TokenTrail · Marathon direction</b>
+  <a href="?d=l">Overview — bone</a>
+  <a href="?d=k">Overview — dark</a>
+  <a href="?d=t">Models table</a>
+  <a href="?">all</a>
+</div>
+<div id="mount"></div>
+
+<script>
+const NAV=['Overview','Models','Trends','Projects','Activity','Settings'];
+const C={org:'#ff4d00',cyn:'#00c2c2',acd:'#c8e600',mag:'#ff1f6f',vio:'#7c5cff',ink:'#0d0d0b'};
+const MODELS=[
+  ['claude-opus-5',C.org,'8.1M',1,'claude code · zcode','$118.40','2,910','38.2'],
+  ['claude-sonnet-5',C.cyn,'5.4M',.67,'claude code · opencode','$61.20','2,140','25.5'],
+  ['gemini-3-pro',C.acd,'2.1M',.26,'gemini · antigravity','$24.80','980','9.9'],
+  ['gpt-5.6-sol',C.mag,'1.6M',.2,'codex','$31.05','812','7.6'],
+  ['gpt-5.5',C.vio,'1.3M',.16,'codex · opencode','$18.90','660','6.1'],
+  ['claude-haiku-4-5','#8a8578','588K',.07,'claude code','$2.10','1,240','2.8'],
+];
+const MONTHS=['SEP','OCT','NOV','DEC','JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG'];
+
+function rng(s){let a=s>>>0;return()=>{a=(a*1664525+1013904223)>>>0;return a/4294967296}}
+function series(n,seed,amp){const r=rng(seed),o=[];let v=.45;
+  for(let i=0;i<n;i++){v+=(r()-.47)*(amp||.22);v=Math.max(.05,Math.min(1,v));
+    const d=i%7;o.push(v*(d===5||d===6?.4:1)*(.5+i/n*.85))}return o}
+/* seismograph: hard polyline, no smoothing — the spikes are the point */
+function seis(d,w,h){const mx=Math.max(...d),st=w/(d.length-1);
+  return d.map((v,i)=>(i?'L':'M')+(i*st).toFixed(1)+' '+(h-(v/mx)*h*.94).toFixed(1)).join(' ')}
+function sparkPath(d,w,h){const mx=Math.max(...d),st=w/(d.length-1);
+  return d.map((v,i)=>(i?'L':'M')+(i*st).toFixed(1)+' '+(h-(v/mx)*h*.9).toFixed(1)).join(' ')}
+
+function overview(dark){
+  const d=series(150,7717,.26);
+  const q=[['org','Est. cost','$268','api-equivalent'],['','Sessions','1,473','10,314 calls'],
+    ['acd','Streak','59d','longest ever'],['cyn','Cache served','78%','≈ $740 saved']];
+  const srcs=[['67%','claude code'],['19%','codex'],['8%','zcode'],['6%','antigravity']];
+  return `<div class="frame m ${dark?'dk':''}" id="${dark?'k':'l'}">
+    <div class="nav"><div class="mk">TokenTrail</div>
+      ${NAV.map((n,i)=>`<a href="#" class="${i?'':'on'}"><u>0${i+1}</u>${n}</a>`).join('')}
+      <div class="sy"><i></i>Synced 18:42</div></div>
+
+    <div class="band">
+      <div class="hero reg">
+        <div class="kick"><span>Total tokens · all time</span><s>FIG.01</s></div>
+        <div class="n up">141<u>M</u></div>
+        <div class="sp"><svg viewBox="0 0 460 30" preserveAspectRatio="none">
+          <path class="trc" d="${sparkPath(series(80,55,.3),460,30)}" fill="none"
+            stroke="${C.org}" stroke-width="1.6"/></svg></div>
+      </div>
+      <div class="quad">${q.map((x,i)=>`<div class="q ${x[0]} up" style="animation-delay:${i*70}ms">
+        <div class="k">${x[1]}</div><div class="v">${x[2]}</div><div class="h">${x[3]}</div></div>`).join('')}</div>
+    </div>
+
+    <div class="seis">
+      <div class="hd"><h3>Daily tokens — last 150 days</h3>
+        <div class="rt"><b>▲ 18% VS PREV</b><span class="fig">FIG.02 / SEISMIC</span></div></div>
+      <div class="plot"><svg viewBox="0 0 1140 190" preserveAspectRatio="none">
+        <line x1="0" y1="189" x2="1140" y2="189" stroke="${dark?'#e8e4d9':'#0d0d0b'}" stroke-width="2" opacity=".3"/>
+        <line x1="0" y1="95" x2="1140" y2="95" stroke="${dark?'#e8e4d9':'#0d0d0b'}" stroke-width="1"
+          stroke-dasharray="3 5" opacity=".22"/>
+        <path class="trc" d="${seis(d,1140,190)}" fill="none" stroke="${C.org}" stroke-width="1.7"
+          stroke-linejoin="miter"/>
+      </svg></div>
+      <div class="ax">${MONTHS.slice(4).map(m=>`<span>${m}</span>`).join('')}</div>
+    </div>
+
+    <div class="low">
+      <div class="bars"><h3><span>Top models · 30 days</span><span class="fig">FIG.03</span></h3>
+        ${MODELS.slice(0,5).map((m,i)=>`<div class="r up" style="animation-delay:${180+i*60}ms">
+          <i style="background:${m[1]}">${i+1}</i><span>${m[0]}</span>
+          <span class="tr"><div class="gw" style="width:${m[3]*100}%;background:${m[1]};animation-delay:${240+i*60}ms"></div></span>
+          <b>${m[2]}</b></div>`).join('')}
+      </div>
+      <div class="srcs"><h3><span>Harnesses</span><span class="fig">FIG.04</span></h3>
+        <div class="g">${srcs.map((s,i)=>`<div class="up" style="animation-delay:${240+i*60}ms">
+          <div class="n">${s[0]}</div><div class="l">${s[1]}</div></div>`).join('')}</div>
+      </div>
+    </div>
+
+    <div class="quote"><span class="fg">NOTE 01</span>
+      <p>You work in bursts — <b>62%</b> of your tokens land on just <b>14 days</b> of the year.</p></div>
+  </div>`;
+}
+
+function table(){
+  const cols=['#','Model','Sources','Calls','Tokens','Avg/call','90-day trend','Est. cost','Share'];
+  return `<div class="frame m" id="t">
+    <div class="nav"><div class="mk">TokenTrail</div>
+      ${NAV.map((n,i)=>`<a href="#" class="${i===1?'on':''}"><u>0${i+1}</u>${n}</a>`).join('')}
+      <div class="sy"><i></i>Synced 18:42</div></div>
+    <div class="thd">
+      <div><h1>Models</h1><div class="sub">6 models · 10,314 calls · 90 days</div></div>
+      <div class="pills">${['7D','30D','90D','ALL'].map((p,i)=>
+        `<button class="${i===2?'on':''}">${p}</button>`).join('')}</div>
+    </div>
+    <div class="tw"><table>
+      <thead><tr>${cols.map((c,i)=>`<th class="${i>2&&i!==6?'n':''}">${c}</th>`).join('')}</tr></thead>
+      <tbody>${MODELS.map((m,i)=>`<tr class="up" style="animation-delay:${i*45}ms">
+        <td class="rk" style="background:${m[1]}">${i+1}</td>
+        <td><div class="mn">${m[0]}</div><div class="sr">${m[4]}</div></td>
+        <td class="mono" style="opacity:.6">${m[4].split(' · ').length} src</td>
+        <td class="n mono">${m[6]}</td>
+        <td class="n mono">${m[2]}</td>
+        <td class="n mono">${m[7]}K</td>
+        <td><svg width="94" height="20" style="display:block">
+          <path d="${sparkPath(series(30,600+i*29,.34),94,20)}" fill="none" stroke="${m[1]}" stroke-width="1.4"/>
+        </svg></td>
+        <td class="n mono">${m[5]}</td>
+        <td class="n"><span class="shbar"><div style="width:${m[3]*100}%;background:${m[1]}"></div></span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="quote"><span class="fg">NOTE 02</span>
+      <p>One model is <b>54%</b> of your spend. Merging aliases in Settings keeps this list honest.</p></div>
+  </div>`;
+}
+
+const CAPS=[
+  ['l','Overview — bone','<b>The default.</b> Bone ground, near-black rules at 2px, one orange signal plus cyan '+
+   'and acid as block fills. Anton for figures, IBM Plex Mono for every technical label. Registration marks on '+
+   'the hero, FIG numbers on each block, hard-edged seismograph with a dashed midline — no gradients anywhere, '+
+   'which is what keeps it reading as signage rather than as a dashboard.',()=>overview(false)],
+  ['k','Overview — dark','<b>Same system, inverted.</b> Identical structure and accents on near-black. The '+
+   'colour blocks get louder against the dark ground and the seismograph gains contrast; the bone version feels '+
+   'more like a printed manual, this one more like an instrument in a dark cockpit.',()=>overview(true)],
+  ['t','Models — the density test','<b>Proof the system survives real data.</b> Nine columns, colour-blocked rank '+
+   'cells, mono tabular figures, an inline seismograph per row, and a share bar. This is the page where bold '+
+   'design usually collapses — hard rules and a strict mono column actually make it easier to scan than the '+
+   'current table, not harder.',table],
+];
+const only=new URLSearchParams(location.search).get('d');
+const shown=only?CAPS.filter(c=>c[0]===only):CAPS;
+document.getElementById('mount').innerHTML=shown.map(([id,h,p,fn],i)=>
+  `<div class="caption"><div class="tag">Direction · frame ${String(i+1).padStart(2,'0')}</div>
+   <h2>${h}</h2><p>${p}</p></div>${fn()}`).join('');
+document.querySelectorAll('path.trc').forEach(p=>{
+  const L=Math.ceil(p.getTotalLength())+2;
+  p.style.strokeDasharray=L;p.style.strokeDashoffset=L;
+});
+if(new URLSearchParams(location.search).has('still')){
+  document.body.classList.add('still');
+  document.querySelectorAll('.frame').forEach(f=>f.classList.add('revealed'));
+}else{
+  const io=new IntersectionObserver(es=>es.forEach(e=>{
+    if(e.isIntersecting)e.target.classList.add('revealed')}),{threshold:.12});
+  document.querySelectorAll('.frame').forEach(f=>io.observe(f));
+  setTimeout(()=>{if(!document.querySelector('.frame.revealed'))
+    document.querySelectorAll('.frame').forEach(f=>f.classList.add('revealed'))},1600);
+}
+</script>
+</body>
+</html>
