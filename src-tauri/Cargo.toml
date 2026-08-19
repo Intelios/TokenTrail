@@ -1,8 +1,8 @@
 [package]
 name = "tokentrail"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "1.0.0"
+description = "A app for tracking your token usage across LLM harnesses."
+authors = ["Intelios"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -25,4 +25,3 @@ serde_json = "1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 time = { version = "0.3.55", features = ["parsing", "formatting"] }
 glob = "0.3.4"
-
