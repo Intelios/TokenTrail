@@ -333,7 +333,13 @@
   .mc:last-child { border-right: none; }
   .mc .k { font: 600 clamp(9px, 0.7vw, 12px)/1 var(--font-ui); letter-spacing: 1.3px; text-transform: uppercase; opacity: 0.55; }
   .mc .v { font: 400 clamp(26px, 2.1vw, 44px)/1 var(--font-disp); margin-top: 8px; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
-  .mc .v.name { font-size: clamp(16px, 1.3vw, 27px); margin-top: 12px; letter-spacing: 0.2px; }
+  .mc .v.name {
+    font-size: clamp(16px, 1.3vw, 27px);
+    line-height: 1.25;
+    margin-top: 10px;
+    letter-spacing: 0.2px;
+    padding-bottom: 3px;
+  }
   .mc .v .unit { color: var(--org); font-size: 0.55em; }
   .mc .h { font: 400 clamp(10px, 0.75vw, 12px)/1.3 var(--font-mono); margin-top: 7px; opacity: 0.48; }
   .mc.hl { background: var(--org); color: #fff; }
