@@ -4,6 +4,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   codex: '#34d399',
   opencode: '#f472b6',
   gemini: '#60a5fa',
+  antigravity: '#22d3ee',
 };
 
 export const SOURCE_LABEL: Record<string, string> = {
@@ -12,6 +13,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   gemini: 'Gemini CLI',
+  antigravity: 'Antigravity',
 };
 
 export const MODEL_PALETTE = [

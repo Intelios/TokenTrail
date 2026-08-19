@@ -1,6 +1,8 @@
 # TokenTrail — Workspace Instructions
 
-TokenTrail is a Tauri desktop app that aggregates AI-coding usage across local harnesses (ZCode, Claude Code, Codex, OpenCode, Gemini CLI) and shows it in a SvelteKit + ECharts dashboard.
+TokenTrail is a Tauri desktop app that aggregates AI-coding usage across local harnesses (ZCode, Claude Code, Codex, OpenCode, Gemini CLI, Antigravity) and shows it in a SvelteKit + ECharts dashboard.
+
+Antigravity note: its collector reads `~/.gemini/antigravity/conversations/*.db` — per-conversation SQLite files whose `gen_metadata` rows are protobuf blobs (ChatModelMetadata wire layout, hand-parsed in `antigravity.rs`). The internal format is undocumented and may change between Antigravity releases; the wire reader is deliberately tolerant and skips unparseable rows.
 
 ## Repository layout
 

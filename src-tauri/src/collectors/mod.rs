@@ -1,3 +1,4 @@
+pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod gemini;
@@ -19,6 +20,7 @@ pub fn sync_all(store: &Store, home: &Path) -> Vec<IngestStats> {
         ("codex", codex::collect),
         ("opencode", opencode::collect),
         ("gemini", gemini::collect),
+        ("antigravity", antigravity::collect),
     ];
     runs.into_iter()
         .map(|(name, f)| match f(store, home) {
@@ -35,6 +37,7 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
         (Source::Codex, home.join(".codex/sessions")),
         (Source::Opencode, home.join(".local/share/opencode")),
         (Source::Gemini, home.join(".gemini/tmp")),
+        (Source::Antigravity, home.join(".gemini/antigravity/conversations")),
     ];
     paths
         .into_iter()

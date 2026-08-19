@@ -8,6 +8,7 @@ pub enum Source {
     Codex,
     Opencode,
     Gemini,
+    Antigravity,
 }
 
 impl Source {
@@ -18,6 +19,7 @@ impl Source {
             Source::Codex => "codex",
             Source::Opencode => "opencode",
             Source::Gemini => "gemini",
+            Source::Antigravity => "antigravity",
         }
     }
 
@@ -28,6 +30,7 @@ impl Source {
             Source::Codex => "Codex",
             Source::Opencode => "OpenCode",
             Source::Gemini => "Gemini CLI",
+            Source::Antigravity => "Antigravity",
         }
     }
 }
