@@ -5,6 +5,143 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TokenTrail</title>
+    <script>
+      // Dev-only Tauri mock: open the dev server with ?mock in the URL
+      // (e.g. http://localhost:1420/?mock) to work on the UI with synthetic
+      // data when the Rust backend isn't running. The real app always has
+      // __TAURI_INTERNALS__ injected before this script, so this never fires.
+      if (!window.__TAURI_INTERNALS__ && location.search.includes('mock')) {
+        (function () {
+          let seed = 42;
+          const rng = () => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed / 4294967296);
+          const iso = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
+          const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+          const SOURCES = ['claude_code', 'codex', 'zcode', 'antigravity', 'opencode', 'gemini'];
+          const WEIGHT = [0.55, 0.22, 0.1, 0.07, 0.04, 0.02];
+          const MODELS = [
+            ['claude-opus-5', 8.1e6, ['claude_code', 'zcode'], 118.4, 2910, 412],
+            ['claude-sonnet-5', 5.4e6, ['claude_code', 'opencode'], 61.2, 2140, 318],
+            ['gemini-3-pro', 2.1e6, ['gemini', 'antigravity'], 24.8, 980, 145],
+            ['gpt-5.6-sol', 1.6e6, ['codex'], 31.05, 812, 98],
+            ['gpt-5.5', 1.3e6, ['codex', 'opencode'], 18.9, 660, 87],
+            ['claude-haiku-4-5', 588e3, ['claude_code'], 2.1, 1240, 201],
+          ];
+          const PROJECTS = [
+            ['~/dev/TokenTrail', 0.31], ['~/dev/aurora-api', 0.24], ['~/work/billing-svc', 0.2],
+            ['~/dev/website', 0.15], ['~/notes/scripts', 0.1],
+          ];
+
+          function walk(base, n) {
+            const out = [];
+            let v = base;
+            for (let i = 0; i < n; i++) {
+              v += (rng() - 0.48) * base * 0.5;
+              v = clamp(v, base * 0.1, base * 2.2);
+              const dow = i % 7;
+              out.push(v * (dow === 5 || dow === 6 ? 0.35 : 1) * (0.4 + (i / n) * 0.8));
+            }
+            return out;
+          }
+
+          const dailyRows = (n) => {
+            const rows = [];
+            SOURCES.forEach((src, si) => {
+              walk((WEIGHT[si] || 0.02) * 950000, n).forEach((tok, i) => {
+                rows.push({ date: iso(n - 1 - i), source: src, tokens: Math.round(tok), cost_usd: tok * 0.000019 });
+              });
+            });
+            return rows;
+          };
+
+          const totalTokens = MODELS.reduce((s, m) => s + m[1], 0);
+          const totalCost = MODELS.reduce((s, m) => s + m[3], 0);
+          const totalEvents = MODELS.reduce((s, m) => s + m[4], 0);
+          const totalSessions = MODELS.reduce((s, m) => s + m[5], 0);
+
+          function mockData(cmd, args) {
+            switch (cmd) {
+              case 'get_overview':
+                return {
+                  total_tokens: totalTokens, input_tokens: totalTokens * 0.62, output_tokens: totalTokens * 0.31,
+                  cache_read_tokens: totalTokens * 1.7, cache_write_tokens: totalTokens * 0.55,
+                  events: totalEvents, sessions: totalSessions, active_days: 214,
+                  cost_usd: totalCost, first_ts: Date.now() - 420 * 86400000, last_ts: Date.now(),
+                  current_streak: 59, longest_streak: 73,
+                  by_source: SOURCES.map((s, i) => ({
+                    source: s, tokens: Math.round(totalTokens * (WEIGHT[i] / 0.99)),
+                    events: Math.round(totalEvents * WEIGHT[i] * 1.6), sessions: Math.round(totalSessions * WEIGHT[i] * 1.8),
+                    cost_usd: totalCost * WEIGHT[i] * 1.1,
+                  })),
+                };
+              case 'get_daily': return dailyRows(args.days ?? 90);
+              case 'get_by_model':
+                return MODELS.map((m) => ({ model: m[0], tokens: m[1] * (args.days > 90 ? 1 : 0.4), events: m[4], cost_usd: m[3], last_ts: Date.now() - MODELS.indexOf(m) * 86400000 }));
+              case 'get_model_stats':
+                return MODELS.map((m) => ({
+                  model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31,
+                  cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5,
+                  events: m[4], sessions: m[5], cost_usd: m[3],
+                  first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - MODELS.indexOf(m) * 86400000, sources: m[2],
+                }));
+              case 'get_daily_by_model': {
+                const n = Math.min(args.days ?? 90, 150);
+                const rows = [];
+                MODELS.forEach((m, mi) => {
+                  walk((m[1] / 40), n).forEach((tok, i) => rows.push({ date: iso(n - 1 - i), model: m[0], tokens: Math.round(tok * (1 - mi * 0.1)) }));
+                });
+                return rows;
+              }
+              case 'get_daily_cache': {
+                const n = Math.min(args.days ?? 90, 365);
+                return Array.from({ length: n }, (_, i) => {
+                  const d = iso(n - 1 - i);
+                  const base = 400000 * (0.4 + (i / n) * 0.8);
+                  return { date: d, fresh_input: Math.round(base * 0.4), cache_write: Math.round(base * 0.2), cache_read: Math.round(base * 2.6 * (0.6 + rng() * 0.8)) };
+                });
+              }
+              case 'get_model_detail': {
+                const m = MODELS.find((x) => x[0] === args.model);
+                if (!m) return null;
+                const daily = Array.from({ length: 120 }, (_, i) => ({ date: iso(119 - i), tokens: Math.round(m[1] / 90 * (0.3 + rng() * 1.7)) }));
+                return {
+                  model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31,
+                  cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5,
+                  events: m[4], sessions: m[5], cost_usd: m[3],
+                  first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - 3600000,
+                  active_days: 187, current_streak: 12, longest_streak: 40,
+                  peak_day: iso(9), peak_day_tokens: m[1] / 30,
+                  by_source: m[2].map((s, i) => ({ source: s, tokens: m[1] * (i ? 0.3 : 0.7), events: m[4] * (i ? 0.3 : 0.7), sessions: m[5] * (i ? 0.3 : 0.7), cost_usd: m[3] * (i ? 0.3 : 0.7) })),
+                  by_project: PROJECTS.map((p, i) => ({ project: p[0], tokens: m[1] * p[1], events: m[4] * p[1], sessions: m[5] * p[1], cost_usd: m[3] * p[1], first_ts: Date.now() - 280 * 86400000, last_ts: Date.now() - i * 7200000 })),
+                  daily,
+                };
+              }
+              case 'get_by_project':
+                return PROJECTS.map((p, i) => ({ project: p[0], tokens: Math.round(totalTokens * p[1]), events: Math.round(totalEvents * p[1]), sessions: Math.round(totalSessions * p[1]), cost_usd: totalCost * p[1], first_ts: Date.now() - 400 * 86400000, last_ts: Date.now() - i * 172800000 }));
+              case 'get_heatmap':
+                return Array.from({ length: args.days ?? 365 }, (_, i) => ({ date: iso((args.days ?? 365) - 1 - i), tokens: i % 7 < 5 && rng() > 0.25 ? Math.round(200000 + rng() * 2400000) : 0 }));
+              case 'get_hourly':
+                return Array.from({ length: 24 }, (_, h) => ({ hour: h, tokens: Math.round(120000 * (h < 6 ? 1.4 - h * 0.15 : h >= 10 && h <= 18 ? 1.8 : 0.7) * (0.6 + rng() * 0.8)) }));
+              case 'get_source_status':
+                return SOURCES.map((s, i) => ({ source: s, display: s.replace('_', ' '), path: '/home/dev/.config/' + s, found: i !== 5 }));
+              case 'get_model_aliases': return [];
+              case 'get_hidden_models': return ['codex-auto-review'];
+              case 'sync_now': return SOURCES.map((s) => ({ source: s, processed: Math.round(rng() * 400), error: null }));
+              case 'export_data': return '/home/dev/.local/share/TokenTrail/usage.' + (args.format ?? 'csv');
+              case 'plugin:event|listen': return 1;
+              default: return null;
+            }
+          }
+
+          window.__TAURI_INTERNALS__ = {
+            metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } },
+            callbacks: new Map(),
+            transformCallback(cb) { const id = this.callbacks.size + 1; this.callbacks.set(id, cb); return id; },
+            invoke(cmd, args) { return new Promise((resolve) => setTimeout(() => resolve(mockData(cmd, args ?? {})), 40)); },
+          };
+        })();
+      }
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

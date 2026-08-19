@@ -195,14 +195,14 @@
   }
 </script>
 
-<h1>Settings</h1>
+<h1 class="up">Settings</h1>
 <p class="sub">Sources, sync, and data export</p>
 
 {#if error}
   <p class="error">{error}</p>
 {/if}
 
-<div class="panel">
+<div class="panel up">
   <h2>Sources</h2>
   <p class="note" style="margin-top:0">
     TokenTrail only ever <b>reads</b> these locations. Everything it learns is copied into its own
@@ -224,7 +224,7 @@
   {/each}
 </div>
 
-<div class="panel">
+<div class="panel up">
   <h2>Sync</h2>
   <p class="note" style="margin-top:0">
     A background sync runs every 30 seconds while the app is open. Use this to force one now:
@@ -242,7 +242,7 @@
 </div>
 
 {#if suggestions.length}
-  <div class="panel">
+  <div class="panel up">
     <h2>Suggested merges</h2>
     <p class="note" style="margin-top:0">
       These look like the same model recorded under different names. Merge them and they'll show up
@@ -260,7 +260,7 @@
   </div>
 {/if}
 
-<div class="panel">
+<div class="panel up">
   <h2>Merge models</h2>
   <p class="note" style="margin-top:0">
     Pick two or more names that are the same model, then choose which one they should all display as.
@@ -299,7 +299,7 @@
 </div>
 
 {#if aliasGroups.length}
-  <div class="panel">
+  <div class="panel up">
     <h2>Current merges</h2>
     <p class="note" style="margin-top:0">
       Model names that are currently shown under a single entry. Removing one is instant — your data
@@ -324,7 +324,7 @@
   </div>
 {/if}
 
-<div class="panel">
+<div class="panel up">
   <h2>Hidden models</h2>
   <p class="note" style="margin-top:0">
     Some harnesses record background jobs as pseudo-models — Codex's
@@ -362,7 +362,7 @@
   </div>
 </div>
 
-<div class="panel">
+<div class="panel up">
   <h2>Export</h2>
   <p class="note" style="margin-top:0">
     Dump every stored usage event. Files land in the app's data folder.
@@ -380,7 +380,7 @@
   {/if}
 </div>
 
-<div class="panel">
+<div class="panel up">
   <h2>About the numbers</h2>
   <p class="note" style="margin-top:0">
     Token totals are input + output + cached tokens as reported by each harness. Cost figures are

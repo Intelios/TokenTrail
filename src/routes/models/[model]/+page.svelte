@@ -3,6 +3,7 @@
   import { page } from '$app/stores';
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
+  import AnimatedNumber from '$lib/AnimatedNumber.svelte';
   import { api, type ModelDetail, type Overview } from '$lib/api';
   import {
     fmtCost,
@@ -15,6 +16,7 @@
     sourceLabel,
     basename,
   } from '$lib/format';
+  import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, donutSeries, dateTick } from '$lib/chartTheme';
 
   let detail = $state<ModelDetail | null>(null);
   let overview = $state<Overview | null>(null);
@@ -65,21 +67,12 @@
     if (!data.length) return undefined;
     return {
       backgroundColor: 'transparent',
+      ...ANIM,
       tooltip: {
-        backgroundColor: '#131828',
-        borderColor: '#232b41',
-        textStyle: { color: '#e2e8f0' },
+        ...TOOLTIP,
         formatter: (p: any) => `${p.name}<br/>${fmtTokens(p.value)} (${p.percent}%)`,
       },
-      series: [
-        {
-          type: 'pie',
-          radius: ['58%', '82%'],
-          label: { show: false },
-          itemStyle: { borderColor: '#131828', borderWidth: 2 },
-          data,
-        },
-      ],
+      series: [donutSeries(data)],
     } satisfies EChartsOption;
   });
 
@@ -87,30 +80,32 @@
     if (!detail || !detail.daily.length) return undefined;
     return {
       backgroundColor: 'transparent',
+      ...ANIM,
+      animationDelay: (idx: number) => idx * 8,
       tooltip: {
         trigger: 'axis',
-        backgroundColor: '#131828',
-        borderColor: '#232b41',
-        textStyle: { color: '#e2e8f0' },
+        ...TOOLTIP,
         valueFormatter: (v: unknown) => fmtTokens(Number(v)),
       },
-      grid: { left: 8, right: 12, top: 32, bottom: 0, containLabel: true },
+      grid: { left: 8, right: 8, top: 20, bottom: 0, containLabel: true },
       xAxis: {
         type: 'category',
         data: detail.daily.map((d) => d.date),
-        axisLabel: { color: '#8b95ab', rotate: 0, hideOverlap: true },
-        axisLine: { lineStyle: { color: '#232b41' } },
+        axisLabel: { ...AXIS_LABEL, hideOverlap: true, formatter: dateTick },
+        axisLine: AXIS_LINE,
+        axisTick: { show: false },
       },
       yAxis: {
         type: 'value',
-        axisLabel: { color: '#8b95ab', formatter: (v: number) => fmtTokens(v) },
-        splitLine: { lineStyle: { color: 'rgba(35,43,65,0.5)' } },
+        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtTokens(v) },
+        splitLine: SPLIT_LINE,
       },
       series: [
         {
           type: 'bar',
           data: detail.daily.map((d) => d.tokens),
-          itemStyle: { color: '#a78bfa', borderRadius: [2, 2, 0, 0] },
+          itemStyle: { color: MODEL_PALETTE[0] },
+          animationDelay: (idx: number) => idx * 8,
         },
       ],
     } satisfies EChartsOption;
@@ -126,7 +121,7 @@
 {:else if !detail}
   <div class="loading">No usage recorded for this model</div>
 {:else}
-  <h1>{detail.model}</h1>
+  <h1 class="up">{detail.model}</h1>
   <p class="sub">
     {detail.events.toLocaleString()} calls across
     {detail.by_source.length} harness{detail.by_source.length !== 1 ? 'es' : ''}
@@ -136,59 +131,59 @@
   </p>
 
   <div class="cards">
-    <div class="card">
+    <div class="card up">
       <div class="label">Total tokens</div>
-      <div class="value">{fmtTokens(detail.tokens)}</div>
+      <div class="value"><AnimatedNumber value={detail.tokens} format={fmtTokens} /></div>
       <div class="hint">
         {fmtTokens(detail.input_tokens)} in · {fmtTokens(detail.output_tokens)} out
       </div>
     </div>
-    <div class="card">
+    <div class="card up" style="animation-delay:60ms">
       <div class="label">Est. cost</div>
-      <div class="value">{fmtCost(detail.cost_usd)}</div>
+      <div class="value"><AnimatedNumber value={detail.cost_usd ?? 0} format={fmtCost} /></div>
       <div class="hint">API-equivalent estimate at list prices</div>
     </div>
-    <div class="card">
+    <div class="card up" style="animation-delay:120ms">
       <div class="label">Calls</div>
-      <div class="value">{detail.events.toLocaleString()}</div>
+      <div class="value"><AnimatedNumber value={detail.events} /></div>
       <div class="hint">{detail.sessions.toLocaleString()} session{detail.sessions !== 1 ? 's' : ''}</div>
     </div>
-    <div class="card">
+    <div class="card up" style="animation-delay:180ms">
       <div class="label">Avg tokens / call</div>
-      <div class="value">{detail.events ? fmtTokens(detail.tokens / detail.events) : '—'}</div>
+      <div class="value">
+        <AnimatedNumber value={detail.events ? detail.tokens / detail.events : 0} format={fmtTokens} />
+      </div>
       <div class="hint">
-        {detail.tokens
-          ? ((detail.output_tokens / detail.tokens) * 100).toFixed(0)
-          : 0}% output
+        {detail.tokens ? ((detail.output_tokens / detail.tokens) * 100).toFixed(0) : 0}% output
       </div>
     </div>
     {#if usagePct !== null}
-      <div class="card">
+      <div class="card up" style="animation-delay:240ms">
         <div class="label">Share of usage</div>
-        <div class="value">{usagePct}%</div>
+        <div class="value"><AnimatedNumber value={Number(usagePct)} format={(n) => `${n.toFixed(1)}%`} /></div>
         <div class="hint">of all-time tokens</div>
       </div>
     {/if}
   </div>
 
-  <div class="cards" style="margin-top:8px">
-    <div class="card">
+  <div class="cards">
+    <div class="card up">
       <div class="label">First recorded</div>
       <div class="value small">{fmtDateTime(detail.first_ts)}</div>
     </div>
-    <div class="card">
+    <div class="card up" style="animation-delay:60ms">
       <div class="label">Last used</div>
       <div class="value small">{fmtDateTime(detail.last_ts)}</div>
     </div>
-    <div class="card">
+    <div class="card up" style="animation-delay:120ms">
       <div class="label">Active days</div>
-      <div class="value">{detail.active_days}</div>
+      <div class="value"><AnimatedNumber value={detail.active_days} /></div>
       <div class="hint">
         {detail.current_streak}d current streak · {detail.longest_streak}d longest
       </div>
     </div>
     {#if detail.peak_day}
-      <div class="card">
+      <div class="card up" style="animation-delay:180ms">
         <div class="label">Peak day</div>
         <div class="value small">{detail.peak_day}</div>
         <div class="hint">{fmtTokens(detail.peak_day_tokens)} tokens</div>
@@ -197,16 +192,16 @@
   </div>
 
   <div class="grid2">
-    <div class="panel">
-      <h2>Daily usage</h2>
+    <div class="panel up">
+      <h2>Daily usage<span class="fig">FIG.07</span></h2>
       {#if dailyOption}
         <Chart option={dailyOption} height={260} />
       {:else}
         <div class="loading">no data</div>
       {/if}
     </div>
-    <div class="panel">
-      <h2>Token mix</h2>
+    <div class="panel up" style="animation-delay:80ms">
+      <h2>Token mix<span class="fig">FIG.08</span></h2>
       {#if donutOption}
         <Chart option={donutOption} height={230} />
       {:else}
@@ -216,8 +211,8 @@
   </div>
 
   {#if detail.by_source.length}
-    <div class="panel" style="padding:6px 12px">
-      <h2>By harness</h2>
+    <div class="panel up" style="padding:6px 14px">
+      <h2 style="padding:8px 0 2px">By harness<span class="fig">FIG.09</span></h2>
       <table>
         <thead>
           <tr>
@@ -246,8 +241,8 @@
   {/if}
 
   {#if detail.by_project.length}
-    <div class="panel" style="padding:6px 12px">
-      <h2>Projects worked on</h2>
+    <div class="panel up" style="padding:6px 14px">
+      <h2 style="padding:8px 0 2px">Projects worked on<span class="fig">FIG.10</span></h2>
       <table>
         <thead>
           <tr>
@@ -286,12 +281,11 @@
 <style>
   .backlink {
     display: inline-block;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
   }
   h1 {
     word-break: break-word;
-  }
-  .small {
-    font-size: 0.85em;
+    font-size: 30px;
+    letter-spacing: 0;
   }
 </style>

@@ -3,7 +3,8 @@
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import { api, type DailyCacheRow, type DailyModelRow } from '$lib/api';
-  import { fmtTokens, MODEL_PALETTE } from '$lib/format';
+  import { fmtTokens, MODEL_PALETTE, MIX_COLORS } from '$lib/format';
+  import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, LEGEND_TEXT, stackedBand, dateTick } from '$lib/chartTheme';
 
   let days = $state(365);
   let byModel = $state<DailyModelRow[]>([]);
@@ -36,16 +37,18 @@
   const modelOption = $derived.by(() => {
     if (!byModel.length) return undefined;
     const dates = [...new Set(byModel.map((r) => r.date))].sort();
-    const models = [...new Set(byModel.map((r) => r.model))];
+    const totals = new Map<string, number>();
+    for (const r of byModel) totals.set(r.model, (totals.get(r.model) ?? 0) + r.tokens);
+    // stack in rank order so band colors match the Models page ranking
+    const models = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
     const map = new Map(byModel.map((r) => [`${r.date}|${r.model}`, r.tokens]));
     return {
       backgroundColor: 'transparent',
-      color: MODEL_PALETTE,
+      ...ANIM,
+      animationDelay: (idx: number) => Math.min(idx, 8) * 90,
       tooltip: {
         trigger: 'axis',
-        backgroundColor: '#131828',
-        borderColor: '#232b41',
-        textStyle: { color: '#e2e8f0' },
+        ...TOOLTIP,
         confine: true,
         formatter: (params: unknown) => {
           type TipParam = { axisValue?: string; marker: string; seriesName: string; value?: number };
@@ -64,30 +67,25 @@
           );
         },
       },
-      legend: { textStyle: { color: '#8b95ab' }, top: 0, type: 'scroll', icon: 'roundRect' },
-      grid: { left: 8, right: 12, top: 32, bottom: 0, containLabel: true },
+      legend: { textStyle: LEGEND_TEXT, top: 0, type: 'scroll', icon: 'rect', itemWidth: 10, itemHeight: 10 },
+      grid: { left: 8, right: 12, top: 34, bottom: 0, containLabel: true },
       xAxis: {
         type: 'category',
         data: dates,
-        axisLine: { lineStyle: { color: '#232b41' } },
-        axisLabel: { color: '#8b95ab' },
+        axisLine: AXIS_LINE,
+        axisLabel: { ...AXIS_LABEL, hideOverlap: true, formatter: dateTick },
+        axisTick: { show: false },
       },
       yAxis: {
         type: 'value',
-        axisLabel: { color: '#8b95ab', formatter: (v: number) => fmtTokens(v) },
-        splitLine: { lineStyle: { color: 'rgba(35,43,65,0.5)' } },
+        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtTokens(v) },
+        splitLine: SPLIT_LINE,
       },
-      series: models.map((m) => ({
-        name: m,
-        type: 'line',
-        stack: 'total',
-        areaStyle: { opacity: 0.3 },
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { width: 1.5 },
-        emphasis: { focus: 'series' },
-        data: dates.map((d) => map.get(`${d}|${m}`) ?? 0),
-      })),
+      series: models.map((m, i) =>
+        stackedBand(m, dates.map((d) => map.get(`${d}|${m}`) ?? 0), MODEL_PALETTE[i % MODEL_PALETTE.length], {
+          delay: Math.min(i, 8) * 90,
+        }),
+      ),
     } satisfies EChartsOption;
   });
 
@@ -95,44 +93,36 @@
     if (!cache.length) return undefined;
     const dates = cache.map((r) => r.date);
     const series = [
-      { name: 'Cache read', color: '#34d399', key: 'cache_read' as const },
-      { name: 'Fresh input', color: '#60a5fa', key: 'fresh_input' as const },
-      { name: 'Cache write', color: '#f472b6', key: 'cache_write' as const },
+      { name: 'Cache read', color: MIX_COLORS[2], key: 'cache_read' as const },
+      { name: 'Fresh input', color: MIX_COLORS[0], key: 'fresh_input' as const },
+      { name: 'Cache write', color: MIX_COLORS[3], key: 'cache_write' as const },
     ];
     return {
       backgroundColor: 'transparent',
+      ...ANIM,
+      animationDelay: (idx: number) => idx * 90,
       tooltip: {
         trigger: 'axis',
-        backgroundColor: '#131828',
-        borderColor: '#232b41',
-        textStyle: { color: '#e2e8f0' },
+        ...TOOLTIP,
         valueFormatter: (v: unknown) => fmtTokens(Number(v)),
       },
-      legend: { textStyle: { color: '#8b95ab' }, top: 0, icon: 'roundRect' },
-      grid: { left: 8, right: 12, top: 32, bottom: 0, containLabel: true },
+      legend: { textStyle: LEGEND_TEXT, top: 0, icon: 'rect', itemWidth: 10, itemHeight: 10 },
+      grid: { left: 8, right: 12, top: 34, bottom: 0, containLabel: true },
       xAxis: {
         type: 'category',
         data: dates,
-        axisLine: { lineStyle: { color: '#232b41' } },
-        axisLabel: { color: '#8b95ab' },
+        axisLine: AXIS_LINE,
+        axisLabel: { ...AXIS_LABEL, hideOverlap: true, formatter: dateTick },
+        axisTick: { show: false },
       },
       yAxis: {
         type: 'value',
-        axisLabel: { color: '#8b95ab', formatter: (v: number) => fmtTokens(v) },
-        splitLine: { lineStyle: { color: 'rgba(35,43,65,0.5)' } },
+        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtTokens(v) },
+        splitLine: SPLIT_LINE,
       },
-      series: series.map((s) => ({
-        name: s.name,
-        type: 'line',
-        stack: 'total',
-        areaStyle: { opacity: 0.3 },
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { width: 1.5 },
-        itemStyle: { color: s.color },
-        emphasis: { focus: 'series' },
-        data: cache.map((r) => r[s.key]),
-      })),
+      series: series.map((s, i) =>
+        stackedBand(s.name, cache.map((r) => r[s.key]), s.color, { delay: i * 90 }),
+      ),
     } satisfies EChartsOption;
   });
 
@@ -145,33 +135,91 @@
   });
 </script>
 
-<h1>Trends</h1>
-<p class="sub">Which models you actually use, and how much context gets served from cache</p>
+<div class="tframe">
+  <div class="thd">
+    <div class="up">
+      <h1>Trends</h1>
+      <div class="sub">Which models you actually use, and how much context gets served from cache</div>
+    </div>
+    <div class="pills up">
+      {#each [30, 90, 365] as d}
+        <button class="pill" class:on={days === d} onclick={() => (days = d)}>{d === 365 ? '1 YEAR' : `${d}D`}</button>
+      {/each}
+    </div>
+  </div>
 
-<div class="row" style="margin-bottom:16px">
-  {#each [30, 90, 365] as d}
-    <button class="pill" class:on={days === d} onclick={() => (days = d)}>{d === 365 ? '1 year' : `${d} days`}</button>
-  {/each}
+  {#if error}
+    <div class="errpad"><p class="error">{error}</p></div>
+  {:else}
+    <div class="tpanel up">
+      <h2>Model share over time</h2>
+      {#if modelOption}
+        <Chart option={modelOption} height={320} />
+      {:else}
+        <div class="loading">no usage recorded yet</div>
+      {/if}
+    </div>
+
+    <div class="tpanel up" style="animation-delay:100ms">
+      <h2>
+        Context: cache vs fresh<span class="rt"><b class="delta">{cacheShare}% served from cache read</b></span>
+      </h2>
+      {#if cacheOption}
+        <Chart option={cacheOption} height={280} />
+      {:else}
+        <div class="loading">no usage recorded yet</div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
-{#if error}
-  <p class="error">{error}</p>
-{:else}
-  <div class="panel">
-    <h2>Model share over time</h2>
-    {#if modelOption}
-      <Chart option={modelOption} height={320} />
-    {:else}
-      <div class="loading">no usage recorded yet</div>
-    {/if}
-  </div>
+<style>
+  .tframe {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
 
-  <div class="panel">
-    <h2>Context: cache vs fresh — {cacheShare}% served from cache read</h2>
-    {#if cacheOption}
-      <Chart option={cacheOption} height={280} />
-    {:else}
-      <div class="loading">no usage recorded yet</div>
-    {/if}
-  </div>
-{/if}
+  .thd {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 15px clamp(22px, 1.8vw, 40px) 14px;
+    border-bottom: 2px solid var(--ink);
+    flex-wrap: wrap;
+  }
+  .thd .sub { font: 400 11px/1 var(--font-mono); opacity: 0.55; margin-top: 6px; letter-spacing: 0.6px; margin-bottom: 0; }
+
+  .errpad { padding: 20px 22px; }
+
+  .tpanel {
+    background: var(--bone);
+    border-bottom: 2px solid var(--ink);
+    padding: 16px clamp(22px, 1.8vw, 40px) 18px;
+  }
+  .tpanel:last-child {
+    border-bottom: none;
+  }
+  .tpanel h2 {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font: 600 11px/1 var(--font-ui);
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    margin: 0 0 12px;
+  }
+
+  .rt {
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+  }
+  .delta {
+    font: 500 10px/1 var(--font-mono);
+    letter-spacing: 1px;
+    color: var(--org);
+  }
+</style>

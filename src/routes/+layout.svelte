@@ -1,4 +1,12 @@
 <script lang="ts">
+  import '@fontsource/anton';
+  import '@fontsource/inter-tight/400.css';
+  import '@fontsource/inter-tight/500.css';
+  import '@fontsource/inter-tight/600.css';
+  import '@fontsource/inter-tight/700.css';
+  import '@fontsource/ibm-plex-mono/400.css';
+  import '@fontsource/ibm-plex-mono/500.css';
+  import '@fontsource/ibm-plex-mono/600.css';
   import '../app.css';
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
@@ -17,6 +25,11 @@
   let lastSync = $state('');
   let syncing = $state(false);
 
+  function isActive(href: string): boolean {
+    const path = $page.url.pathname;
+    return href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
+  }
+
   async function doSync() {
     syncing = true;
     try {
@@ -28,7 +41,11 @@
   }
 
   function touch() {
-    lastSync = new Date().toLocaleTimeString();
+    lastSync = new Date().toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
     window.dispatchEvent(new CustomEvent('tt-sync'));
   }
 
@@ -41,24 +58,19 @@
   let { children } = $props();
 </script>
 
-<div class="shell">
-  <aside>
-    <div class="brand"><span class="dot"></span><span>TokenTrail</span></div>
-    <nav>
-      {#each links as l}
-        <a href={l.href} class:active={$page.url.pathname === l.href}>{l.label}</a>
-      {/each}
-    </nav>
-    <div class="syncbar">
-      <button class="primary" onclick={doSync} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync now'}</button>
-      {#if lastSync}
-        <div>last sync {lastSync}</div>
-      {:else}
-        <div>syncing on launch…</div>
-      {/if}
-    </div>
-  </aside>
-  <main>
-    {@render children()}
-  </main>
-</div>
+<header class="topnav">
+  <div class="mk">TokenTrail</div>
+  <nav>
+    {#each links as l, i}
+      <a href={l.href} class:on={isActive(l.href)}><u>0{i + 1}</u>{l.label}</a>
+    {/each}
+  </nav>
+  <button class="sy" onclick={doSync} disabled={syncing} title="Sync now">
+    <i></i>
+    {syncing ? 'Syncing…' : lastSync ? `Synced ${lastSync}` : 'Sync on launch…'}
+  </button>
+</header>
+
+<main class:edge={$page.url.pathname === '/' || $page.url.pathname === '/models' || $page.url.pathname === '/trends' || $page.url.pathname === '/projects'}>
+  {@render children()}
+</main>

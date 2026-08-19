@@ -58,7 +58,8 @@ bun run tauri build  # production build
 - TypeScript: strict, `type: "module"`, Svelte 5 runes (`$state`, `$derived`, `$effect`, `$props`).
 - Rust: `?`/`.map_err(|e| format!("...: {e}"))` for command errors; `Result<..., String>` to Tauri.
 - Rust formatting is in i64/i64 optionals; reasoning tokens are never included in "total tokens" — see `aggregate.rs` constant `TOKENS`.
-- Frontend styling uses the dark theme in `src/app.css`. Shared color palette / tokens are in CSS variables; do not introduce new CSS-in-JS libraries.
+- Frontend styling uses the **Marathon · Bone** design system defined in `src/app.css`: bone ground (`--bone`), 2px near-black rules (`--ink`), zero border-radius, block accent fills (`--org`, `--cyn`, `--acd`, `--mag`, `--vio`, `--blu`). Typography: Anton for display numerals, Inter Tight for UI text, IBM Plex Mono for data (bundled via `@fontsource/*`, imported in `+layout.svelte`). Shared color palette / tokens are in CSS variables; do not introduce new CSS-in-JS libraries.
+- ECharts options build on the shared fragments in `src/lib/chartTheme.ts` (tooltip, axis, animation, stacked-band and donut helpers). Count-up numerals use `src/lib/AnimatedNumber.svelte`, inline sparklines `src/lib/Spark.svelte`. Entrance motion is CSS-only (`.up`, `.gw` keyframes in `app.css`) and must respect `prefers-reduced-motion`.
 - Imports use SvelteKit aliases: `$lib/...` for shared code. No custom path aliases beyond that.
 
 ## Communication between layers
