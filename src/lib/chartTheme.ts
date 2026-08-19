@@ -38,12 +38,12 @@ export const ANIM = {
   animationEasing: 'cubicOut' as const,
 };
 
-/** Marathon stacked band: hard edges, fill at 55%, full-strength top line. */
+/** Marathon stacked band: hard edges, area fill without overlapping strokes on 0-value series. */
 export function stackedBand(
   name: string,
   data: Array<number | null>,
   color: string,
-  opts: { delay?: number; stack?: string } = {},
+  opts: { delay?: number; stack?: string; lineWidth?: number; opacity?: number } = {},
 ) {
   return {
     name,
@@ -51,9 +51,9 @@ export function stackedBand(
     stack: opts.stack ?? 'total',
     smooth: false,
     symbol: 'none',
-    lineStyle: { width: 1.5, color },
+    lineStyle: { width: opts.lineWidth ?? 0, color },
     itemStyle: { color },
-    areaStyle: { opacity: 0.55 },
+    areaStyle: { opacity: opts.opacity ?? 0.75 },
     emphasis: { focus: 'series' as const },
     animationDelay: opts.delay ?? 0,
     data,
