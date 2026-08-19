@@ -4,7 +4,7 @@
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import { api, type ModelStatsRow } from '$lib/api';
-  import { fmtCost, fmtDate, fmtTokens, MODEL_PALETTE, MIX_COLORS, sourceColor, sourceLabel } from '$lib/format';
+  import { fmtCost, fmtDate, fmtTokens, MODEL_PALETTE, sourceColor, sourceLabel } from '$lib/format';
 
   const RANGES: [number, string][] = [
     [7, '7 days'],
@@ -102,8 +102,8 @@
   });
 
   const barsOption = $derived.by(() => {
-    if (!sorted.length) return undefined;
-    const top10 = sorted.slice(0, 10);
+    if (!rows.length) return undefined;
+    const top10 = [...rows].sort((a, b) => b.tokens - a.tokens).slice(0, 10);
     const models = top10.map((r) => r.model);
     return {
       backgroundColor: 'transparent',
@@ -114,8 +114,7 @@
         textStyle: { color: '#e2e8f0' },
         valueFormatter: (v: unknown) => fmtTokens(Number(v)),
       },
-      legend: { textStyle: { color: '#8b95ab' }, top: 0, icon: 'roundRect' },
-      grid: { left: 8, right: 12, top: 32, bottom: 0, containLabel: true },
+      grid: { left: 8, right: 12, top: 16, bottom: 0, containLabel: true },
       xAxis: {
         type: 'value',
         axisLabel: { color: '#8b95ab', formatter: (v: number) => fmtTokens(v) },
@@ -129,10 +128,7 @@
         axisLabel: { color: '#8b95ab', width: 120, overflow: 'truncate' },
       },
       series: [
-        { name: 'Input', type: 'bar', stack: 'total', data: top10.map((r) => r.input_tokens), itemStyle: { color: MIX_COLORS[0] } },
-        { name: 'Output', type: 'bar', stack: 'total', data: top10.map((r) => r.output_tokens), itemStyle: { color: MIX_COLORS[1] } },
-        { name: 'Cache read', type: 'bar', stack: 'total', data: top10.map((r) => r.cache_read_tokens), itemStyle: { color: MIX_COLORS[2] } },
-        { name: 'Cache write', type: 'bar', stack: 'total', data: top10.map((r) => r.cache_write_tokens), itemStyle: { color: MIX_COLORS[3] } },
+        { name: 'Tokens', type: 'bar', data: top10.map((r) => r.tokens), itemStyle: { color: '#a78bfa', borderRadius: [0, 2, 2, 0] } },
       ],
     } satisfies EChartsOption;
   });
@@ -193,7 +189,7 @@
 
   <div class="grid2">
     <div class="panel">
-      <h2>Token mix — top 10</h2>
+      <h2>Total tokens — top 10</h2>
       {#if barsOption}
         <Chart option={barsOption} height={340} />
       {:else}
