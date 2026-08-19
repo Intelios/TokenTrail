@@ -251,7 +251,7 @@
   <!-- note band -->
   {#if burst}
     <div class="noteband up" style="animation-delay:420ms">
-      <span class="fg">NOTE 01</span>
+      <span class="fg">NOTE</span>
       <p>You work in bursts — <b>{burst.share}%</b> of your tokens land on just <b>{burst.topN} days</b> of the last {burst.days} active.</p>
     </div>
   {/if}

@@ -130,9 +130,16 @@
     } satisfies EChartsOption;
   });
 
-  const topCostShare = $derived.by(() => {
-    if (!costliest || !(costliest.cost_usd ?? 0) || !totalCost) return null;
-    return ((costliest.cost_usd ?? 0) / totalCost) * 100;
+  const topModelShare = $derived.by(() => {
+    if (!sorted.length || !totalMetric) return null;
+    const top = sorted[0];
+    const val = metricVal(top);
+    if (!val) return null;
+    return {
+      model: top.model,
+      pct: Math.round((val / totalMetric) * 100),
+      label: metric === 'tokens' ? 'tokens' : metric === 'cost' ? 'estimated spend' : 'model calls',
+    };
   });
 
   function modelUrl(name: string): string {
@@ -290,10 +297,10 @@
     </div>
 
     <!-- note band -->
-    {#if topCostShare !== null}
+    {#if topModelShare !== null}
       <div class="noteband up" style="animation-delay:400ms">
-        <span class="fg">NOTE 02</span>
-        <p>One model is <b>{topCostShare.toFixed(0)}%</b> of your estimated spend. Merging aliases in Settings keeps this list honest.</p>
+        <span class="fg">NOTE</span>
+        <p><b>{topModelShare.model}</b> accounts for <b>{topModelShare.pct}%</b> of your {topModelShare.label} in this period. Merging aliases in Settings keeps this list honest.</p>
       </div>
     {/if}
   {/if}
