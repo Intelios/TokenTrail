@@ -184,6 +184,18 @@ impl Store {
         );
     }
 
+    /// Drop every watermark whose key matches the LIKE `pattern` (e.g.
+    /// "antigravity:%"). Collectors use this to force a full re-read after a
+    /// parser fix: rows the old parser skipped still advanced their
+    /// watermarks, and re-ingesting is safe because events upsert on
+    /// (source, source_event_id).
+    pub fn clear_watermarks(&self, pattern: &str) {
+        let _ = self.conn.execute(
+            "DELETE FROM ingest_state WHERE source LIKE ?1",
+            params![pattern],
+        );
+    }
+
     pub fn latest_session_model(&self, source: &str, session_id: &str) -> Option<String> {
         self.conn
             .query_row(
