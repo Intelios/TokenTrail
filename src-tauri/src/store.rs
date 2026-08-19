@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS model_alias (
     alias TEXT PRIMARY KEY,
     canonical TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS hidden_model (
+    name TEXT PRIMARY KEY
+);
 "#;
 
 impl Store {
@@ -218,6 +221,45 @@ impl Store {
             .execute("DELETE FROM model_alias WHERE canonical = ?1", params![canonical])
     }
 
+    pub fn get_hidden_models(&self) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT name FROM hidden_model ORDER BY name")?;
+        let rows = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Record `names` as hidden so they are excluded from every aggregate.
+    /// Idempotent; existing entries are left untouched.
+    pub fn hide_models(&self, names: &[String]) -> Result<usize, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin hide transaction: {e}"))?;
+        let mut n = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            n += tx
+                .execute(
+                    "INSERT INTO hidden_model(name) VALUES(?1) ON CONFLICT(name) DO NOTHING",
+                    params![name],
+                )
+                .map_err(|e| format!("hide model: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("commit hide: {e}"))?;
+        Ok(n)
+    }
+
+    pub fn unhide_model(&self, name: &str) -> rusqlite::Result<usize> {
+        self.conn
+            .execute("DELETE FROM hidden_model WHERE name = ?1", params![name])
+    }
+
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
@@ -302,5 +344,24 @@ mod tests {
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0].alias, "C");
         assert_eq!(aliases[0].canonical, "A");
+    }
+
+    #[test]
+    fn hide_round_trip() {
+        let store = test_store();
+        assert!(store.get_hidden_models().unwrap().is_empty());
+
+        store.hide_models(&["codex-auto-review".into()]).unwrap();
+        assert_eq!(store.get_hidden_models().unwrap(), vec!["codex-auto-review"]);
+
+        // Re-hiding is a no-op, and multiple names are kept sorted.
+        store.hide_models(&["codex-auto-review".into(), "gpt-5".into()]).unwrap();
+        assert_eq!(
+            store.get_hidden_models().unwrap(),
+            vec!["codex-auto-review", "gpt-5"]
+        );
+
+        store.unhide_model("codex-auto-review").unwrap();
+        assert_eq!(store.get_hidden_models().unwrap(), vec!["gpt-5"]);
     }
 }

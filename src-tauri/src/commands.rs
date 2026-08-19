@@ -112,6 +112,35 @@ pub fn remove_model_alias(state: State<AppState>, alias: String) -> Result<(), S
 }
 
 #[tauri::command]
+pub fn get_hidden_models(state: State<AppState>) -> Vec<String> {
+    state
+        .store
+        .lock()
+        .map(|store| store.get_hidden_models().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn hide_models(state: State<AppState>, names: Vec<String>) -> Result<(), String> {
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store.hide_models(&names).map(|_| ())
+}
+
+#[tauri::command]
+pub fn unhide_model(state: State<AppState>, name: String) -> Result<(), String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store
+        .unhide_model(&name)
+        .map(|_| ())
+        .map_err(|e| format!("unhide model: {e}"))
+}
+
+#[tauri::command]
 pub fn export_data(
     app: AppHandle,
     state: State<AppState>,

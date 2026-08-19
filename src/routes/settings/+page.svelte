@@ -17,6 +17,11 @@
   let selected = $state<string[]>([]);
   let canonical = $state('');
 
+  // hidden models
+  let hidden = $state<string[]>([]);
+  let hideFilter = $state('');
+  let hideSelected = $state<string[]>([]);
+
   async function load() {
     try {
       sources = await api.sourceStatus();
@@ -28,10 +33,16 @@
 
   async function loadMerges() {
     try {
-      const [byModel, aliasRows] = await Promise.all([api.byModel(3650), api.modelAliases()]);
+      const [byModel, aliasRows, hiddenRows] = await Promise.all([
+        api.byModel(3650),
+        api.modelAliases(),
+        api.hiddenModels(),
+      ]);
       modelNames = byModel.map((r) => r.model);
       aliases = aliasRows;
+      hidden = hiddenRows;
       selected = selected.filter((n) => modelNames.includes(n));
+      hideSelected = hideSelected.filter((n) => modelNames.includes(n));
       if (!selected.includes(canonical)) canonical = selected[0] ?? '';
       error = '';
     } catch (e) {
@@ -95,6 +106,11 @@
     return q ? modelNames.filter((n) => n.toLowerCase().includes(q)) : modelNames;
   });
 
+  const hideFiltered = $derived.by(() => {
+    const q = hideFilter.trim().toLowerCase();
+    return q ? modelNames.filter((n) => n.toLowerCase().includes(q)) : modelNames;
+  });
+
   const aliasGroups = $derived.by(() => {
     const groups = new Map<string, string[]>();
     for (const a of aliases) {
@@ -140,6 +156,36 @@
   async function removeAlias(alias: string) {
     try {
       await api.removeModelAlias(alias);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function toggleHide(name: string) {
+    hideSelected = hideSelected.includes(name)
+      ? hideSelected.filter((n) => n !== name)
+      : [...hideSelected, name];
+  }
+
+  async function doHide(names: string[]) {
+    try {
+      await api.hideModels(names);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      hideSelected = [];
+      hideFilter = '';
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function doUnhide(name: string) {
+    try {
+      await api.unhideModel(name);
       window.dispatchEvent(new CustomEvent('tt-sync'));
       await loadMerges();
       error = '';
@@ -277,6 +323,44 @@
     {/each}
   </div>
 {/if}
+
+<div class="panel">
+  <h2>Hidden models</h2>
+  <p class="note" style="margin-top:0">
+    Some harnesses record background jobs as pseudo-models — Codex's
+    <b>codex-auto-review</b> (auto titling / security review) — rather than models you
+    actually chose. Hiding one removes its tokens and cost from <b>every</b> stat in the
+    app. Nothing is deleted; unhide any time.
+  </p>
+  {#if hidden.length}
+    {#each hidden as name}
+      <div class="src">
+        <div class="meta">
+          <div>{name}</div>
+          <div class="p">hidden from all stats</div>
+        </div>
+        <button onclick={() => doUnhide(name)}>Unhide</button>
+      </div>
+    {/each}
+  {/if}
+  <input type="text" placeholder="Filter models…" bind:value={hideFilter} />
+  <div class="mergelist">
+    {#each hideFiltered as name}
+      <label class="merge-row">
+        <input type="checkbox" checked={hideSelected.includes(name)} onchange={() => toggleHide(name)} />
+        <span>{name}</span>
+      </label>
+    {/each}
+    {#if !hideFiltered.length}
+      <div class="loading" style="padding:16px">no models match</div>
+    {/if}
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="primary" disabled={!hideSelected.length} onclick={() => doHide(hideSelected)}>
+      Hide {hideSelected.length ? `${hideSelected.length} models` : '…'}
+    </button>
+  </div>
+</div>
 
 <div class="panel">
   <h2>Export</h2>

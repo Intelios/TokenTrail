@@ -63,6 +63,9 @@ pub fn run() {
             commands::merge_models,
             commands::unmerge_models,
             commands::remove_model_alias,
+            commands::get_hidden_models,
+            commands::hide_models,
+            commands::unhide_model,
             commands::export_data
         ])
         .run(tauri::generate_context!())

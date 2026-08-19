@@ -8,6 +8,17 @@ use crate::store::Store;
 /// are a subset of output on both Anthropic and OpenAI and never added.
 const TOKENS: &str = "(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)";
 
+/// Rows whose model is user-hidden are excluded from every aggregate. A row is
+/// hidden when its raw model name is hidden, or when it aliases to a hidden
+/// canonical name (hiding the display name hides all merged variants).
+/// COALESCE keeps NULL-model rows visible — `NULL NOT IN (...)` is NULL, which
+/// would drop them.
+const NOT_HIDDEN: &str = "COALESCE(u.model,'') NOT IN (
+    SELECT name FROM hidden_model
+    UNION
+    SELECT alias FROM model_alias WHERE canonical IN (SELECT name FROM hidden_model)
+)";
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -126,8 +137,9 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
                 COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0),
                 COALESCE(SUM(cache_write_tokens),0), COUNT(*),
                 COUNT(DISTINCT session_id), SUM(cost_usd), MIN(ts), MAX(ts)
-         FROM usage_event",
-        T = TOKENS
+         FROM usage_event u WHERE {H}",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let (total, input, output, cr, cw, events, sessions, cost, first_ts, last_ts): (
         i64, i64, i64, i64, i64, i64, i64, Option<f64>, Option<i64>, Option<i64>,
@@ -140,8 +152,9 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
 
     let source_sql = format!(
         "SELECT source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT session_id), SUM(cost_usd)
-         FROM usage_event GROUP BY source ORDER BY 2 DESC",
-        T = TOKENS
+         FROM usage_event u WHERE {H} GROUP BY source ORDER BY 2 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = conn.prepare(&source_sql)?;
     let by_source = stmt
@@ -157,7 +170,10 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut dates: Vec<String> = conn
-        .prepare("SELECT DISTINCT date(ts/1000, 'unixepoch') AS d FROM usage_event ORDER BY d")?
+        .prepare(&format!(
+            "SELECT DISTINCT date(ts/1000, 'unixepoch') AS d FROM usage_event u WHERE {H} ORDER BY d",
+            H = NOT_HIDDEN
+        ))?
         .query_map([], |r| r.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -186,8 +202,9 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
 pub fn daily(store: &Store, days: i64) -> DbResult<Vec<DailyRow>> {
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, source, COALESCE(SUM({T}),0), SUM(cost_usd)
-         FROM usage_event WHERE ts >= ?1 GROUP BY d, source ORDER BY d",
-        T = TOKENS
+         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY d, source ORDER BY d",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<DailyRow> = stmt
@@ -203,8 +220,9 @@ pub fn daily_by_model(store: &Store, days: i64) -> DbResult<Vec<DailyModelRow>> 
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(SUM({T}),0)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
-         WHERE u.ts >= ?1 GROUP BY 1, 2 ORDER BY d",
-        T = TOKENS
+         WHERE u.ts >= ?1 AND {H} GROUP BY 1, 2 ORDER BY d",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<DailyModelRow> = stmt
@@ -216,12 +234,13 @@ pub fn daily_by_model(store: &Store, days: i64) -> DbResult<Vec<DailyModelRow>> 
 }
 
 pub fn daily_cache(store: &Store, days: i64) -> DbResult<Vec<DailyCacheRow>> {
-    let mut stmt = store.conn().prepare(
+    let mut stmt = store.conn().prepare(&format!(
         "SELECT date(ts/1000,'unixepoch') AS d,
                 COALESCE(SUM(input_tokens),0), COALESCE(SUM(cache_write_tokens),0),
                 COALESCE(SUM(cache_read_tokens),0)
-         FROM usage_event WHERE ts >= ?1 GROUP BY d ORDER BY d",
-    )?;
+         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY d ORDER BY d",
+        H = NOT_HIDDEN
+    ))?;
     let rows: Vec<DailyCacheRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(DailyCacheRow { date: r.get(0)?, fresh_input: r.get(1)?, cache_write: r.get(2)?, cache_read: r.get(3)? })
@@ -235,8 +254,9 @@ pub fn by_model(store: &Store, days: i64) -> DbResult<Vec<ModelRow>> {
         "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
                 SUM(cost_usd), MAX(ts)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
-         WHERE u.ts >= ?1 GROUP BY 1 ORDER BY 2 DESC",
-        T = TOKENS
+         WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 2 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<ModelRow> = stmt
@@ -255,8 +275,9 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
                 COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
                 SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
-         WHERE u.ts >= ?1 GROUP BY 1 ORDER BY 6 DESC",
-        T = TOKENS
+         WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 6 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<ModelStatsRow> = stmt
@@ -288,8 +309,9 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
     let sql = format!(
         "SELECT COALESCE(project, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
                 COUNT(DISTINCT session_id), SUM(cost_usd), MIN(ts), MAX(ts)
-         FROM usage_event WHERE ts >= ?1 GROUP BY project ORDER BY 2 DESC",
-        T = TOKENS
+         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY project ORDER BY 2 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<ProjectRow> = stmt
@@ -311,8 +333,9 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
 pub fn heatmap(store: &Store, days: i64) -> DbResult<Vec<HeatmapCell>> {
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-         FROM usage_event WHERE ts >= ?1 GROUP BY d ORDER BY d",
-        T = TOKENS
+         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY d ORDER BY d",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<HeatmapCell> = stmt
@@ -326,8 +349,9 @@ pub fn heatmap(store: &Store, days: i64) -> DbResult<Vec<HeatmapCell>> {
 pub fn hourly(store: &Store) -> DbResult<Vec<HourRow>> {
     let sql = format!(
         "SELECT CAST(strftime('%H', ts/1000, 'unixepoch') AS INTEGER), COALESCE(SUM({T}),0)
-         FROM usage_event GROUP BY 1 ORDER BY 1",
-        T = TOKENS
+         FROM usage_event u WHERE {H} GROUP BY 1 ORDER BY 1",
+        T = TOKENS,
+        H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<HourRow> = stmt
@@ -480,5 +504,76 @@ mod tests {
         store.remove_aliases_for("GLM-5.3").unwrap();
         let stats = model_stats(&store, 3650).unwrap();
         assert_eq!(stats.len(), 2);
+    }
+
+    #[test]
+    fn hidden_models_excluded_everywhere() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                test_event("codex-auto-review", now, 100),
+                test_event("gpt-5", now - 1000, 200),
+                UsageEvent {
+                    model: None,
+                    input_tokens: 50,
+                    ..test_event("no-model", now - 2000, 0)
+                },
+            ])
+            .unwrap();
+        store.hide_models(&["codex-auto-review".into()]).unwrap();
+
+        // Per-model views drop the hidden model; the NULL-model row stays.
+        let rows = by_model(&store, 3650).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.model != "codex-auto-review"));
+        assert!(rows.iter().any(|r| r.model == "unknown"));
+
+        let stats = model_stats(&store, 3650).unwrap();
+        assert_eq!(stats.len(), 2);
+        assert!(stats.iter().all(|r| r.model != "codex-auto-review"));
+
+        let dm = daily_by_model(&store, 3650).unwrap();
+        assert!(dm.iter().all(|r| r.model != "codex-auto-review"));
+
+        // Totals exclude the hidden model's tokens/events.
+        let ov = overview(&store).unwrap();
+        assert_eq!(ov.total_tokens, 250); // 200 gpt-5 + 50 no-model
+        assert_eq!(ov.events, 2);
+        assert_eq!(ov.by_source[0].tokens, 250);
+
+        // Source/day/heatmap/hourly aggregates agree.
+        let d = daily(&store, 3650).unwrap();
+        assert_eq!(d.iter().map(|r| r.tokens).sum::<i64>(), 250);
+        let hm = heatmap(&store, 3650).unwrap();
+        assert_eq!(hm.iter().map(|r| r.tokens).sum::<i64>(), 250);
+        let hr = hourly(&store).unwrap();
+        assert_eq!(hr.iter().map(|r| r.tokens).sum::<i64>(), 250);
+
+        // Unhiding brings the model back everywhere.
+        store.unhide_model("codex-auto-review").unwrap();
+        let rows = by_model(&store, 3650).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(overview(&store).unwrap().total_tokens, 350);
+    }
+
+    #[test]
+    fn hiding_canonical_hides_merged_variants() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[test_event("gpt-5-codex", now, 100), test_event("gpt-5", now - 1000, 200)])
+            .unwrap();
+        store.merge_models(&["gpt-5-codex".into(), "gpt-5".into()], "gpt-5").unwrap();
+
+        // Hiding the display name hides every raw name merged into it.
+        store.hide_models(&["gpt-5".into()]).unwrap();
+        assert!(model_stats(&store, 3650).unwrap().is_empty());
+        assert_eq!(overview(&store).unwrap().total_tokens, 0);
+
+        store.unhide_model("gpt-5").unwrap();
+        let stats = model_stats(&store, 3650).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].tokens, 300);
     }
 }
