@@ -53,6 +53,21 @@ export interface ModelRow {
   last_ts: number | null;
 }
 
+export interface ModelStatsRow {
+  model: string;
+  tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+  sessions: number;
+  cost_usd: number | null;
+  first_ts: number | null;
+  last_ts: number | null;
+  sources: string[];
+}
+
 export interface ProjectRow {
   project: string;
   tokens: number;
@@ -92,6 +107,7 @@ export const api = {
   dailyByModel: (days: number) => invoke<DailyModelRow[]>('get_daily_by_model', { days }),
   dailyCache: (days: number) => invoke<DailyCacheRow[]>('get_daily_cache', { days }),
   byModel: (days: number) => invoke<ModelRow[]>('get_by_model', { days }),
+  modelStats: (days: number) => invoke<ModelStatsRow[]>('get_model_stats', { days }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
   heatmap: (days: number) => invoke<HeatmapCell[]>('get_heatmap', { days }),
   hourly: () => invoke<HourRow[]>('get_hourly'),

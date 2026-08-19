@@ -175,6 +175,7 @@
       {:else}
         <div class="loading">nothing yet</div>
       {/if}
+      <a href="/models" class="morelink">All models →</a>
     </div>
   </div>
 {/if}

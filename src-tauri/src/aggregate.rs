@@ -101,6 +101,22 @@ pub struct HourRow {
     pub tokens: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ModelStatsRow {
+    pub model: String,
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub cost_usd: Option<f64>,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub sources: Vec<String>,
+}
+
 type DbResult<T> = Result<T, rusqlite::Error>;
 
 pub fn overview(store: &Store) -> DbResult<Overview> {
@@ -222,6 +238,42 @@ pub fn by_model(store: &Store, days: i64) -> DbResult<Vec<ModelRow>> {
     let rows: Vec<ModelRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(ModelRow { model: r.get(0)?, tokens: r.get(1)?, events: r.get(2)?, cost_usd: r.get(3)?, last_ts: r.get(4)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
+    let sql = format!(
+        "SELECT COALESCE(model, 'unknown'),
+                COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+                COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0),
+                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT session_id),
+                SUM(cost_usd), MIN(ts), MAX(ts), GROUP_CONCAT(DISTINCT source)
+         FROM usage_event WHERE ts >= ?1 GROUP BY model ORDER BY 6 DESC",
+        T = TOKENS
+    );
+    let mut stmt = store.conn().prepare(&sql)?;
+    let rows: Vec<ModelStatsRow> = stmt
+        .query_map([cutoff(days)], |r| {
+            let src_str: Option<String> = r.get(11)?;
+            let sources = src_str
+                .map(|s| s.split(',').map(String::from).collect())
+                .unwrap_or_default();
+            Ok(ModelStatsRow {
+                model: r.get(0)?,
+                input_tokens: r.get(1)?,
+                output_tokens: r.get(2)?,
+                cache_read_tokens: r.get(3)?,
+                cache_write_tokens: r.get(4)?,
+                tokens: r.get(5)?,
+                events: r.get(6)?,
+                sessions: r.get(7)?,
+                cost_usd: r.get(8)?,
+                first_ts: r.get(9)?,
+                last_ts: r.get(10)?,
+                sources,
+            })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)

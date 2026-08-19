@@ -1,6 +1,6 @@
 use crate::aggregate::{
-    self, DailyCacheRow, DailyModelRow, DailyRow, HeatmapCell, HourRow, ModelRow, Overview,
-    ProjectRow,
+    self, DailyCacheRow, DailyModelRow, DailyRow, HeatmapCell, HourRow, ModelRow, ModelStatsRow,
+    Overview, ProjectRow,
 };
 use crate::collectors;
 use crate::models::{IngestStats, SourceStatus};
@@ -41,6 +41,12 @@ pub fn get_daily_cache(state: State<AppState>, days: i64) -> Result<Vec<DailyCac
 pub fn get_by_model(state: State<AppState>, days: i64) -> Result<Vec<ModelRow>, String> {
     let store = state.store.lock().map_err(|_| "store lock poisoned")?;
     aggregate::by_model(&store, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_model_stats(state: State<AppState>, days: i64) -> Result<Vec<ModelStatsRow>, String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    aggregate::model_stats(&store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

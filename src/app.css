@@ -102,6 +102,13 @@ button.primary:disabled { opacity: 0.6; cursor: default; }
 
 .note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 
+.mdot { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
+.tagrow { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.tagrow .tag { font-size: 10px; padding: 1px 6px; }
+.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.morelink { font-size: 12px; color: var(--muted); display: block; margin-top: 12px; text-align: right; }
+.morelink:hover { color: var(--accent); }
+
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
   aside { position: static; height: auto; flex-direction: row; align-items: center; }
