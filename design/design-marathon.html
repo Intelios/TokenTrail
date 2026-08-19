@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>TokenTrail — Marathon direction</title>
+<title>TokenTrail — Marathon · Bone</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Mono:wght@400;500;600&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -12,21 +12,18 @@ body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-
 .topbar{position:sticky;top:0;z-index:60;display:flex;gap:8px;align-items:center;padding:12px 20px;
   background:rgba(10,10,9,.92);backdrop-filter:blur(12px);border-bottom:1px solid #24241f}
 .topbar b{font-size:13px;margin-right:10px}
-.topbar a{font-size:12px;color:#8a8a80;text-decoration:none;padding:5px 11px;border:1px solid #2c2c26;border-radius:2px}
-.topbar a:hover{color:#ff4d00;border-color:#ff4d00}
+.topbar .note{font-size:11px;color:#8a8a80;font-family:'IBM Plex Mono',monospace;letter-spacing:.4px}
 .caption{padding:44px 24px 14px;max-width:1240px;margin:0 auto}
 .caption .tag{font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:#ff4d00}
 .caption h2{font-size:27px;margin:10px 0 6px;letter-spacing:-.5px}
 .caption p{color:#8f8f85;font-size:14px;margin:0;max-width:78ch;line-height:1.65}
 .caption p b{color:#e8e4d9;font-weight:600}
-.frame{max-width:1240px;margin:0 auto 20px;height:812px;overflow:hidden;position:relative;
-  display:flex;flex-direction:column}
 
 /* ══════════ SHARED MARATHON SYSTEM ══════════ */
 .m{--bone:#e8e4d9;--ink:#0d0d0b;--org:#ff4d00;--cyn:#00c2c2;--acd:#c8e600;--mag:#ff1f6f;
+   --vio:#7c5cff;--blu:#3d8eff;
    --base:var(--bone);--fg:var(--ink);--rule:var(--ink);--dim:rgba(13,13,11,.55);--hair:rgba(13,13,11,.16);
    background:var(--base);color:var(--fg);border:2px solid var(--rule)}
-.m.dk{--base:#0d0d0b;--fg:#e8e4d9;--rule:#e8e4d9;--dim:rgba(232,228,217,.5);--hair:rgba(232,228,217,.17)}
 
 .m .nav{display:flex;align-items:stretch;height:52px;flex:none;border-bottom:2px solid var(--rule)}
 .m .nav .mk{font:400 21px/1 'Anton';letter-spacing:.4px;text-transform:uppercase;display:flex;align-items:center;
@@ -49,7 +46,6 @@ body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-
 .reg::before{top:5px;left:5px;border-top:2px solid var(--org);border-left:2px solid var(--org)}
 .reg::after{bottom:5px;right:5px;border-bottom:2px solid var(--org);border-right:2px solid var(--org)}
 .fig{font:500 9px/1 'IBM Plex Mono',monospace;letter-spacing:1.6px;text-transform:uppercase;opacity:.5}
-.hz{background-image:repeating-linear-gradient(45deg,var(--ink) 0 6px,var(--acd) 6px 12px)}
 
 /* hero band */
 .m .band{flex:none;display:grid;grid-template-columns:1.06fr .94fr;border-bottom:2px solid var(--rule)}
@@ -72,19 +68,23 @@ body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-
 .m .q.cyn{background:var(--cyn);color:var(--ink)}
 .m .q.acd{background:var(--acd);color:var(--ink)}
 
-/* seismograph */
-.m .seis{flex:1;min-height:0;display:flex;flex-direction:column;padding:13px 22px 8px;
-  border-bottom:2px solid var(--rule);position:relative}
-.m .seis .hd{display:flex;justify-content:space-between;align-items:baseline;flex:none}
-.m .seis .hd h3{font:600 11px/1 'Inter Tight';letter-spacing:1.6px;text-transform:uppercase;margin:0}
-.m .seis .hd .rt{display:flex;gap:14px;align-items:baseline}
-.m .seis .hd .rt b{font:500 10px 'IBM Plex Mono',monospace;letter-spacing:1px;color:var(--org)}
-.m .seis .plot{flex:1;min-height:0;margin-top:9px;position:relative}
-.m .seis .plot svg{width:100%;height:100%;display:block}
-.m .seis .ax{display:flex;justify-content:space-between;flex:none;padding-top:5px;border-top:2px solid var(--rule);
+/* ══════════ STACKED DAILY CHART ══════════ */
+.m .daily{flex:none;display:flex;flex-direction:column;padding:13px 22px 8px;
+  border-bottom:2px solid var(--rule);position:relative;height:260px}
+.m .daily .hd{display:flex;justify-content:space-between;align-items:baseline;flex:none}
+.m .daily .hd h3{font:600 11px/1 'Inter Tight';letter-spacing:1.6px;text-transform:uppercase;margin:0}
+.m .daily .hd .rt{display:flex;gap:14px;align-items:baseline}
+.m .daily .hd .rt b{font:500 10px 'IBM Plex Mono',monospace;letter-spacing:1px;color:var(--org)}
+.m .daily .legend{display:flex;gap:16px;margin-top:8px;flex:none}
+.m .daily .legend span{display:flex;align-items:center;gap:5px;font:500 10px/1 'IBM Plex Mono',monospace;
+  letter-spacing:.8px;text-transform:uppercase;opacity:.7}
+.m .daily .legend i{width:10px;height:10px;display:inline-block;flex:none}
+.m .daily .plot{flex:1;min-height:0;margin-top:6px;position:relative}
+.m .daily .plot svg{width:100%;height:100%;display:block}
+.m .daily .ax{display:flex;justify-content:space-between;flex:none;padding-top:5px;border-top:2px solid var(--rule);
   font:500 9px/1 'IBM Plex Mono',monospace;letter-spacing:1.4px;opacity:.5}
 
-/* lower split */
+/* lower split: models + harnesses */
 .m .low{flex:none;display:grid;grid-template-columns:1.5fr 1fr;border-bottom:2px solid var(--rule)}
 .m .bars{padding:13px 22px 15px;border-right:2px solid var(--rule)}
 .m .bars h3,.m .srcs h3{font:600 11px/1 'Inter Tight';letter-spacing:1.6px;text-transform:uppercase;margin:0 0 11px;
@@ -107,7 +107,7 @@ body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-
 .m .quote p{margin:0;font:500 13px/1.4 'Inter Tight'}
 .m .quote p b{color:var(--acd);font-weight:700}
 
-/* ══════════ DENSE TABLE FRAME ══════════ */
+/* ══════════ MODELS PAGE ══════════ */
 .m .thd{flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:15px 22px 13px;
   border-bottom:2px solid var(--rule)}
 .m .thd h1{font:400 40px/1 'Anton';letter-spacing:-1px;margin:0;text-transform:uppercase}
@@ -116,6 +116,36 @@ body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-
 .m .thd .pills button{font:600 10px 'Inter Tight';letter-spacing:1.1px;text-transform:uppercase;
   padding:7px 13px;border:2px solid var(--rule);background:none;color:var(--fg);cursor:pointer;margin-left:-2px}
 .m .thd .pills button.on{background:var(--fg);color:var(--base)}
+
+/* stat cards row for models */
+.m .mcards{flex:none;display:grid;grid-template-columns:repeat(5,1fr);border-bottom:2px solid var(--rule)}
+.m .mc{padding:12px 16px;border-right:2px solid var(--rule);position:relative}
+.m .mc:last-child{border-right:none}
+.m .mc .k{font:600 9px/1 'Inter Tight';letter-spacing:1.3px;text-transform:uppercase;opacity:.55}
+.m .mc .v{font:400 30px/1 'Anton';margin-top:6px;letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.m .mc .h{font:400 10px/1 'IBM Plex Mono',monospace;margin-top:5px;opacity:.48}
+.m .mc.hl{background:var(--org);color:#fff}
+.m .mc.hl .k,.m .mc.hl .h{opacity:.82}
+
+/* model charts row */
+.m .mcharts{flex:none;display:grid;grid-template-columns:1.3fr .7fr;border-bottom:2px solid var(--rule)}
+.m .mcharts .mbars{padding:14px 22px 14px;border-right:2px solid var(--rule)}
+.m .mcharts .mbars h3{font:600 11px/1 'Inter Tight';letter-spacing:1.6px;text-transform:uppercase;margin:0 0 10px;
+  display:flex;justify-content:space-between}
+.m .mcharts .mbars .r{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.m .mcharts .mbars .r i{width:17px;height:17px;flex:none;display:flex;align-items:center;justify-content:center;
+  font:400 10px 'Anton';color:#fff}
+.m .mcharts .mbars .r span.nm{width:130px;font:500 12px 'Inter Tight';overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.m .mcharts .mbars .r .tr{flex:1;height:10px;background:var(--hair)}
+.m .mcharts .mbars .r .tr div{height:100%}
+.m .mcharts .mbars .r b{width:46px;text-align:right;font:500 11px 'IBM Plex Mono',monospace}
+.m .mcharts .mbars .r .pct{width:36px;text-align:right;font:500 10px 'IBM Plex Mono',monospace;opacity:.5}
+.m .mcharts .donut{padding:14px 18px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.m .mcharts .donut h3{font:600 11px/1 'Inter Tight';letter-spacing:1.6px;text-transform:uppercase;margin:0 0 10px;
+  align-self:stretch;display:flex;justify-content:space-between}
+.m .mcharts .donut svg{display:block}
+
+/* dense table */
 .m .tw{flex:1;min-height:0;overflow:hidden}
 .m table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 .m thead th{font:600 9px/1 'Inter Tight';letter-spacing:1.3px;text-transform:uppercase;text-align:left;
@@ -126,10 +156,14 @@ body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-
 .m td.rk{font:400 14px 'Anton';width:34px;text-align:center;color:#fff}
 .m td .mn{font:600 12.5px 'Inter Tight'}
 .m td .sr{font:400 9px 'IBM Plex Mono',monospace;letter-spacing:.7px;opacity:.5;text-transform:uppercase;margin-top:2px}
+.m td .stags{display:flex;gap:4px;margin-top:3px}
+.m td .stag{font:500 8px/1 'IBM Plex Mono',monospace;letter-spacing:.6px;text-transform:uppercase;
+  padding:2px 5px;border:1.5px solid;opacity:.7}
 .m td.mono{font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:11.5px}
 .m td .sk{display:block}
 .m .shbar{height:9px;background:var(--hair);width:64px;display:inline-block;vertical-align:middle}
 .m .shbar div{height:100%}
+.m td .breakdown{font:400 9px 'IBM Plex Mono',monospace;opacity:.45;margin-top:2px;letter-spacing:.3px}
 
 /* still / motion */
 .still .up{opacity:1!important;transform:none!important;animation:none!important}
@@ -143,47 +177,134 @@ body{margin:0;background:#0a0a09;color:#e8e4d9;font-family:'Inter Tight',system-
 .gw{transform:scaleX(0);transform-origin:left}
 .revealed .gw{animation:gw .9s cubic-bezier(.2,.75,.3,1) forwards}
 @keyframes gw{to{transform:scaleX(1)}}
+
+/* frame sizing */
+.frame{max-width:1240px;margin:0 auto 20px;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.frame.overview{height:860px}
+.frame.models{height:960px}
 </style>
 </head>
 <body>
 <div class="topbar">
-  <b>TokenTrail · Marathon direction</b>
-  <a href="?d=l">Overview — bone</a>
-  <a href="?d=k">Overview — dark</a>
-  <a href="?d=t">Models table</a>
-  <a href="?">all</a>
+  <b>TokenTrail · Marathon · Bone</b>
+  <span class="note">Refined mockup — stacked provider chart + dense models</span>
 </div>
 <div id="mount"></div>
 
 <script>
 const NAV=['Overview','Models','Trends','Projects','Activity','Settings'];
-const C={org:'#ff4d00',cyn:'#00c2c2',acd:'#c8e600',mag:'#ff1f6f',vio:'#7c5cff',ink:'#0d0d0b'};
+const C={org:'#ff4d00',cyn:'#00c2c2',acd:'#c8e600',mag:'#ff1f6f',vio:'#7c5cff',blu:'#3d8eff',ink:'#0d0d0b'};
+
+// Source/harness palette for the stacked chart — matches format.ts order
+const SOURCES=[
+  {key:'claude_code', label:'Claude Code', color:C.org},
+  {key:'codex',       label:'Codex',       color:C.cyn},
+  {key:'zcode',       label:'ZCode',       color:C.vio},
+  {key:'antigravity', label:'Antigravity', color:C.acd},
+  {key:'opencode',    label:'OpenCode',    color:C.mag},
+  {key:'gemini',      label:'Gemini CLI',  color:C.blu},
+];
+
 const MODELS=[
-  ['claude-opus-5',C.org,'8.1M',1,'claude code · zcode','$118.40','2,910','38.2'],
-  ['claude-sonnet-5',C.cyn,'5.4M',.67,'claude code · opencode','$61.20','2,140','25.5'],
-  ['gemini-3-pro',C.acd,'2.1M',.26,'gemini · antigravity','$24.80','980','9.9'],
-  ['gpt-5.6-sol',C.mag,'1.6M',.2,'codex','$31.05','812','7.6'],
-  ['gpt-5.5',C.vio,'1.3M',.16,'codex · opencode','$18.90','660','6.1'],
-  ['claude-haiku-4-5','#8a8578','588K',.07,'claude code','$2.10','1,240','2.8'],
+  {name:'claude-opus-5',    color:C.org,  tokens:'8.1M', pct:1,   srcs:['claude_code','zcode'],     cost:'$118.40', calls:'2,910', avg:'38.2K', input:'5.1M', output:'3.0M', sessions:'412', last:'Today'},
+  {name:'claude-sonnet-5',  color:C.cyn,  tokens:'5.4M', pct:.67, srcs:['claude_code','opencode'],  cost:'$61.20',  calls:'2,140', avg:'25.5K', input:'3.6M', output:'1.8M', sessions:'318', last:'Today'},
+  {name:'gemini-3-pro',     color:C.acd,  tokens:'2.1M', pct:.26, srcs:['gemini','antigravity'],    cost:'$24.80',  calls:'980',   avg:'9.9K',  input:'1.5M', output:'620K', sessions:'145', last:'Yesterday'},
+  {name:'gpt-5.6-sol',      color:C.mag,  tokens:'1.6M', pct:.2,  srcs:['codex'],                   cost:'$31.05',  calls:'812',   avg:'7.6K',  input:'1.1M', output:'510K', sessions:'98',  last:'2 days ago'},
+  {name:'gpt-5.5',          color:C.vio,  tokens:'1.3M', pct:.16, srcs:['codex','opencode'],        cost:'$18.90',  calls:'660',   avg:'6.1K',  input:'860K', output:'440K', sessions:'87',  last:'3 days ago'},
+  {name:'claude-haiku-4-5', color:'#8a8578',tokens:'588K',pct:.07,srcs:['claude_code'],             cost:'$2.10',   calls:'1,240', avg:'2.8K',  input:'410K', output:'178K', sessions:'201', last:'Today'},
 ];
 const MONTHS=['SEP','OCT','NOV','DEC','JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG'];
 
 function rng(s){let a=s>>>0;return()=>{a=(a*1664525+1013904223)>>>0;return a/4294967296}}
-function series(n,seed,amp){const r=rng(seed),o=[];let v=.45;
-  for(let i=0;i<n;i++){v+=(r()-.47)*(amp||.22);v=Math.max(.05,Math.min(1,v));
-    const d=i%7;o.push(v*(d===5||d===6?.4:1)*(.5+i/n*.85))}return o}
-/* seismograph: hard polyline, no smoothing — the spikes are the point */
-function seis(d,w,h){const mx=Math.max(...d),st=w/(d.length-1);
-  return d.map((v,i)=>(i?'L':'M')+(i*st).toFixed(1)+' '+(h-(v/mx)*h*.94).toFixed(1)).join(' ')}
 function sparkPath(d,w,h){const mx=Math.max(...d),st=w/(d.length-1);
   return d.map((v,i)=>(i?'L':'M')+(i*st).toFixed(1)+' '+(h-(v/mx)*h*.9).toFixed(1)).join(' ')}
 
-function overview(dark){
-  const d=series(150,7717,.26);
+// Generate per-source daily series (stacked)
+function genSourceSeries(nDays, sources){
+  const out=[];
+  sources.forEach((src,si)=>{
+    const r=rng(42+si*137);
+    const base=[.55,.22,.10,.07,.04,.02][si]||.02;
+    const series=[];
+    let v=base;
+    for(let i=0;i<nDays;i++){
+      v+=(r()-.48)*(base*.5);
+      v=Math.max(base*.1,Math.min(base*2.2,v));
+      const dow=i%7;
+      series.push(v*(dow===5||dow===6?.35:1)*(.4+i/nDays*.8));
+    }
+    out.push(series);
+  });
+  return out;
+}
+
+// Build stacked area SVG paths
+function stackedArea(allSeries,w,h){
+  const n=allSeries[0].length;
+  const step=w/(n-1);
+  // compute cumulative sums
+  const stacked=[];
+  const cumulative=new Array(n).fill(0);
+  for(let s=0;s<allSeries.length;s++){
+    const prev=[...cumulative];
+    for(let i=0;i<n;i++) cumulative[i]+=allSeries[s][i];
+    stacked.push({bottom:prev, top:[...cumulative]});
+  }
+  const maxVal=Math.max(...cumulative);
+  const yOf=(val)=>h-(val/maxVal)*h*.9;
+
+  let paths='';
+  // draw from bottom to top
+  for(let s=0;s<stacked.length;s++){
+    const {bottom,top}=stacked[s];
+    // forward path along top
+    let d='M0 '+yOf(top[0]).toFixed(1);
+    for(let i=1;i<n;i++) d+=' L'+(i*step).toFixed(1)+' '+yOf(top[i]).toFixed(1);
+    // backward path along bottom
+    for(let i=n-1;i>=0;i--) d+=' L'+(i*step).toFixed(1)+' '+yOf(bottom[i]).toFixed(1);
+    d+='Z';
+    paths+=`<path d="${d}" fill="${SOURCES[s].color}" opacity=".55"/>`;
+    // stroke along the top edge
+    let stroke='M0 '+yOf(top[0]).toFixed(1);
+    for(let i=1;i<n;i++) stroke+=' L'+(i*step).toFixed(1)+' '+yOf(top[i]).toFixed(1);
+    paths+=`<path class="trc" d="${stroke}" fill="none" stroke="${SOURCES[s].color}" stroke-width="1.5" stroke-linejoin="miter"/>`;
+  }
+  // midline
+  paths+=`<line x1="0" y1="${(h/2).toFixed(1)}" x2="${w}" y2="${(h/2).toFixed(1)}" stroke="#0d0d0b" stroke-width="1" stroke-dasharray="3 5" opacity=".18"/>`;
+  // baseline
+  paths+=`<line x1="0" y1="${(h-1)}" x2="${w}" y2="${(h-1)}" stroke="#0d0d0b" stroke-width="2" opacity=".25"/>`;
+  return paths;
+}
+
+// donut SVG for model share
+function donutSVG(models,size){
+  const r=size/2, cr=r*.82, ir=r*.58;
+  let svg=`<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">`;
+  const total=models.reduce((s,m)=>s+m.pct,0);
+  let angle=-Math.PI/2;
+  models.forEach(m=>{
+    const sweep=m.pct/total*Math.PI*2;
+    const x1=r+cr*Math.cos(angle), y1=r+cr*Math.sin(angle);
+    const x2=r+cr*Math.cos(angle+sweep), y2=r+cr*Math.sin(angle+sweep);
+    const x3=r+ir*Math.cos(angle+sweep), y3=r+ir*Math.sin(angle+sweep);
+    const x4=r+ir*Math.cos(angle), y4=r+ir*Math.sin(angle);
+    const large=sweep>Math.PI?1:0;
+    svg+=`<path d="M${x1.toFixed(1)},${y1.toFixed(1)} A${cr},${cr} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)} L${x3.toFixed(1)},${y3.toFixed(1)} A${ir},${ir} 0 ${large} 0 ${x4.toFixed(1)},${y4.toFixed(1)}Z" fill="${m.color}" stroke="var(--bone)" stroke-width="2"/>`;
+    angle+=sweep;
+  });
+  svg+='</svg>';
+  return svg;
+}
+
+const SRC_LABEL={claude_code:'Claude Code',codex:'Codex',zcode:'ZCode',antigravity:'AGY',opencode:'OpenCode',gemini:'Gemini'};
+const SRC_COLOR={claude_code:C.org,codex:C.cyn,zcode:C.vio,antigravity:C.acd,opencode:C.mag,gemini:C.blu};
+
+function overview(){
+  const allSeries=genSourceSeries(150,SOURCES);
   const q=[['org','Est. cost','$268','api-equivalent'],['','Sessions','1,473','10,314 calls'],
     ['acd','Streak','59d','longest ever'],['cyn','Cache served','78%','≈ $740 saved']];
   const srcs=[['67%','claude code'],['19%','codex'],['8%','zcode'],['6%','antigravity']];
-  return `<div class="frame m ${dark?'dk':''}" id="${dark?'k':'l'}">
+  return `<div class="frame overview m" id="overview">
     <div class="nav"><div class="mk">TokenTrail</div>
       ${NAV.map((n,i)=>`<a href="#" class="${i?'':'on'}"><u>0${i+1}</u>${n}</a>`).join('')}
       <div class="sy"><i></i>Synced 18:42</div></div>
@@ -193,22 +314,21 @@ function overview(dark){
         <div class="kick"><span>Total tokens · all time</span><s>FIG.01</s></div>
         <div class="n up">141<u>M</u></div>
         <div class="sp"><svg viewBox="0 0 460 30" preserveAspectRatio="none">
-          <path class="trc" d="${sparkPath(series(80,55,.3),460,30)}" fill="none"
+          <path class="trc" d="${sparkPath((()=>{const r=rng(55),o=[];let v=.45;for(let i=0;i<80;i++){v+=(r()-.47)*.22;v=Math.max(.05,Math.min(1,v));o.push(v*(.5+i/80*.85))}return o})(),460,30)}" fill="none"
             stroke="${C.org}" stroke-width="1.6"/></svg></div>
       </div>
       <div class="quad">${q.map((x,i)=>`<div class="q ${x[0]} up" style="animation-delay:${i*70}ms">
         <div class="k">${x[1]}</div><div class="v">${x[2]}</div><div class="h">${x[3]}</div></div>`).join('')}</div>
     </div>
 
-    <div class="seis">
-      <div class="hd"><h3>Daily tokens — last 150 days</h3>
-        <div class="rt"><b>▲ 18% VS PREV</b><span class="fig">FIG.02 / SEISMIC</span></div></div>
-      <div class="plot"><svg viewBox="0 0 1140 190" preserveAspectRatio="none">
-        <line x1="0" y1="189" x2="1140" y2="189" stroke="${dark?'#e8e4d9':'#0d0d0b'}" stroke-width="2" opacity=".3"/>
-        <line x1="0" y1="95" x2="1140" y2="95" stroke="${dark?'#e8e4d9':'#0d0d0b'}" stroke-width="1"
-          stroke-dasharray="3 5" opacity=".22"/>
-        <path class="trc" d="${seis(d,1140,190)}" fill="none" stroke="${C.org}" stroke-width="1.7"
-          stroke-linejoin="miter"/>
+    <div class="daily">
+      <div class="hd"><h3>Daily tokens by provider — last 150 days</h3>
+        <div class="rt"><b>▲ 18% VS PREV</b><span class="fig">FIG.02 / STACKED</span></div></div>
+      <div class="legend">
+        ${SOURCES.map(s=>`<span><i style="background:${s.color}"></i>${s.label}</span>`).join('')}
+      </div>
+      <div class="plot"><svg viewBox="0 0 1140 155" preserveAspectRatio="none">
+        ${stackedArea(allSeries,1140,155)}
       </svg></div>
       <div class="ax">${MONTHS.slice(4).map(m=>`<span>${m}</span>`).join('')}</div>
     </div>
@@ -216,9 +336,9 @@ function overview(dark){
     <div class="low">
       <div class="bars"><h3><span>Top models · 30 days</span><span class="fig">FIG.03</span></h3>
         ${MODELS.slice(0,5).map((m,i)=>`<div class="r up" style="animation-delay:${180+i*60}ms">
-          <i style="background:${m[1]}">${i+1}</i><span>${m[0]}</span>
-          <span class="tr"><div class="gw" style="width:${m[3]*100}%;background:${m[1]};animation-delay:${240+i*60}ms"></div></span>
-          <b>${m[2]}</b></div>`).join('')}
+          <i style="background:${m.color}">${i+1}</i><span>${m.name}</span>
+          <span class="tr"><div class="gw" style="width:${m.pct*100}%;background:${m.color};animation-delay:${240+i*60}ms"></div></span>
+          <b>${m.tokens}</b></div>`).join('')}
       </div>
       <div class="srcs"><h3><span>Harnesses</span><span class="fig">FIG.04</span></h3>
         <div class="g">${srcs.map((s,i)=>`<div class="up" style="animation-delay:${240+i*60}ms">
@@ -231,9 +351,9 @@ function overview(dark){
   </div>`;
 }
 
-function table(){
-  const cols=['#','Model','Sources','Calls','Tokens','Avg/call','90-day trend','Est. cost','Share'];
-  return `<div class="frame m" id="t">
+function models(){
+  const cols=['#','Model','Sources','Calls','Tokens','In / Out','Avg/call','90d trend','Est. cost','Share'];
+  return `<div class="frame models m" id="models">
     <div class="nav"><div class="mk">TokenTrail</div>
       ${NAV.map((n,i)=>`<a href="#" class="${i===1?'on':''}"><u>0${i+1}</u>${n}</a>`).join('')}
       <div class="sy"><i></i>Synced 18:42</div></div>
@@ -242,20 +362,46 @@ function table(){
       <div class="pills">${['7D','30D','90D','ALL'].map((p,i)=>
         `<button class="${i===2?'on':''}">${p}</button>`).join('')}</div>
     </div>
+
+    <div class="mcards">
+      <div class="mc"><div class="k">Models used</div><div class="v">6</div><div class="h">10,314 calls total</div></div>
+      <div class="mc hl"><div class="k">Top model</div><div class="v" style="font-size:22px;margin-top:8px">claude-opus-5</div><div class="h">42.5% of tokens</div></div>
+      <div class="mc"><div class="k">Costliest</div><div class="v" style="font-size:22px;margin-top:8px">claude-opus-5</div><div class="h">$118.40 est.</div></div>
+      <div class="mc"><div class="k">Est. cost</div><div class="v">$268</div><div class="h">19.1M tokens</div></div>
+      <div class="mc"><div class="k">Avg tok / call</div><div class="v">18.5<span style="font-size:16px;color:var(--org)">K</span></div><div class="h">58% output</div></div>
+    </div>
+
+    <div class="mcharts">
+      <div class="mbars"><h3><span>Token share — top 6</span><span class="fig">FIG.05</span></h3>
+        ${MODELS.map((m,i)=>`<div class="r up" style="animation-delay:${i*50}ms">
+          <i style="background:${m.color}">${i+1}</i>
+          <span class="nm">${m.name}</span>
+          <span class="tr"><div class="gw" style="width:${m.pct*100}%;background:${m.color};animation-delay:${100+i*50}ms"></div></span>
+          <b>${m.tokens}</b>
+          <span class="pct">${(m.pct*42.5).toFixed(0)}%</span>
+        </div>`).join('')}
+      </div>
+      <div class="donut"><h3><span>Share of tokens</span><span class="fig">FIG.06</span></h3>
+        ${donutSVG(MODELS,160)}
+      </div>
+    </div>
+
     <div class="tw"><table>
-      <thead><tr>${cols.map((c,i)=>`<th class="${i>2&&i!==6?'n':''}">${c}</th>`).join('')}</tr></thead>
+      <thead><tr>${cols.map((c,i)=>`<th class="${i>2&&i!==7?'n':''}">${c}</th>`).join('')}</tr></thead>
       <tbody>${MODELS.map((m,i)=>`<tr class="up" style="animation-delay:${i*45}ms">
-        <td class="rk" style="background:${m[1]}">${i+1}</td>
-        <td><div class="mn">${m[0]}</div><div class="sr">${m[4]}</div></td>
-        <td class="mono" style="opacity:.6">${m[4].split(' · ').length} src</td>
-        <td class="n mono">${m[6]}</td>
-        <td class="n mono">${m[2]}</td>
-        <td class="n mono">${m[7]}K</td>
+        <td class="rk" style="background:${m.color}">${i+1}</td>
+        <td><div class="mn">${m.name}</div>
+          <div class="stags">${m.srcs.map(s=>`<span class="stag" style="border-color:${SRC_COLOR[s]};color:${SRC_COLOR[s]}">${SRC_LABEL[s]}</span>`).join('')}</div></td>
+        <td class="mono" style="opacity:.6">${m.srcs.length} src</td>
+        <td class="n mono">${m.calls}</td>
+        <td class="n mono">${m.tokens}<div class="breakdown">${m.sessions} sessions</div></td>
+        <td class="n mono" style="font-size:10.5px">${m.input} in<br>${m.output} out</td>
+        <td class="n mono">${m.avg}</td>
         <td><svg width="94" height="20" style="display:block">
-          <path d="${sparkPath(series(30,600+i*29,.34),94,20)}" fill="none" stroke="${m[1]}" stroke-width="1.4"/>
+          <path d="${sparkPath((()=>{const r=rng(600+i*29),o=[];let v=.45;for(let j=0;j<30;j++){v+=(r()-.47)*.34;v=Math.max(.05,Math.min(1,v));o.push(v)}return o})(),94,20)}" fill="none" stroke="${m.color}" stroke-width="1.4"/>
         </svg></td>
-        <td class="n mono">${m[5]}</td>
-        <td class="n"><span class="shbar"><div style="width:${m[3]*100}%;background:${m[1]}"></div></span></td>
+        <td class="n mono">${m.cost}</td>
+        <td class="n"><span class="shbar"><div style="width:${m.pct*100}%;background:${m.color}"></div></span></td>
       </tr>`).join('')}</tbody>
     </table></div>
     <div class="quote"><span class="fg">NOTE 02</span>
@@ -263,24 +409,19 @@ function table(){
   </div>`;
 }
 
-const CAPS=[
-  ['l','Overview — bone','<b>The default.</b> Bone ground, near-black rules at 2px, one orange signal plus cyan '+
-   'and acid as block fills. Anton for figures, IBM Plex Mono for every technical label. Registration marks on '+
-   'the hero, FIG numbers on each block, hard-edged seismograph with a dashed midline — no gradients anywhere, '+
-   'which is what keeps it reading as signage rather than as a dashboard.',()=>overview(false)],
-  ['k','Overview — dark','<b>Same system, inverted.</b> Identical structure and accents on near-black. The '+
-   'colour blocks get louder against the dark ground and the seismograph gains contrast; the bone version feels '+
-   'more like a printed manual, this one more like an instrument in a dark cockpit.',()=>overview(true)],
-  ['t','Models — the density test','<b>Proof the system survives real data.</b> Nine columns, colour-blocked rank '+
-   'cells, mono tabular figures, an inline seismograph per row, and a share bar. This is the page where bold '+
-   'design usually collapses — hard rules and a strict mono column actually make it easier to scan than the '+
-   'current table, not harder.',table],
-];
-const only=new URLSearchParams(location.search).get('d');
-const shown=only?CAPS.filter(c=>c[0]===only):CAPS;
-document.getElementById('mount').innerHTML=shown.map(([id,h,p,fn],i)=>
-  `<div class="caption"><div class="tag">Direction · frame ${String(i+1).padStart(2,'0')}</div>
-   <h2>${h}</h2><p>${p}</p></div>${fn()}`).join('');
+// Render both frames
+document.getElementById('mount').innerHTML=
+  `<div class="caption"><div class="tag">Direction · frame 01</div>
+   <h2>Overview — bone</h2><p><b>The default.</b> Bone ground, near-black rules at 2px, orange signal plus cyan
+   and acid as block fills. The daily chart now shows <b>stacked areas per provider</b> — matching the current
+   app's daily-tokens-by-source pattern but rendered in hard-edged Marathon style with no gradients or smoothing.</p></div>${overview()}` +
+  `<div class="caption"><div class="tag">Direction · frame 02</div>
+   <h2>Models — dense stats</h2><p><b>Full stat density restored.</b> Summary stat cards above the table surface
+   models used, top/costliest model, total cost, and avg tokens per call. The table itself now carries source tags,
+   input/output breakdown, session counts, and per-call averages — everything the current app shows, in
+   Marathon typography. Bar chart and donut sit between the cards and the table for scanability.</p></div>${models()}`;
+
+// Animate
 document.querySelectorAll('path.trc').forEach(p=>{
   const L=Math.ceil(p.getTotalLength())+2;
   p.style.strokeDasharray=L;p.style.strokeDashoffset=L;
