@@ -57,3 +57,13 @@ export function basename(p: string): string {
   const parts = p.split('/').filter(Boolean);
   return parts[parts.length - 1] ?? p;
 }
+
+/**
+ * Mirror of Rust `pricing::normalize_model`: strip `provider/` prefixes and
+ * `[suffix]` decorations, trim, and lowercase. Used to detect likely-duplicate
+ * model names (e.g. "GLM-5.3" vs "glm-5.3") for merge suggestions.
+ */
+export function normalizeModelName(s: string): string {
+  const base = s.split('/')[0];
+  return (base.split('[')[0] ?? base).trim().toLowerCase();
+}

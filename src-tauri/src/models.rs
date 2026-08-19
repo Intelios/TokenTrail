@@ -67,3 +67,10 @@ pub struct SourceStatus {
     pub path: String,
     pub found: bool,
 }
+
+/// A user-declared alias: events recorded as `alias` are displayed as `canonical`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelAlias {
+    pub alias: String,
+    pub canonical: String,
+}

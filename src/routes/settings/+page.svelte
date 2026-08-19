@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type IngestStats, type SourceStatus } from '$lib/api';
-  import { sourceColor } from '$lib/format';
+  import { api, type IngestStats, type ModelAlias, type SourceStatus } from '$lib/api';
+  import { normalizeModelName, sourceColor } from '$lib/format';
 
   let sources = $state<SourceStatus[]>([]);
   let syncing = $state(false);
@@ -9,6 +9,13 @@
   let exportPath = $state('');
   let exporting = $state('');
   let error = $state('');
+
+  // model merges
+  let modelNames = $state<string[]>([]);
+  let aliases = $state<ModelAlias[]>([]);
+  let mergeFilter = $state('');
+  let selected = $state<string[]>([]);
+  let canonical = $state('');
 
   async function load() {
     try {
@@ -19,7 +26,29 @@
     }
   }
 
-  onMount(load);
+  async function loadMerges() {
+    try {
+      const [byModel, aliasRows] = await Promise.all([api.byModel(3650), api.modelAliases()]);
+      modelNames = byModel.map((r) => r.model);
+      aliases = aliasRows;
+      selected = selected.filter((n) => modelNames.includes(n));
+      if (!selected.includes(canonical)) canonical = selected[0] ?? '';
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  onMount(() => {
+    load();
+    loadMerges();
+    const h = () => {
+      load();
+      loadMerges();
+    };
+    window.addEventListener('tt-sync', h);
+    return () => window.removeEventListener('tt-sync', h);
+  });
 
   async function sync() {
     syncing = true;
@@ -42,6 +71,80 @@
       error = String(e);
     } finally {
       exporting = '';
+    }
+  }
+
+  // Names that normalize to the same key are likely the same model spelled
+  // differently; the first in list order is the highest-token variant.
+  const suggestions = $derived.by(() => {
+    const groups = new Map<string, string[]>();
+    for (const name of modelNames) {
+      const key = normalizeModelName(name);
+      if (!key) continue;
+      const list = groups.get(key);
+      if (list) list.push(name);
+      else groups.set(key, [name]);
+    }
+    return [...groups.values()]
+      .filter((list) => new Set(list).size >= 2)
+      .map((list) => ({ names: [...new Set(list)], canonical: list[0] }));
+  });
+
+  const filteredNames = $derived.by(() => {
+    const q = mergeFilter.trim().toLowerCase();
+    return q ? modelNames.filter((n) => n.toLowerCase().includes(q)) : modelNames;
+  });
+
+  const aliasGroups = $derived.by(() => {
+    const groups = new Map<string, string[]>();
+    for (const a of aliases) {
+      const list = groups.get(a.canonical);
+      if (list) list.push(a.alias);
+      else groups.set(a.canonical, [a.alias]);
+    }
+    return [...groups.entries()].map(([name, names]) => ({ canonical: name, aliases: names }));
+  });
+
+  function toggleSelect(name: string) {
+    selected = selected.includes(name)
+      ? selected.filter((n) => n !== name)
+      : [...selected, name];
+    if (!selected.includes(canonical)) canonical = selected[0] ?? '';
+  }
+
+  async function doMerge(names: string[], target: string) {
+    try {
+      await api.mergeModels(names, target);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      selected = [];
+      canonical = '';
+      mergeFilter = '';
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function doUnmerge(target: string) {
+    try {
+      await api.unmergeModels(target);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function removeAlias(alias: string) {
+    try {
+      await api.removeModelAlias(alias);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
     }
   }
 </script>
@@ -91,6 +194,89 @@
     </div>
   {/if}
 </div>
+
+{#if suggestions.length}
+  <div class="panel">
+    <h2>Suggested merges</h2>
+    <p class="note" style="margin-top:0">
+      These look like the same model recorded under different names. Merge them and they'll show up
+      as one entry everywhere.
+    </p>
+    {#each suggestions as s}
+      <div class="src">
+        <div class="meta">
+          <div>{s.names.join(' · ')}</div>
+          <div class="p">Show all as “{s.canonical}”</div>
+        </div>
+        <button onclick={() => doMerge(s.names, s.canonical)}>Merge</button>
+      </div>
+    {/each}
+  </div>
+{/if}
+
+<div class="panel">
+  <h2>Merge models</h2>
+  <p class="note" style="margin-top:0">
+    Pick two or more names that are the same model, then choose which one they should all display as.
+  </p>
+  <input type="text" placeholder="Filter models…" bind:value={mergeFilter} />
+  <div class="mergelist">
+    {#each filteredNames as name}
+      <label class="merge-row">
+        <input type="checkbox" checked={selected.includes(name)} onchange={() => toggleSelect(name)} />
+        <span>{name}</span>
+      </label>
+    {/each}
+    {#if !filteredNames.length}
+      <div class="loading" style="padding:16px">no models match</div>
+    {/if}
+  </div>
+  {#if selected.length >= 2}
+    <div class="row" style="margin-top:10px">
+      <span class="note">Display as:</span>
+      {#each selected as name}
+        <label class="canon-row">
+          <input type="radio" name="canonical" value={name} checked={canonical === name} onchange={() => (canonical = name)} />
+          <span>{name}</span>
+        </label>
+      {/each}
+    </div>
+  {/if}
+  <div class="row" style="margin-top:10px">
+    <button class="primary" disabled={selected.length < 2} onclick={() => doMerge(selected, canonical)}>
+      Merge {selected.length >= 2 ? `${selected.length} models` : '…'}
+    </button>
+    {#if selected.length >= 2}
+      <span class="note">into “{canonical}”</span>
+    {/if}
+  </div>
+</div>
+
+{#if aliasGroups.length}
+  <div class="panel">
+    <h2>Current merges</h2>
+    <p class="note" style="margin-top:0">
+      Model names that are currently shown under a single entry. Removing one is instant — your data
+      is never rewritten.
+    </p>
+    {#each aliasGroups as g}
+      <div class="src">
+        <div class="meta">
+          <div>{g.canonical}</div>
+          <div class="p">
+            {#each g.aliases as alias}
+              <span class="tag">
+                {alias}
+                <button class="x" aria-label="Stop merging {alias}" onclick={() => removeAlias(alias)}>×</button>
+              </span>
+            {/each}
+          </div>
+        </div>
+        <button onclick={() => doUnmerge(g.canonical)}>Unmerge</button>
+      </div>
+    {/each}
+  </div>
+{/if}
 
 <div class="panel">
   <h2>Export</h2>

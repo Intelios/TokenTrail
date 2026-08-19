@@ -59,6 +59,10 @@ pub fn run() {
             commands::get_heatmap,
             commands::get_hourly,
             commands::get_source_status,
+            commands::get_model_aliases,
+            commands::merge_models,
+            commands::unmerge_models,
+            commands::remove_model_alias,
             commands::export_data
         ])
         .run(tauri::generate_context!())

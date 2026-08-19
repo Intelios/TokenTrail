@@ -71,6 +71,7 @@ bun run tauri build  # production build
 - Timestamps are stored as **epoch milliseconds** in `usage_event.ts`.
 - OpenCode stores seconds in some builds; `opencode.rs` multiplies values `< 100_000_000_000` by 1000.
 - `aggregate.rs` computes "active days" and streaks in UTC; the current streak intentionally tolerates "today hasn't happened yet".
+- Model display names resolve through the `model_alias` table (alias → canonical) at query time in `aggregate.rs`; raw `usage_event.model` is never rewritten. Merge/unmerge commands live in `store.rs` (`merge_models`, `remove_aliases_for`).
 - Cost is an **API-equivalent estimate** from bundled list prices, not actual subscription spend. Mention this whenever UI text touches cost.
 - `pricing.json` lists exact models and prefix-ordered families. If you add a new model family, add an entry with a longer-specific prefix *before* catch-all prefixes.
 

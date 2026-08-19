@@ -102,6 +102,50 @@ button.primary:disabled { opacity: 0.6; cursor: default; }
 
 .note { color: var(--muted); font-size: 12px; line-height: 1.6; }
 
+input[type="text"] {
+  width: 100%;
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+input[type="text"]:focus { outline: none; border-color: var(--accent); }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+
+.mergelist {
+  margin-top: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+.merge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.merge-row:hover { background: var(--panel2); }
+.canon-row { display: flex; align-items: center; gap: 5px; font-size: 13px; }
+.tag .x {
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0 2px;
+  margin-left: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.tag .x:hover { color: #f87171; }
+
 .mdot { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
 .tagrow { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
 .tagrow .tag { font-size: 10px; padding: 1px 6px; }

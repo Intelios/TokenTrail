@@ -3,7 +3,7 @@ use crate::aggregate::{
     Overview, ProjectRow,
 };
 use crate::collectors;
-use crate::models::{IngestStats, SourceStatus};
+use crate::models::{IngestStats, ModelAlias, SourceStatus};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, State};
 
@@ -70,6 +70,45 @@ pub fn get_hourly(state: State<AppState>) -> Result<Vec<HourRow>, String> {
 #[tauri::command]
 pub fn get_source_status(state: State<AppState>) -> Vec<SourceStatus> {
     collectors::source_status(&state.home)
+}
+
+#[tauri::command]
+pub fn get_model_aliases(state: State<AppState>) -> Vec<ModelAlias> {
+    state
+        .store
+        .lock()
+        .map(|store| store.get_model_aliases().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn merge_models(state: State<AppState>, names: Vec<String>, canonical: String) -> Result<(), String> {
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let canonical = canonical.trim().to_string();
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store.merge_models(&names, &canonical).map(|_| ())
+}
+
+#[tauri::command]
+pub fn unmerge_models(state: State<AppState>, canonical: String) -> Result<(), String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store
+        .remove_aliases_for(&canonical)
+        .map(|_| ())
+        .map_err(|e| format!("unmerge models: {e}"))
+}
+
+#[tauri::command]
+pub fn remove_model_alias(state: State<AppState>, alias: String) -> Result<(), String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store
+        .remove_model_alias(&alias)
+        .map(|_| ())
+        .map_err(|e| format!("remove model alias: {e}"))
 }
 
 #[tauri::command]

@@ -200,8 +200,10 @@ pub fn daily(store: &Store, days: i64) -> DbResult<Vec<DailyRow>> {
 
 pub fn daily_by_model(store: &Store, days: i64) -> DbResult<Vec<DailyModelRow>> {
     let sql = format!(
-        "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(model, 'unknown'), COALESCE(SUM({T}),0)
-         FROM usage_event WHERE ts >= ?1 GROUP BY d, model ORDER BY d",
+        "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(a.canonical, u.model, 'unknown'),
+                COALESCE(SUM({T}),0)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE u.ts >= ?1 GROUP BY 1, 2 ORDER BY d",
         T = TOKENS
     );
     let mut stmt = store.conn().prepare(&sql)?;
@@ -230,8 +232,10 @@ pub fn daily_cache(store: &Store, days: i64) -> DbResult<Vec<DailyCacheRow>> {
 
 pub fn by_model(store: &Store, days: i64) -> DbResult<Vec<ModelRow>> {
     let sql = format!(
-        "SELECT COALESCE(model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*), SUM(cost_usd), MAX(ts)
-         FROM usage_event WHERE ts >= ?1 GROUP BY model ORDER BY 2 DESC",
+        "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
+                SUM(cost_usd), MAX(ts)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE u.ts >= ?1 GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS
     );
     let mut stmt = store.conn().prepare(&sql)?;
@@ -245,12 +249,13 @@ pub fn by_model(store: &Store, days: i64) -> DbResult<Vec<ModelRow>> {
 
 pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
     let sql = format!(
-        "SELECT COALESCE(model, 'unknown'),
-                COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-                COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0),
-                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT session_id),
-                SUM(cost_usd), MIN(ts), MAX(ts), GROUP_CONCAT(DISTINCT source)
-         FROM usage_event WHERE ts >= ?1 GROUP BY model ORDER BY 6 DESC",
+        "SELECT COALESCE(a.canonical, u.model, 'unknown'),
+                COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+                COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
+                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE u.ts >= ?1 GROUP BY 1 ORDER BY 6 DESC",
         T = TOKENS
     );
     let mut stmt = store.conn().prepare(&sql)?;
@@ -397,6 +402,7 @@ pub fn parse_ts_ms(s: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{Source, UsageEvent};
 
     #[test]
     fn streak_math() {
@@ -414,5 +420,65 @@ mod tests {
         let (_, long) = streaks(&[older, two_ago, yesterday, today]);
         assert_eq!(long, 3);
         assert_eq!(streaks(&[]), (0, 0));
+    }
+
+    fn test_event(model: &str, ts: i64, input: i64) -> UsageEvent {
+        UsageEvent {
+            source: Source::Zcode,
+            source_event_id: format!("{model}-{ts}"),
+            ts,
+            session_id: None,
+            project: None,
+            provider: None,
+            model: Some(model.to_string()),
+            input_tokens: input,
+            output_tokens: 0,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: None,
+            ttft_ms: None,
+            is_subagent: false,
+        }
+    }
+
+    #[test]
+    fn model_aliases_fold_variants() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[test_event("GLM-5.3", now, 100), test_event("glm-5.3", now - 1000, 200)])
+            .unwrap();
+
+        // Before merging, the same model appears twice.
+        let stats = model_stats(&store, 3650).unwrap();
+        assert_eq!(stats.len(), 2);
+
+        store
+            .merge_models(&["GLM-5.3".into(), "glm-5.3".into()], "GLM-5.3")
+            .unwrap();
+
+        // model_stats folds both variants under the canonical name, summing tokens.
+        let stats = model_stats(&store, 3650).unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].model, "GLM-5.3");
+        assert_eq!(stats[0].tokens, 300);
+        assert_eq!(stats[0].events, 2);
+
+        // by_model and daily_by_model resolve the same way.
+        let by_model = by_model(&store, 3650).unwrap();
+        assert_eq!(by_model.len(), 1);
+        assert_eq!(by_model[0].model, "GLM-5.3");
+        assert_eq!(by_model[0].tokens, 300);
+
+        let daily = daily_by_model(&store, 3650).unwrap();
+        assert_eq!(daily.len(), 1);
+        assert_eq!(daily[0].model, "GLM-5.3");
+        assert_eq!(daily[0].tokens, 300);
+
+        // Unmerging restores the original two rows.
+        store.remove_aliases_for("GLM-5.3").unwrap();
+        let stats = model_stats(&store, 3650).unwrap();
+        assert_eq!(stats.len(), 2);
     }
 }

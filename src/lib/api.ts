@@ -101,6 +101,11 @@ export interface IngestStats {
   error: string | null;
 }
 
+export interface ModelAlias {
+  alias: string;
+  canonical: string;
+}
+
 export const api = {
   overview: () => invoke<Overview>('get_overview'),
   daily: (days: number) => invoke<DailyRow[]>('get_daily', { days }),
@@ -114,4 +119,9 @@ export const api = {
   sourceStatus: () => invoke<SourceStatus[]>('get_source_status'),
   syncNow: () => invoke<IngestStats[]>('sync_now'),
   exportData: (format: 'csv' | 'json') => invoke<string>('export_data', { format }),
+  modelAliases: () => invoke<ModelAlias[]>('get_model_aliases'),
+  mergeModels: (names: string[], canonical: string) =>
+    invoke<void>('merge_models', { names, canonical }),
+  unmergeModels: (canonical: string) => invoke<void>('unmerge_models', { canonical }),
+  removeModelAlias: (alias: string) => invoke<void>('remove_model_alias', { alias }),
 };

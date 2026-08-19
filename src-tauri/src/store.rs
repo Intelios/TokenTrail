@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
 
-use crate::models::UsageEvent;
+use crate::models::{ModelAlias, UsageEvent};
 use crate::pricing;
 
 /// TokenTrail's own long-term store. Append-mostly: rows are keyed by
@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS ingest_state (
     watermark INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(source, path)
+);
+CREATE TABLE IF NOT EXISTS model_alias (
+    alias TEXT PRIMARY KEY,
+    canonical TEXT NOT NULL
 );
 "#;
 
@@ -147,6 +151,73 @@ impl Store {
             .ok()
     }
 
+    pub fn get_model_aliases(&self) -> rusqlite::Result<Vec<ModelAlias>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT alias, canonical FROM model_alias ORDER BY canonical, alias")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ModelAlias {
+                    alias: r.get(0)?,
+                    canonical: r.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Merge `names` into one display name `canonical` (which must be one of the
+    /// names). Existing aliases whose canonical is being absorbed are repointed to
+    /// `canonical` so the table never forms alias -> alias chains. Idempotent.
+    pub fn merge_models(&self, names: &[String], canonical: &str) -> Result<usize, String> {
+        if names.len() < 2 {
+            return Err("merge needs at least two model names".to_string());
+        }
+        if !names.iter().any(|n| n == canonical) {
+            return Err("canonical name must be one of the merged names".to_string());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin merge transaction: {e}"))?;
+        // A canonical that was previously an alias must not keep its own row.
+        tx.execute("DELETE FROM model_alias WHERE alias = ?1", params![canonical])
+            .map_err(|e| format!("clear canonical self-alias: {e}"))?;
+        let mut n = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        for name in names.iter().filter(|n| *n != canonical) {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            // Existing aliases pointing at an absorbed name follow it to the new canonical.
+            n += tx
+                .execute(
+                    "UPDATE model_alias SET canonical = ?1 WHERE canonical = ?2 AND alias <> ?1",
+                    params![canonical, name],
+                )
+                .map_err(|e| format!("repoint aliases: {e}"))?;
+            n += tx
+                .execute(
+                    "INSERT INTO model_alias(alias, canonical) VALUES(?1, ?2)
+                     ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
+                    params![name, canonical],
+                )
+                .map_err(|e| format!("set alias: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("commit merge: {e}"))?;
+        Ok(n)
+    }
+
+    pub fn remove_model_alias(&self, alias: &str) -> rusqlite::Result<usize> {
+        self.conn
+            .execute("DELETE FROM model_alias WHERE alias = ?1", params![alias])
+    }
+
+    pub fn remove_aliases_for(&self, canonical: &str) -> rusqlite::Result<usize> {
+        self.conn
+            .execute("DELETE FROM model_alias WHERE canonical = ?1", params![canonical])
+    }
+
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
@@ -160,5 +231,76 @@ pub fn open_readonly(path: &Path) -> rusqlite::Result<Connection> {
     match Connection::open_with_flags(path, flags) {
         Ok(c) => Ok(c),
         Err(_) => Connection::open_with_flags(format!("file:{}?immutable=1", path.display()), flags),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_store() -> Store {
+        Store::open(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn merge_round_trip() {
+        let store = test_store();
+        store
+            .merge_models(&["GLM-5.3".into(), "glm-5.3".into()], "GLM-5.3")
+            .unwrap();
+        let aliases = store.get_model_aliases().unwrap();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], ModelAlias { alias: "glm-5.3".into(), canonical: "GLM-5.3".into() });
+
+        store.remove_aliases_for("GLM-5.3").unwrap();
+        assert!(store.get_model_aliases().unwrap().is_empty());
+    }
+
+    #[test]
+    fn merge_repoints_existing_aliases() {
+        let store = test_store();
+        // A and B become group "B", then that group is merged under "C":
+        // A -> B must follow the group and become A -> C (no chains).
+        store.merge_models(&["A".into(), "B".into()], "B").unwrap();
+        store.merge_models(&["B".into(), "C".into()], "C").unwrap();
+        let mut map: std::collections::HashMap<String, String> = store
+            .get_model_aliases()
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.alias, a.canonical))
+            .collect();
+        assert_eq!(map.remove("A"), Some("C".into()));
+        assert_eq!(map.remove("B"), Some("C".into()));
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn merge_validates_input() {
+        let store = test_store();
+        // need at least two names
+        assert!(store.merge_models(&["A".into()], "A").is_err());
+        // canonical must be one of the names
+        assert!(store.merge_models(&["A".into(), "B".into()], "C").is_err());
+    }
+
+    #[test]
+    fn merge_is_idempotent() {
+        let store = test_store();
+        store.merge_models(&["A".into(), "B".into()], "A").unwrap();
+        store.merge_models(&["A".into(), "B".into()], "A").unwrap();
+        let aliases = store.get_model_aliases().unwrap();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].alias, "B");
+    }
+
+    #[test]
+    fn remove_single_alias() {
+        let store = test_store();
+        store.merge_models(&["A".into(), "B".into(), "C".into()], "A").unwrap();
+        store.remove_model_alias("B").unwrap();
+        let aliases = store.get_model_aliases().unwrap();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].alias, "C");
+        assert_eq!(aliases[0].canonical, "A");
     }
 }
