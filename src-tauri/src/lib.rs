@@ -23,7 +23,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            let base_data_dir = app.path().data_dir()?;
+            let new_data_dir = base_data_dir.join("TokenTrail");
+            let old_data_dir = app.path().app_data_dir()?;
+            
+            if old_data_dir.exists() && !new_data_dir.exists() {
+                if let Err(e) = std::fs::rename(&old_data_dir, &new_data_dir) {
+                    println!("Failed to rename data dir: {}", e);
+                    let _ = std::fs::create_dir_all(&new_data_dir);
+                }
+            } else if !new_data_dir.exists() {
+                let _ = std::fs::create_dir_all(&new_data_dir);
+            }
+            
+            let data_dir = new_data_dir;
+            
             let store = store::Store::open(&data_dir.join("usage.db"))
                 .map_err(|e| format!("open usage store: {e}"))?;
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
