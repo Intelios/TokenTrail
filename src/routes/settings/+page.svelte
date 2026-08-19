@@ -229,7 +229,7 @@
 
   <!-- TAB 1: Sources & Sync -->
   {#if activeTab === 'sources'}
-    <div class="grid2 up">
+    <div class="grid2">
       <div class="col">
         <div class="col-hd">
           <h2>Harness Sources</h2>
@@ -296,7 +296,7 @@
 
   <!-- TAB 2: Model Merges -->
   {:else if activeTab === 'merges'}
-    <div class="merges-view up">
+    <div class="merges-view">
       {#if suggestions.length}
         <div class="suggest-band">
           <div class="sug-hd">
@@ -399,7 +399,7 @@
 
   <!-- TAB 3: Hidden Models -->
   {:else if activeTab === 'hidden'}
-    <div class="grid2 up">
+    <div class="grid2">
       <div class="col">
         <div class="col-hd">
           <h2>Hide Models</h2>
@@ -455,7 +455,7 @@
 
   <!-- TAB 4: Export & Info -->
   {:else if activeTab === 'export'}
-    <div class="grid2 up">
+    <div class="grid2">
       <div class="col">
         <div class="col-hd">
           <h2>Export Raw Data</h2>
@@ -535,11 +535,18 @@
 
   .errpad { padding: 20px 22px; }
 
+  @keyframes tab-fade {
+    from { opacity: 0.85; }
+    to { opacity: 1; }
+  }
+
   .grid2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    flex: 1;
+    flex: 1 1 0%;
     min-height: 0;
+    height: 100%;
+    animation: tab-fade 0.12s ease-out;
   }
 
   .col {
@@ -645,8 +652,10 @@
   .merges-view {
     display: flex;
     flex-direction: column;
-    flex: 1;
+    flex: 1 1 0%;
     min-height: 0;
+    height: 100%;
+    animation: tab-fade 0.12s ease-out;
   }
   .suggest-band {
     padding: 14px clamp(22px, 1.8vw, 40px);
