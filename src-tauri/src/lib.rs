@@ -55,6 +55,7 @@ pub fn run() {
             commands::get_daily_cache,
             commands::get_by_model,
             commands::get_model_stats,
+            commands::get_model_detail,
             commands::get_by_project,
             commands::get_heatmap,
             commands::get_hourly,

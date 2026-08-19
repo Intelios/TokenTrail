@@ -128,6 +128,29 @@ pub struct ModelStatsRow {
     pub sources: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ModelDetail {
+    pub model: String,
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub cost_usd: Option<f64>,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub active_days: i64,
+    pub current_streak: i64,
+    pub longest_streak: i64,
+    pub peak_day: Option<String>,
+    pub peak_day_tokens: i64,
+    pub by_source: Vec<SourceTotals>,
+    pub by_project: Vec<ProjectRow>,
+    pub daily: Vec<HeatmapCell>,
+}
+
 type DbResult<T> = Result<T, rusqlite::Error>;
 
 pub fn overview(store: &Store) -> DbResult<Overview> {
@@ -303,6 +326,135 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// Full detail card for a single model, keyed by display name (all-time).
+/// Returns `None` when the model has no visible usage events.
+pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>> {
+    let sql = format!(
+        "SELECT COALESCE(a.canonical, u.model, 'unknown'),
+                COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+                COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
+                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         GROUP BY 1",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt = store.conn().prepare(&sql)?;
+    let row = stmt.query_row(rusqlite::params![model], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, i64>(6)?,
+            r.get::<_, i64>(7)?,
+            r.get::<_, Option<f64>>(8)?,
+            r.get::<_, Option<i64>>(9)?,
+            r.get::<_, Option<i64>>(10)?,
+        ))
+    });
+
+    let (name, inp, out, cr, cw, total, events, sessions, cost, first_ts, last_ts) = match row {
+        Ok(r) => r,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+
+    // by source
+    let sql_src = format!(
+        "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         GROUP BY u.source ORDER BY 2 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_src = store.conn().prepare(&sql_src)?;
+    let by_source: Vec<SourceTotals> = stmt_src
+        .query_map(rusqlite::params![model], |r| {
+            Ok(SourceTotals {
+                source: r.get(0)?,
+                tokens: r.get(1)?,
+                events: r.get(2)?,
+                sessions: r.get(3)?,
+                cost_usd: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // by project
+    let sql_proj = format!(
+        "SELECT COALESCE(u.project, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
+                COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         GROUP BY u.project ORDER BY 2 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_proj = store.conn().prepare(&sql_proj)?;
+    let by_project: Vec<ProjectRow> = stmt_proj
+        .query_map(rusqlite::params![model], |r| {
+            Ok(ProjectRow {
+                project: r.get(0)?,
+                tokens: r.get(1)?,
+                events: r.get(2)?,
+                sessions: r.get(3)?,
+                cost_usd: r.get(4)?,
+                first_ts: r.get(5)?,
+                last_ts: r.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // daily series → active days, streaks, peak day
+    let sql_daily = format!(
+        "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         GROUP BY d ORDER BY d",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_daily = store.conn().prepare(&sql_daily)?;
+    let daily: Vec<HeatmapCell> = stmt_daily
+        .query_map(rusqlite::params![model], |r| {
+            Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let dates: Vec<String> = daily.iter().map(|d| d.date.clone()).collect();
+    let active_days = dates.len() as i64;
+    let (current_streak, longest_streak) = streaks(&dates);
+    let peak = daily.iter().max_by_key(|d| d.tokens);
+
+    Ok(Some(ModelDetail {
+        model: name,
+        tokens: total,
+        input_tokens: inp,
+        output_tokens: out,
+        cache_read_tokens: cr,
+        cache_write_tokens: cw,
+        events,
+        sessions,
+        cost_usd: cost,
+        first_ts,
+        last_ts,
+        active_days,
+        current_streak,
+        longest_streak,
+        peak_day: peak.map(|p| p.date.clone()),
+        peak_day_tokens: peak.map(|p| p.tokens).unwrap_or(0),
+        by_source,
+        by_project,
+        daily,
+    }))
 }
 
 pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
@@ -575,5 +727,86 @@ mod tests {
         let stats = model_stats(&store, 3650).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].tokens, 300);
+    }
+
+    #[test]
+    fn model_detail_folds_aliases_and_breaks_down() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                UsageEvent {
+                    source: Source::Zcode,
+                    project: Some("proj-alpha".into()),
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    ..test_event("GLM-5.3", now, 0)
+                },
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    project: Some("proj-alpha".into()),
+                    input_tokens: 50,
+                    output_tokens: 10,
+                    ..test_event("glm-5.3", now - 1000, 0)
+                },
+                UsageEvent {
+                    source: Source::Zcode,
+                    project: Some("proj-beta".into()),
+                    input_tokens: 30,
+                    output_tokens: 5,
+                    ..test_event("GLM-5.3", now - 86_400_000, 0)
+                },
+            ])
+            .unwrap();
+
+        // Before merging: "GLM-5.3" matches the two raw rows with that model name.
+        let d = model_detail(&store, "GLM-5.3").unwrap().unwrap();
+        assert_eq!(d.tokens, 155); // (100+20) + (30+5)
+        assert_eq!(d.events, 2);
+
+        store
+            .merge_models(&["GLM-5.3".into(), "glm-5.3".into()], "GLM-5.3")
+            .unwrap();
+
+        // After merging: both variants fold under canonical name.
+        let d = model_detail(&store, "GLM-5.3").unwrap().unwrap();
+        assert_eq!(d.model, "GLM-5.3");
+        assert_eq!(d.tokens, 215); // (100+20) + (50+10) + (30+5)
+        assert_eq!(d.events, 3);
+        assert_eq!(d.sessions, 0); // all events have session_id: None
+        assert!(d.first_ts.is_some());
+        assert!(d.last_ts.is_some());
+
+        // Two distinct sources.
+        assert_eq!(d.by_source.len(), 2);
+
+        // Two distinct projects.
+        assert_eq!(d.by_project.len(), 2);
+        assert!(d.by_project.iter().any(|p| p.project == "proj-alpha"));
+        assert!(d.by_project.iter().any(|p| p.project == "proj-beta"));
+
+        // Active days: two events same day (now, now-1000), one day before → 2 days.
+        assert!(d.active_days >= 1 && d.active_days <= 2);
+
+        // Daily series has the same number of entries as active days.
+        assert_eq!(d.daily.len(), d.active_days as usize);
+
+        // Peak day has the highest tokens.
+        assert!(d.peak_day_tokens > 0);
+    }
+
+    #[test]
+    fn model_detail_hidden_returns_none() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store.insert_events(&[test_event("codex-auto-review", now, 100)]).unwrap();
+        store.hide_models(&["codex-auto-review".into()]).unwrap();
+        assert!(model_detail(&store, "codex-auto-review").unwrap().is_none());
+    }
+
+    #[test]
+    fn model_detail_unknown_model_returns_none() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        assert!(model_detail(&store, "nonexistent-model").unwrap().is_none());
     }
 }

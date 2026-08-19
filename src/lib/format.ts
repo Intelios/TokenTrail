@@ -19,6 +19,9 @@ export const MODEL_PALETTE = [
   '#facc15', '#22d3ee', '#f87171', '#c084fc', '#4ade80', '#94a3b8',
 ];
 
+/// Input / Output / Cache read / Cache write — shared by charts across pages.
+export const MIX_COLORS = ['#60a5fa', '#34d399', '#facc15', '#f472b6'];
+
 export function sourceColor(s: string): string {
   return SOURCE_COLORS[s] ?? '#94a3b8';
 }

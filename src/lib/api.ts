@@ -106,6 +106,28 @@ export interface ModelAlias {
   canonical: string;
 }
 
+export interface ModelDetail {
+  model: string;
+  tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+  sessions: number;
+  cost_usd: number | null;
+  first_ts: number | null;
+  last_ts: number | null;
+  active_days: number;
+  current_streak: number;
+  longest_streak: number;
+  peak_day: string | null;
+  peak_day_tokens: number;
+  by_source: SourceTotals[];
+  by_project: ProjectRow[];
+  daily: HeatmapCell[];
+}
+
 export const api = {
   overview: () => invoke<Overview>('get_overview'),
   daily: (days: number) => invoke<DailyRow[]>('get_daily', { days }),
@@ -113,6 +135,7 @@ export const api = {
   dailyCache: (days: number) => invoke<DailyCacheRow[]>('get_daily_cache', { days }),
   byModel: (days: number) => invoke<ModelRow[]>('get_by_model', { days }),
   modelStats: (days: number) => invoke<ModelStatsRow[]>('get_model_stats', { days }),
+  modelDetail: (model: string) => invoke<ModelDetail | null>('get_model_detail', { model }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
   heatmap: (days: number) => invoke<HeatmapCell[]>('get_heatmap', { days }),
   hourly: () => invoke<HourRow[]>('get_hourly'),

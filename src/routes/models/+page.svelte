@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import { api, type ModelStatsRow } from '$lib/api';
-  import { fmtCost, fmtDate, fmtTokens, MODEL_PALETTE, sourceColor, sourceLabel } from '$lib/format';
+  import { fmtCost, fmtDate, fmtTokens, MODEL_PALETTE, MIX_COLORS, sourceColor, sourceLabel } from '$lib/format';
 
   const RANGES: [number, string][] = [
     [7, '7 days'],
@@ -17,8 +18,6 @@
     ['cost', 'Cost'],
     ['calls', 'Calls'],
   ];
-
-  const MIX_COLORS = ['#60a5fa', '#34d399', '#facc15', '#f472b6'];
 
   let days = $state(90);
   let metric = $state<'tokens' | 'cost' | 'calls'>('tokens');
@@ -139,6 +138,10 @@
   });
 
   const metricLabel = $derived(metric === 'tokens' ? 'tokens' : metric === 'cost' ? 'cost' : 'calls');
+
+  function modelUrl(name: string): string {
+    return '/models/' + encodeURIComponent(name);
+  }
 </script>
 
 <h1>Models</h1>
@@ -222,12 +225,12 @@
       </thead>
       <tbody>
         {#each sorted as r, i}
-          <tr>
+          <tr style="cursor:pointer" onclick={() => goto(modelUrl(r.model))}>
             <td class="muted">{i + 1}</td>
             <td>
               <div style="display:flex;align-items:center;gap:8px">
                 <span class="mdot" style="background:{MODEL_PALETTE[i % MODEL_PALETTE.length]}"></span>
-                <span>{r.model}</span>
+                <a class="modellink" href={modelUrl(r.model)} onclick={(e) => e.stopPropagation()}>{r.model}</a>
               </div>
               {#if r.sources.length}
                 <div class="tagrow">
@@ -251,3 +254,15 @@
     </table>
   </div>
 {/if}
+
+<style>
+  .modellink {
+    color: var(--text);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .modellink:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+</style>
