@@ -71,6 +71,6 @@
   </button>
 </header>
 
-<main class:edge={$page.url.pathname === '/' || $page.url.pathname === '/models' || $page.url.pathname === '/trends' || $page.url.pathname === '/projects' || $page.url.pathname === '/activity'}>
+<main class="edge">
   {@render children()}
 </main>
