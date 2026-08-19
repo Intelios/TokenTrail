@@ -1,7 +1,9 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
+use crate::families;
 use crate::store::Store;
 
 /// "Total tokens" = input + output + both cache directions. Reasoning tokens
@@ -149,6 +151,23 @@ pub struct ModelDetail {
     pub by_source: Vec<SourceTotals>,
     pub by_project: Vec<ProjectRow>,
     pub daily: Vec<HeatmapCell>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FamilyStatsRow {
+    pub family: String,
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub cost_usd: Option<f64>,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub sources: Vec<String>,
+    pub models: Vec<ModelStatsRow>,
 }
 
 type DbResult<T> = Result<T, rusqlite::Error>;
@@ -457,6 +476,80 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
     }))
 }
 
+/// Group model stats into families.  Runs `model_stats` under the hood and
+/// assigns each display-name row to a family via the pricing prefix table.
+/// Sessions are summed across member models (a session using two models of
+/// one family will count twice — acceptable for a summary).
+pub fn family_stats(store: &Store, days: i64) -> DbResult<Vec<FamilyStatsRow>> {
+    let rows = model_stats(store, days)?;
+    let mut map: HashMap<String, FamilyStatsRow> = HashMap::new();
+
+    for r in rows {
+        let fam = families::family_for(&r.model);
+        let e = map
+            .entry(fam.to_string())
+            .or_insert_with(|| FamilyStatsRow {
+                family: fam.to_string(),
+                tokens: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                events: 0,
+                sessions: 0,
+                cost_usd: None,
+                first_ts: None,
+                last_ts: None,
+                sources: Vec::new(),
+                models: Vec::new(),
+            });
+
+        e.tokens += r.tokens;
+        e.input_tokens += r.input_tokens;
+        e.output_tokens += r.output_tokens;
+        e.cache_read_tokens += r.cache_read_tokens;
+        e.cache_write_tokens += r.cache_write_tokens;
+        e.events += r.events;
+        e.sessions += r.sessions;
+
+        // Merge costs: sum present values; keep None only when every member is unpriced.
+        match (e.cost_usd, r.cost_usd) {
+            (Some(a), Some(b)) => e.cost_usd = Some(a + b),
+            (None, Some(b)) => e.cost_usd = Some(b),
+            (Some(_), None) => {}
+            (None, None) => {}
+        }
+
+        // Earliest / latest timestamps.
+        match (e.first_ts, r.first_ts) {
+            (Some(a), Some(b)) => e.first_ts = Some(a.min(b)),
+            (None, o) => e.first_ts = o,
+            _ => {}
+        }
+        match (e.last_ts, r.last_ts) {
+            (Some(a), Some(b)) => e.last_ts = Some(a.max(b)),
+            (None, o) => e.last_ts = o,
+            _ => {}
+        }
+
+        // Union sources.
+        for s in &r.sources {
+            if !e.sources.contains(s) {
+                e.sources.push(s.clone());
+            }
+        }
+
+        e.models.push(r);
+    }
+
+    let mut families: Vec<FamilyStatsRow> = map.into_values().collect();
+    families.sort_by_key(|b| std::cmp::Reverse(b.tokens));
+    for f in &mut families {
+        f.models.sort_by_key(|b| std::cmp::Reverse(b.tokens));
+    }
+    Ok(families)
+}
+
 pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
     let sql = format!(
         "SELECT COALESCE(project, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
@@ -727,6 +820,62 @@ mod tests {
         let stats = model_stats(&store, 3650).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].tokens, 300);
+    }
+
+    #[test]
+    fn family_stats_groups_models() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                test_event("claude-opus-5", now, 300),
+                test_event("claude-sonnet-4.5", now - 1000, 200),
+                test_event("gpt-5", now - 2000, 150),
+                test_event("gemini-3-pro", now - 3000, 100),
+            ])
+            .unwrap();
+
+        let families = family_stats(&store, 3650).unwrap();
+        // Three families: Claude, GPT, Gemini — in descending token order.
+        assert_eq!(families.len(), 3);
+        assert_eq!(families[0].family, "Claude");
+        assert_eq!(families[0].tokens, 500);
+        assert_eq!(families[0].models.len(), 2);
+        assert_eq!(families[1].family, "GPT");
+        assert_eq!(families[1].tokens, 150);
+        assert_eq!(families[2].family, "Gemini");
+        assert_eq!(families[2].tokens, 100);
+    }
+
+    #[test]
+    fn family_stats_respects_hidden_and_merged() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                test_event("claude-opus-5", now, 300),
+                test_event("claude-opus-5", now - 1000, 200),
+                test_event("gpt-5", now - 2000, 150),
+            ])
+            .unwrap();
+        // Merge the two Claude rows under the canonical name.
+        store
+            .merge_models(
+                &["claude-opus-5".into(), "claude-opus-5".into()],
+                "claude-opus-5",
+            )
+            .unwrap();
+
+        let families = family_stats(&store, 3650).unwrap();
+        assert_eq!(families[0].family, "Claude");
+        assert_eq!(families[0].tokens, 500);
+        assert_eq!(families[0].models.len(), 1);
+        assert_eq!(families[0].models[0].events, 2);
+
+        // Hiding the Claude display name removes it.
+        store.hide_models(&["claude-opus-5".into()]).unwrap();
+        let families = family_stats(&store, 3650).unwrap();
+        assert!(families.iter().all(|f| f.family != "Claude"));
     }
 
     #[test]

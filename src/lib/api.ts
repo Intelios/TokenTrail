@@ -106,6 +106,22 @@ export interface ModelAlias {
   canonical: string;
 }
 
+export interface FamilyStatsRow {
+  family: string;
+  tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+  sessions: number;
+  cost_usd: number | null;
+  first_ts: number | null;
+  last_ts: number | null;
+  sources: string[];
+  models: ModelStatsRow[];
+}
+
 export interface ModelDetail {
   model: string;
   tokens: number;
@@ -151,4 +167,6 @@ export const api = {
   hiddenModels: () => invoke<string[]>('get_hidden_models'),
   hideModels: (names: string[]) => invoke<void>('hide_models', { names }),
   unhideModel: (name: string) => invoke<void>('unhide_model', { name }),
+  removeModelAlias: (alias: string) => invoke<void>('remove_model_alias', { alias }),
+  familyStats: (days: number) => invoke<FamilyStatsRow[]>('get_family_stats', { days }),
 };

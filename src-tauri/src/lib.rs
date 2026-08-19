@@ -1,6 +1,7 @@
 mod aggregate;
 mod collectors;
 mod commands;
+mod families;
 mod models;
 mod pricing;
 mod state;
@@ -96,7 +97,8 @@ pub fn run() {
             commands::get_hidden_models,
             commands::hide_models,
             commands::unhide_model,
-            commands::export_data
+            commands::export_data,
+            commands::get_family_stats
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

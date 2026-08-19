@@ -1,6 +1,6 @@
 use crate::aggregate::{
-    self, DailyCacheRow, DailyModelRow, DailyRow, HeatmapCell, HourRow, ModelDetail, ModelRow,
-    ModelStatsRow, Overview, ProjectRow,
+    self, DailyCacheRow, DailyModelRow, DailyRow, FamilyStatsRow, HeatmapCell, HourRow,
+    ModelDetail, ModelRow, ModelStatsRow, Overview, ProjectRow,
 };
 use crate::collectors;
 use crate::models::{IngestStats, ModelAlias, SourceStatus};
@@ -261,4 +261,10 @@ pub fn export_data(
     }
     out.flush().map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
+}
+
+#[tauri::command]
+pub fn get_family_stats(state: State<AppState>, days: i64) -> Result<Vec<FamilyStatsRow>, String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    aggregate::family_stats(&store, days).map_err(|e| e.to_string())
 }

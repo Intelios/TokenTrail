@@ -81,6 +81,24 @@ export function basename(p: string): string {
  * decorations, trim, and lowercase. Used to detect likely-duplicate model
  * names (e.g. "GLM-5.3" vs "glm-5.3") for merge suggestions.
  */
+/// Identity palette for model families — stable colors regardless of rank,
+/// so "Claude" is always orange and "GPT" always teal.
+export const FAMILY_COLORS: Record<string, string> = {
+  Claude: '#ff4d00',
+  GPT: '#00c2c2',
+  Gemini: '#3d8eff',
+  DeepSeek: '#ff1f6f',
+  Kimi: '#7c5cff',
+  Qwen: '#c8e600',
+  GLM: '#6e6a5e',
+  MiMo: '#b5afa0',
+  Other: '#8a8578',
+};
+
+export function familyColor(family: string, rank: number): string {
+  return FAMILY_COLORS[family] ?? MODEL_PALETTE[rank % MODEL_PALETTE.length];
+}
+
 export function normalizeModelName(s: string): string {
   const base = s.split('/').pop() ?? s;
   return (base.split('[')[0] ?? base).trim().toLowerCase();
