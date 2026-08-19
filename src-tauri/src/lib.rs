@@ -92,6 +92,7 @@ pub fn run() {
             commands::merge_models,
             commands::unmerge_models,
             commands::remove_model_alias,
+            commands::rename_model,
             commands::get_hidden_models,
             commands::hide_models,
             commands::unhide_model,

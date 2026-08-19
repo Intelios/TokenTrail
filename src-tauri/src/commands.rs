@@ -121,6 +121,16 @@ pub fn remove_model_alias(state: State<AppState>, alias: String) -> Result<(), S
 }
 
 #[tauri::command]
+pub fn rename_model(
+    state: State<AppState>,
+    current_name: String,
+    new_name: String,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store.rename_model(&current_name, &new_name)
+}
+
+#[tauri::command]
 pub fn get_hidden_models(state: State<AppState>) -> Vec<String> {
     state
         .store

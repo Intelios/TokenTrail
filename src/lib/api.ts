@@ -146,7 +146,8 @@ export const api = {
   mergeModels: (names: string[], canonical: string) =>
     invoke<void>('merge_models', { names, canonical }),
   unmergeModels: (canonical: string) => invoke<void>('unmerge_models', { canonical }),
-  removeModelAlias: (alias: string) => invoke<void>('remove_model_alias', { alias }),
+  renameModel: (currentName: string, newName: string) =>
+    invoke<void>('rename_model', { currentName, newName }),
   hiddenModels: () => invoke<string[]>('get_hidden_models'),
   hideModels: (names: string[]) => invoke<void>('hide_models', { names }),
   unhideModel: (name: string) => invoke<void>('unhide_model', { name }),

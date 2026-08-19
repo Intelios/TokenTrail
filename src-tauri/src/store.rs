@@ -274,6 +274,53 @@ impl Store {
             .execute("DELETE FROM model_alias WHERE canonical = ?1", params![canonical])
     }
 
+    /// Rename a model display name: sets `current_name` to display as `new_name`.
+    /// Pure query-time alias; raw `usage_event` rows are completely untouched.
+    /// If `current_name == new_name`, removes any existing alias (reverting to default).
+    /// If `current_name` was previously a canonical name for other aliases, repoints them to `new_name`.
+    pub fn rename_model(&self, current_name: &str, new_name: &str) -> Result<(), String> {
+        let current = current_name.trim();
+        let target = new_name.trim();
+        if current.is_empty() {
+            return Err("current model name cannot be empty".to_string());
+        }
+        if target.is_empty() {
+            return Err("new model name cannot be empty".to_string());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin rename transaction: {e}"))?;
+
+        if current == target {
+            // Reverting to default / removing alias
+            tx.execute("DELETE FROM model_alias WHERE alias = ?1", params![current])
+                .map_err(|e| format!("remove alias: {e}"))?;
+        } else {
+            // Target must not have a self-alias
+            tx.execute("DELETE FROM model_alias WHERE alias = ?1", params![target])
+                .map_err(|e| format!("clear target self-alias: {e}"))?;
+
+            // If `current` was a canonical name for other aliases, repoint them to `target`
+            tx.execute(
+                "UPDATE model_alias SET canonical = ?1 WHERE canonical = ?2 AND alias <> ?1",
+                params![target, current],
+            )
+            .map_err(|e| format!("repoint aliases: {e}"))?;
+
+            // Set current -> target
+            tx.execute(
+                "INSERT INTO model_alias(alias, canonical) VALUES(?1, ?2)
+                 ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
+                params![current, target],
+            )
+            .map_err(|e| format!("set alias: {e}"))?;
+        }
+
+        tx.commit().map_err(|e| format!("commit rename: {e}"))?;
+        Ok(())
+    }
+
     pub fn get_hidden_models(&self) -> rusqlite::Result<Vec<String>> {
         let mut stmt = self
             .conn
@@ -454,5 +501,32 @@ mod tests {
             .query_row("SELECT cost_usd FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert!((after - 18.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rename_round_trip() {
+        let store = test_store();
+        // Rename raw model to custom name
+        store
+            .rename_model("deepseek-v4-flash:0731", "DeepSeek V4 Flash")
+            .unwrap();
+        let aliases = store.get_model_aliases().unwrap();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].alias, "deepseek-v4-flash:0731");
+        assert_eq!(aliases[0].canonical, "DeepSeek V4 Flash");
+
+        // Renaming to a new display name updates the alias
+        store
+            .rename_model("deepseek-v4-flash:0731", "DeepSeek Flash")
+            .unwrap();
+        let aliases = store.get_model_aliases().unwrap();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].canonical, "DeepSeek Flash");
+
+        // Renaming back to itself (raw name) removes the alias
+        store
+            .rename_model("deepseek-v4-flash:0731", "deepseek-v4-flash:0731")
+            .unwrap();
+        assert!(store.get_model_aliases().unwrap().is_empty());
     }
 }

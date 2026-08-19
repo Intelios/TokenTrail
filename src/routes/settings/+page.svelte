@@ -13,12 +13,14 @@
   let exporting = $state('');
   let error = $state('');
 
-  // model merges
+  // model merges & rename
   let modelNames = $state<string[]>([]);
   let aliases = $state<ModelAlias[]>([]);
   let mergeFilter = $state('');
   let selected = $state<string[]>([]);
   let canonical = $state('');
+  let renameTarget = $state('');
+  let renameNewName = $state('');
 
   // hidden models
   let hidden = $state<string[]>([]);
@@ -114,14 +116,23 @@
     return q ? modelNames.filter((n) => n.toLowerCase().includes(q)) : modelNames;
   });
 
-  const aliasGroups = $derived.by(() => {
-    const groups = new Map<string, string[]>();
+  const customRenames = $derived.by(() => {
+    return aliases.filter((a) => {
+      const allForCanon = aliases.filter((x) => x.canonical === a.canonical);
+      return allForCanon.length === 1 && a.alias !== a.canonical;
+    });
+  });
+
+  const mergedGroups = $derived.by(() => {
+    const map = new Map<string, string[]>();
     for (const a of aliases) {
-      const list = groups.get(a.canonical);
+      const list = map.get(a.canonical);
       if (list) list.push(a.alias);
-      else groups.set(a.canonical, [a.alias]);
+      else map.set(a.canonical, [a.alias]);
     }
-    return [...groups.entries()].map(([name, names]) => ({ canonical: name, aliases: names }));
+    return [...map.entries()]
+      .filter(([, list]) => list.length >= 2)
+      .map(([canonicalName, aliasList]) => ({ canonical: canonicalName, aliases: aliasList }));
   });
 
   function toggleSelect(name: string) {
@@ -129,6 +140,34 @@
       ? selected.filter((n) => n !== name)
       : [...selected, name];
     if (!selected.includes(canonical)) canonical = selected[0] ?? '';
+  }
+
+  async function doRename(current: string, newName: string) {
+    try {
+      await api.renameModel(current, newName);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      renameTarget = '';
+      renameNewName = '';
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function resetRename(alias: string) {
+    try {
+      await api.removeModelAlias(alias);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      if (renameTarget === alias) {
+        renameTarget = '';
+        renameNewName = '';
+      }
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
   }
 
   async function doMerge(names: string[], target: string) {
@@ -203,7 +242,7 @@
   <div class="thd">
     <div class="up">
       <h1>Settings</h1>
-      <div class="sub">Sources, model alias merging, hidden models & data export</div>
+      <div class="sub">Sources, model alias merging, display renaming, hidden models & data export</div>
     </div>
     <div class="pillsrow up">
       <div class="pills">
@@ -211,7 +250,7 @@
           Sources & Sync
         </button>
         <button class="pill" class:on={activeTab === 'merges'} onclick={() => (activeTab = 'merges')}>
-          Model Merges {#if suggestions.length}<span class="badge">{suggestions.length}</span>{/if}
+          Model Names & Merges {#if suggestions.length}<span class="badge">{suggestions.length}</span>{/if}
         </button>
         <button class="pill" class:on={activeTab === 'hidden'} onclick={() => (activeTab = 'hidden')}>
           Hidden Models {#if hidden.length}<span class="badge">{hidden.length}</span>{/if}
@@ -294,7 +333,7 @@
       </div>
     </div>
 
-  <!-- TAB 2: Model Merges -->
+  <!-- TAB 2: Model Merges & Renaming -->
   {:else if activeTab === 'merges'}
     <div class="merges-view">
       {#if suggestions.length}
@@ -319,7 +358,68 @@
 
       <div class="grid2">
         <div class="col">
+          <!-- SECTION A: RENAME A MODEL -->
           <div class="col-hd">
+            <h2>Rename Model Display Name</h2>
+          </div>
+          <p class="note">
+            Set a clean custom name for any model. This is a <b>purely UI-level change</b> — raw database events remain untouched.
+          </p>
+          <div class="tool-card">
+            <div class="form-group">
+              <label class="field-lbl" for="rename-select">Select Model to Rename:</label>
+              <select
+                id="rename-select"
+                class="styled-select"
+                bind:value={renameTarget}
+                onchange={() => (renameNewName = renameTarget)}
+              >
+                <option value="">Choose a model…</option>
+                {#each modelNames as name}
+                  <option value={name}>{name}</option>
+                {/each}
+              </select>
+            </div>
+
+            {#if renameTarget}
+              <div class="form-group" style="margin-top:10px">
+                <label class="field-lbl" for="rename-input">New Display Name:</label>
+                <input
+                  id="rename-input"
+                  type="text"
+                  placeholder="Enter clean display name…"
+                  bind:value={renameNewName}
+                />
+              </div>
+
+              {#if renameNewName.trim() && renameNewName.trim() !== renameTarget}
+                <div class="preview-box">
+                  <span class="p-lbl">Preview:</span>
+                  <code class="p-raw">{renameTarget}</code>
+                  <span class="p-arr">→</span>
+                  <b class="p-new">{renameNewName.trim()}</b>
+                </div>
+              {/if}
+
+              <div class="btn-row" style="margin-top:12px">
+                <button
+                  class="primary"
+                  disabled={!renameNewName.trim() || renameNewName.trim() === renameTarget}
+                  onclick={() => doRename(renameTarget, renameNewName)}
+                >
+                  Save Display Name
+                </button>
+                {#if aliases.some((a) => a.alias === renameTarget)}
+                  <button class="sec-btn" onclick={() => resetRename(renameTarget)}>
+                    Revert to Default
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
+          <!-- SECTION B: MERGE MODELS -->
+          <div class="col-hd" style="margin-top:28px">
             <h2>Merge Models</h2>
             <span class="cnt">{selected.length} selected</span>
           </div>
@@ -366,14 +466,37 @@
         </div>
 
         <div class="col">
+          <!-- Active Custom Renames -->
           <div class="col-hd">
-            <h2>Active Merges ({aliasGroups.length})</h2>
+            <h2>Custom Display Names ({customRenames.length})</h2>
           </div>
           <p class="note">
-            Models currently folded into canonical display names. Unmerging is instant — raw usage events are never rewritten.
+            Individual models given a custom display name. Reverting is instant and restores the original name.
+          </p>
+          <div class="active-list">
+            {#each customRenames as r}
+              <div class="rename-item">
+                <div class="meta">
+                  <div class="nm">{r.canonical}</div>
+                  <div class="p">Original: <code>{r.alias}</code></div>
+                </div>
+                <button class="unmerge-btn" onclick={() => resetRename(r.alias)}>Revert</button>
+              </div>
+            {/each}
+            {#if !customRenames.length}
+              <div class="empty-state">No custom renames saved</div>
+            {/if}
+          </div>
+
+          <!-- Active Merge Groups -->
+          <div class="col-hd" style="margin-top:28px">
+            <h2>Merged Model Groups ({mergedGroups.length})</h2>
+          </div>
+          <p class="note">
+            Combined models displaying under a single entry across the app.
           </p>
           <div class="active-merges-list">
-            {#each aliasGroups as g}
+            {#each mergedGroups as g}
               <div class="merge-group-card">
                 <div class="grp-header">
                   <span class="grp-canon">{g.canonical}</span>
@@ -389,7 +512,7 @@
                 </div>
               </div>
             {/each}
-            {#if !aliasGroups.length}
+            {#if !mergedGroups.length}
               <div class="empty-state">No model aliases merged yet</div>
             {/if}
           </div>
@@ -715,6 +838,101 @@
     border: 1.5px solid var(--ink);
     cursor: pointer;
   }
+
+  .tool-card {
+    padding: 12px 14px;
+    border: 1.5px solid var(--ink);
+    background: var(--bone);
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 8px;
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .field-lbl {
+    font: 600 9.5px/1 var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    opacity: 0.65;
+  }
+  .styled-select {
+    width: 100%;
+    padding: 8px 10px;
+    font: 500 11px/1 var(--font-mono);
+    border: 1.5px solid var(--ink);
+    background: var(--bone);
+    color: var(--ink);
+    border-radius: 0;
+    cursor: pointer;
+  }
+  .styled-select:focus {
+    outline: none;
+    border-color: var(--org);
+  }
+  .tool-card input[type='text'] {
+    width: 100%;
+    padding: 8px 10px;
+    font: 400 11px/1 var(--font-mono);
+    border: 1.5px solid var(--ink);
+    background: var(--bone);
+    color: var(--ink);
+    border-radius: 0;
+  }
+  .tool-card input[type='text']:focus {
+    outline: none;
+    border-color: var(--org);
+  }
+  .preview-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(255, 77, 0, 0.06);
+    border: 1px dashed var(--org);
+    margin-top: 10px;
+    font-size: 11px;
+    flex-wrap: wrap;
+  }
+  .p-lbl { font: 600 9px/1 var(--font-mono); text-transform: uppercase; color: var(--org); }
+  .p-raw { font: 400 11px/1 var(--font-mono); opacity: 0.7; }
+  .p-arr { color: var(--org); font-weight: bold; }
+  .p-new { font: 600 11.5px/1 var(--font-mono); color: var(--ink); }
+
+  .sec-btn {
+    padding: 8px 14px;
+    font: 600 10px/1 var(--font-ui);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1.5px solid var(--ink);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .sec-btn:hover {
+    background: var(--hair);
+  }
+
+  .active-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .rename-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid var(--hair);
+    background: var(--bone);
+    gap: 10px;
+  }
+  .rename-item .meta { flex: 1; min-width: 0; }
+  .rename-item .nm { font: 600 12px/1.2 var(--font-mono); color: var(--ink); }
+  .rename-item .p { font: 400 10.5px/1 var(--font-mono); color: var(--dim); margin-top: 3px; }
+  .rename-item .p code { background: rgba(13, 13, 11, 0.05); padding: 1px 4px; }
 
   .search-box {
     margin-bottom: 10px;
