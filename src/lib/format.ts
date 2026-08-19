@@ -64,11 +64,12 @@ export function basename(p: string): string {
 }
 
 /**
- * Mirror of Rust `pricing::normalize_model`: strip `provider/` prefixes and
- * `[suffix]` decorations, trim, and lowercase. Used to detect likely-duplicate
- * model names (e.g. "GLM-5.3" vs "glm-5.3") for merge suggestions.
+ * Mirror of Rust `pricing::normalize_model`: strip to the last path segment
+ * ("anthropic/claude-sonnet-4.5" → "claude-sonnet-4.5"), strip `[suffix]`
+ * decorations, trim, and lowercase. Used to detect likely-duplicate model
+ * names (e.g. "GLM-5.3" vs "glm-5.3") for merge suggestions.
  */
 export function normalizeModelName(s: string): string {
-  const base = s.split('/')[0];
+  const base = s.split('/').pop() ?? s;
   return (base.split('[')[0] ?? base).trim().toLowerCase();
 }

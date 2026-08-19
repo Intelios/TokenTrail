@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::models::UsageEvent;
+use crate::models::{Source, UsageEvent};
 
 // Approximate API list prices (USD per million tokens) from a LiteLLM-style
 // snapshot. Every cost figure in the app is an "API-equivalent estimate",
@@ -33,45 +33,101 @@ fn table() -> &'static Table {
     TABLE.get_or_init(|| serde_json::from_str(PRICING_JSON).expect("embedded pricing.json is valid"))
 }
 
-/// Strip harness decorations: "claude-opus-5[ffe]" and "model/variant" both
-/// reduce to their family-matchable base.
+/// Strip harness decorations and provider prefixes: "claude-opus-5[ffe]" and
+/// "anthropic/claude-sonnet-4.5" both reduce to their family-matchable base
+/// (the last path segment, minus any "[suffix]" decoration).
 pub fn normalize_model(model: &str) -> String {
-    let base = model.split('/').next().unwrap_or(model);
+    let base = model.rsplit('/').next().unwrap_or(model);
     let base = base.split('[').next().unwrap_or(base);
     base.trim().to_ascii_lowercase()
 }
 
 fn rates_for(model: &str) -> Option<Rates> {
     let t = table();
-    let m = normalize_model(model);
-    if m.is_empty() {
+    let full = model
+        .split('[')
+        .next()
+        .unwrap_or(model)
+        .trim()
+        .to_ascii_lowercase();
+    if full.is_empty() {
         return None;
     }
-    if let Some(r) = t.models.get(&m) {
-        return Some(*r);
+    // The full string ("model/variant" order) and the provider-stripped base
+    // ("provider/model" order) are the two shapes real harnesses produce.
+    let base = normalize_model(&full);
+    let mut candidates: Vec<&str> = vec![full.as_str()];
+    if base != full {
+        candidates.push(base.as_str());
     }
-    // families are ordered longest-prefix-first in pricing.json
-    t.families
-        .iter()
-        .find(|f| m.starts_with(&f.prefix))
-        .map(|f| f.rates)
+    for c in &candidates {
+        if let Some(r) = t.models.get(*c) {
+            return Some(*r);
+        }
+    }
+    for c in &candidates {
+        if let Some(r) = t.families.iter().find(|f| c.starts_with(&f.prefix)) {
+            return Some(r.rates);
+        }
+    }
+    None
+}
+
+/// API-equivalent cost in USD of one model request, from the bundled list
+/// prices. Returns `None` when the model is unknown or missing.
+pub fn cost_for(
+    source: Source,
+    model: Option<&str>,
+    input_tokens: i64,
+    output_tokens: i64,
+    reasoning_tokens: Option<i64>,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
+) -> Option<f64> {
+    let r = rates_for(model?)?;
+    // Providers bill thinking tokens at the output rate. Most collectors report
+    // output including thinking (already covered by r.output); Antigravity is
+    // the one that subtracts thinking from output_tokens, so its reasoning
+    // column is billed here to keep costs comparable across harnesses.
+    let reasoning = match source {
+        Source::Antigravity => reasoning_tokens.unwrap_or(0),
+        _ => 0,
+    };
+    Some(
+        (input_tokens as f64 * r.input
+            + cache_write_tokens as f64 * r.cache_write
+            + cache_read_tokens as f64 * r.cache_read
+            + (output_tokens + reasoning) as f64 * r.output)
+            / 1_000_000.0,
+    )
 }
 
 pub fn cost_usd(model: Option<&str>, e: &UsageEvent) -> Option<f64> {
-    let r = rates_for(model?)?;
-    Some(
-        (e.input_tokens as f64 * r.input
-            + e.cache_write_tokens as f64 * r.cache_write
-            + e.cache_read_tokens as f64 * r.cache_read
-            + e.output_tokens as f64 * r.output)
-            / 1_000_000.0,
+    cost_for(
+        e.source,
+        model,
+        e.input_tokens,
+        e.output_tokens,
+        e.reasoning_tokens,
+        e.cache_read_tokens,
+        e.cache_write_tokens,
     )
+}
+
+/// FNV-1a hash of the embedded pricing table. Startup compares this against a
+/// stored watermark to detect pricing updates and reprice the stored history.
+pub fn pricing_fingerprint() -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in PRICING_JSON.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Source;
 
     fn event(model: Option<&str>, input: i64, cw: i64, cr: i64, out: i64) -> UsageEvent {
         UsageEvent {
@@ -104,11 +160,57 @@ mod tests {
     }
 
     #[test]
+    fn resolves_provider_prefixes() {
+        // "provider/model" from OpenCode-style harnesses must price the model.
+        assert_eq!(rates_for("anthropic/claude-sonnet-4.5").map(|r| r.output), Some(15.0));
+        assert_eq!(rates_for("qwen-cloud/qwen3.8-max").map(|r| r.input), Some(2.0));
+        // "model/variant" style names still match through the full string.
+        assert_eq!(rates_for("gpt-5.6-sol/long-context").map(|r| r.input), Some(5.0));
+    }
+
+    #[test]
+    fn specific_prefixes_beat_catch_alls() {
+        // gpt-5.6-sol is far pricier than the generic gpt-5 / gpt families.
+        assert_eq!(rates_for("gpt-5.6-sol").map(|r| r.input), Some(5.0));
+        assert_eq!(rates_for("gpt-5.6-luna").map(|r| r.input), Some(0.2));
+        assert_eq!(rates_for("gpt-5.5").map(|r| r.input), Some(1.25));
+        // claude-opus-4 keeps the older Opus 4.x rate; opus-5 uses the new one.
+        assert_eq!(rates_for("claude-opus-4-8").map(|r| r.input), Some(15.0));
+        assert_eq!(rates_for("claude-opus-5").map(|r| r.input), Some(5.0));
+        // deepseek-v4-pro outranks the deepseek catch-all; the free variant is $0.
+        assert_eq!(rates_for("deepseek-v4-pro:0813-cloud").map(|r| r.input), Some(1.32));
+        assert_eq!(rates_for("deepseek-v4-flash-free").map(|r| r.input), Some(0.0));
+    }
+
+    #[test]
     fn computes_cost() {
         // 1M input + 1M output on a $3/$15 model = $18
         let e = event(Some("claude-sonnet-4.5"), 1_000_000, 0, 0, 1_000_000);
         let cost = cost_usd(e.model.as_deref(), &e).unwrap();
         assert!((cost - 18.0).abs() < 1e-9);
         assert!(cost_usd(None, &e).is_none());
+    }
+
+    #[test]
+    fn bills_antigravity_reasoning_as_output() {
+        let mut e = event(Some("gemini-3.7-flash"), 0, 0, 0, 200);
+        e.source = Source::Antigravity;
+        e.reasoning_tokens = Some(100);
+        // 300 total output tokens billed at $3.75/M = $0.001125
+        let cost = cost_usd(e.model.as_deref(), &e).unwrap();
+        assert!((cost - 0.001125).abs() < 1e-12);
+        // The same event under a source that reports output including thinking
+        // (e.g. Gemini CLI) is not double-billed for reasoning.
+        e.source = Source::Gemini;
+        let cost = cost_usd(e.model.as_deref(), &e).unwrap();
+        assert!((cost - 0.00075).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fingerprint_changes_with_the_table() {
+        let a = pricing_fingerprint();
+        assert_ne!(a, 0);
+        // deterministic within a build
+        assert_eq!(a, pricing_fingerprint());
     }
 }

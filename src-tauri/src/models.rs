@@ -33,6 +33,19 @@ impl Source {
             Source::Antigravity => "Antigravity",
         }
     }
+
+    /// Parse a stored `source` column value back into a `Source`.
+    pub fn from_str(s: &str) -> Option<Source> {
+        match s {
+            "zcode" => Some(Source::Zcode),
+            "claude_code" => Some(Source::ClaudeCode),
+            "codex" => Some(Source::Codex),
+            "opencode" => Some(Source::Opencode),
+            "gemini" => Some(Source::Gemini),
+            "antigravity" => Some(Source::Antigravity),
+            _ => None,
+        }
+    }
 }
 
 /// One model request, normalized across harnesses.

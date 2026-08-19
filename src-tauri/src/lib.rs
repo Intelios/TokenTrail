@@ -40,6 +40,20 @@ pub fn run() {
             
             let store = store::Store::open(&data_dir.join("usage.db"))
                 .map_err(|e| format!("open usage store: {e}"))?;
+
+            // Recompute stored costs whenever the bundled pricing table changes,
+            // so history reflects updated list prices after an app update.
+            let fingerprint = pricing::pricing_fingerprint();
+            if store.get_watermark("pricing_fingerprint") != fingerprint as i64 {
+                match store.reprice_all() {
+                    Ok(n) => {
+                        store.set_watermark("pricing_fingerprint", fingerprint as i64);
+                        println!("repriced {n} events with updated pricing");
+                    }
+                    Err(e) => println!("failed to reprice history: {e}"),
+                }
+            }
+
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             app.manage(AppState {
                 store: Mutex::new(store),

@@ -77,6 +77,7 @@ bun run tauri build  # production build
 - User-hidden models live in the `hidden_model` table (display names); every aggregate query in `aggregate.rs` excludes them via the `NOT_HIDDEN` fragment. Hiding never touches event data; `export_data` is unfiltered.
 - Cost is an **API-equivalent estimate** from bundled list prices, not actual subscription spend. Mention this whenever UI text touches cost.
 - `pricing.json` lists exact models and prefix-ordered families. If you add a new model family, add an entry with a longer-specific prefix *before* catch-all prefixes.
+- Costs are stored per event at ingest time (`store.rs`), so changing `pricing.json` alone never updates history. Startup compares `pricing::pricing_fingerprint()` against the `pricing_fingerprint` watermark and runs `store::reprice_all()` when the embedded table changed. Thinking tokens are billed at the output rate for Antigravity only; other collectors' reported output already includes thinking.
 
 ## Tauri configuration
 

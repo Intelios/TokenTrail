@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
 
-use crate::models::{ModelAlias, UsageEvent};
+use crate::models::{ModelAlias, Source, UsageEvent};
 use crate::pricing;
 
 /// TokenTrail's own long-term store. Append-mostly: rows are keyed by
@@ -103,6 +103,47 @@ impl Store {
                 cost,
             ])?;
         }
+        Ok(n)
+    }
+
+    /// Recompute `cost_usd` for every stored event against the current bundled
+    /// pricing table. Called on startup when the embedded pricing fingerprint
+    /// changes so history reflects updated list prices.
+    pub fn reprice_all(&self) -> rusqlite::Result<usize> {
+        // (id, source, model, input, output, reasoning, cache_read, cache_write)
+        type Row = (i64, String, Option<String>, i64, i64, Option<i64>, i64, i64);
+        let rows: Vec<Row> = {
+            let mut stmt = self.conn.prepare_cached(
+                "SELECT id, source, model, input_tokens, output_tokens, reasoning_tokens,
+                        cache_read_tokens, cache_write_tokens FROM usage_event",
+            )?;
+            let q = stmt.query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            })?;
+            q.collect::<Result<Vec<_>, _>>()?
+        };
+        let tx = self.conn.unchecked_transaction()?;
+        let mut n = 0usize;
+        for (id, source_s, model, input, output, reasoning, cr, cw) in rows {
+            // Unknown sources behave like ZCode: no reasoning-token surcharge.
+            let source = Source::from_str(&source_s).unwrap_or(Source::Zcode);
+            let cost =
+                pricing::cost_for(source, model.as_deref(), input, output, reasoning, cr, cw);
+            n += tx.execute(
+                "UPDATE usage_event SET cost_usd = ?2 WHERE id = ?1",
+                params![id, cost],
+            )?;
+        }
+        tx.commit()?;
         Ok(n)
     }
 
@@ -363,5 +404,43 @@ mod tests {
 
         store.unhide_model("codex-auto-review").unwrap();
         assert_eq!(store.get_hidden_models().unwrap(), vec!["gpt-5"]);
+    }
+
+    #[test]
+    fn reprice_all_recomputes_stored_costs() {
+        let store = test_store();
+        let e = UsageEvent {
+            source: Source::Zcode,
+            source_event_id: "r1".into(),
+            ts: 0,
+            session_id: None,
+            project: None,
+            provider: None,
+            model: Some("claude-sonnet-4.5".into()),
+            input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: None,
+            ttft_ms: None,
+            is_subagent: false,
+        };
+        store.insert_events(&[e]).unwrap();
+        // Insert priced it at $18 (1M in + 1M out at $3/$15).
+        let before: f64 = store
+            .conn()
+            .query_row("SELECT cost_usd FROM usage_event", [], |r| r.get(0))
+            .unwrap();
+        assert!((before - 18.0).abs() < 1e-9);
+
+        // Sabotage the stored cost, then reprice_all restores it.
+        store.conn().execute("UPDATE usage_event SET cost_usd = 1.0", []).unwrap();
+        assert_eq!(store.reprice_all().unwrap(), 1);
+        let after: f64 = store
+            .conn()
+            .query_row("SELECT cost_usd FROM usage_event", [], |r| r.get(0))
+            .unwrap();
+        assert!((after - 18.0).abs() < 1e-9);
     }
 }
