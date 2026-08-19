@@ -358,6 +358,25 @@ tbody tr:hover td { background: var(--hair); }
 .tag.ok { color: var(--ink); border-color: var(--ink); background: var(--acd); }
 .tag.miss { opacity: 0.5; }
 
+.stag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 600 9px/1 var(--font-mono);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 3px 6px;
+  border: 1px solid var(--hair);
+  background: rgba(13, 13, 11, 0.05);
+  color: var(--ink);
+}
+.stag i {
+  width: 6px;
+  height: 6px;
+  display: inline-block;
+  flex: none;
+}
+
 .note { color: var(--dim); font-size: 12.5px; line-height: 1.65; }
 .note b { color: var(--ink); font-weight: 600; }
 

@@ -262,7 +262,7 @@
                 {#if r.sources.length}
                   <div class="tagrow">
                     {#each r.sources as s}
-                      <span class="stag" style="border-color:{sourceColor(s)};color:{sourceColor(s)}">{sourceLabel(s)}</span>
+                      <span class="stag"><i style="background:{sourceColor(s)}"></i>{sourceLabel(s)}</span>
                     {/each}
                   </div>
                 {/if}
@@ -362,12 +362,22 @@
   .dim { opacity: 0.35; }
 
   .stag {
-    font: 500 8px/1 var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font: 600 9px/1 var(--font-mono);
     letter-spacing: 0.6px;
     text-transform: uppercase;
-    padding: 2px 5px;
-    border: 1.5px solid;
-    opacity: 0.75;
+    padding: 3px 6px;
+    border: 1px solid var(--hair);
+    background: rgba(13, 13, 11, 0.05);
+    color: var(--ink);
+  }
+  .stag i {
+    width: 6px;
+    height: 6px;
+    display: inline-block;
+    flex: none;
   }
 
   .shbar { height: 9px; background: var(--hair); width: 64px; display: inline-block; vertical-align: middle; }

@@ -227,7 +227,7 @@
           {#each detail.by_source as s}
             <tr>
               <td>
-                <span class="tag" style="border-color:{sourceColor(s.source)};color:{sourceColor(s.source)}">{sourceLabel(s.source)}</span>
+                <span class="stag"><i style="background:{sourceColor(s.source)}"></i>{sourceLabel(s.source)}</span>
               </td>
               <td class="num">{fmtTokens(s.tokens)}</td>
               <td class="num">{s.events.toLocaleString()}</td>
