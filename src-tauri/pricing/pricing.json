@@ -7,6 +7,7 @@
     { "prefix": "claude-opus", "rates": { "input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75 } },
     { "prefix": "claude-sonnet", "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 } },
     { "prefix": "claude-haiku", "rates": { "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25 } },
+    { "prefix": "claude-fable", "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 } },
     { "prefix": "gemini-2.5-pro", "rates": { "input": 1.25, "output": 10.0, "cache_read": 0.3125, "cache_write": 1.25 } },
     { "prefix": "gemini", "rates": { "input": 0.3, "output": 2.5, "cache_read": 0.075, "cache_write": 0.3 } },
     { "prefix": "gpt-5", "rates": { "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 1.25 } },
@@ -16,6 +17,12 @@
     { "prefix": "o3", "rates": { "input": 2.0, "output": 8.0, "cache_read": 0.5, "cache_write": 2.0 } },
     { "prefix": "o4", "rates": { "input": 2.0, "output": 8.0, "cache_read": 0.5, "cache_write": 2.0 } },
     { "prefix": "deepseek", "rates": { "input": 0.27, "output": 1.1, "cache_read": 0.07, "cache_write": 0.27 } },
-    { "prefix": "qwen", "rates": { "input": 0.5, "output": 2.0, "cache_read": 0.1, "cache_write": 0.5 } }
+    { "prefix": "glm", "rates": { "input": 0.5, "output": 2.0, "cache_read": 0.14, "cache_write": 0.5 } },
+    { "prefix": "kimi", "rates": { "input": 0.6, "output": 2.5, "cache_read": 0.15, "cache_write": 0.6 } },
+    { "prefix": "qwen", "rates": { "input": 0.5, "output": 2.0, "cache_read": 0.1, "cache_write": 0.5 } },
+    { "prefix": "gpt-oss", "rates": { "input": 0.1, "output": 0.6, "cache_read": 0.03, "cache_write": 0.1 } },
+    { "prefix": "mimo", "rates": { "input": 0.5, "output": 2.0, "cache_read": 0.1, "cache_write": 0.5 } },
+    { "prefix": "claude", "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 } },
+    { "prefix": "gpt", "rates": { "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 1.25 } }
   ]
 }

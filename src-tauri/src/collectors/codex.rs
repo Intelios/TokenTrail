@@ -1,4 +1,4 @@
-use crate::collectors::{clean_model, parse_ts_ms, read_tail, sorted_glob};
+use crate::collectors::{parse_ts_ms, read_tail, sorted_glob};
 use crate::models::{Source, UsageEvent};
 use crate::store::Store;
 use std::io::{BufRead, BufReader};
@@ -34,12 +34,17 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
         }
         let meta = read_meta(&path);
         let mut current_model: Option<String> = None;
+        let mut current_ns: Option<String> = None;
         let mut events = Vec::new();
         for line in tail.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
             let payload = v.get("payload");
             if let Some(m) = payload.and_then(|p| p.get("model")).and_then(|x| x.as_str()) {
-                current_model = Some(clean_model(m));
+                // proxy-routed models arrive namespaced "provider/model"
+                // (e.g. "qwen-cloud/qwen3.8-max"): the model is the suffix
+                let (model, ns) = split_namespaced(m);
+                current_model = Some(model);
+                current_ns = ns;
             }
             if v.get("type").and_then(|x| x.as_str()) != Some("event_msg") {
                 continue;
@@ -66,7 +71,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 ts,
                 session_id: (!sid.is_empty()).then(|| sid),
                 project: meta.cwd.clone(),
-                provider: Some("openai".into()),
+                provider: current_ns.clone().or_else(|| Some("openai".into())),
                 model,
                 input_tokens: input,
                 output_tokens: out,
@@ -84,6 +89,8 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
     Ok(processed)
 }
 
+/// (input, cache_read, cache_write, output, reasoning) from a TokenUsage
+/// object; None when the turn used nothing.
 fn usage_from(v: &serde_json::Value) -> Option<(i64, i64, i64, i64, i64)> {
     let get = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
     let (input, cr, cw, out, reasoning) = (
@@ -97,6 +104,15 @@ fn usage_from(v: &serde_json::Value) -> Option<(i64, i64, i64, i64, i64)> {
         return None;
     }
     Some((input, cr, cw, out, reasoning))
+}
+
+/// Codex writes proxy-routed models namespaced as "provider/model"
+/// ("qwen-cloud/qwen3.8-max") while plain models have no slash.
+fn split_namespaced(m: &str) -> (String, Option<String>) {
+    match m.split_once('/') {
+        Some((provider, model)) if !model.is_empty() => (model.to_string(), Some(provider.to_string())),
+        _ => (m.to_string(), None),
+    }
 }
 
 fn read_meta(path: &Path) -> SessionMeta {
@@ -153,26 +169,27 @@ mod tests {
         let home = test_home("codex");
         let store = test_store("codex");
         seed(&home);
-        assert_eq!(collect(&store, &home).unwrap(), 1);
-        let (input, cr, cw, out, reasoning, sub): (i64, i64, i64, i64, i64, i64) = store
+        assert_eq!(collect(&store, &home).unwrap(), 2);
+        let rows: Vec<(i64, String, String, String)> = store
             .conn()
-            .query_row(
-                "SELECT input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
-                        COALESCE(reasoning_tokens,0), is_subagent
-                 FROM usage_event",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
-            )
+            .prepare("SELECT ts, COALESCE(model,''), COALESCE(provider,''), project FROM usage_event ORDER BY ts")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!((input, cr, cw, out, reasoning, sub), (50, 10, 5, 20, 7, 0));
-        let (model, project): (String, String) = store
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1, "gpt-5.6-luna");
+        assert_eq!(rows[0].2, "openai");
+        // namespaced proxy model: suffix is the model, prefix is the provider
+        assert_eq!(rows[1].1, "qwen3.8-max");
+        assert_eq!(rows[1].2, "qwen-cloud");
+        assert_eq!(rows[0].3, "/Users/jack/cx");
+        let tokens: i64 = store
             .conn()
-            .query_row("SELECT model, project FROM usage_event", [], |r| {
-                Ok((r.get::<_, Option<String>>(0)?.unwrap_or_default(), r.get::<_, Option<String>>(1)?.unwrap_or_default()))
-            })
+            .query_row("SELECT input_tokens + cache_read_tokens + cache_write_tokens + output_tokens FROM usage_event WHERE model = 'qwen3.8-max'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(model, "gpt-5.6-luna");
-        assert_eq!(project, "/Users/jack/cx");
+        assert_eq!(tokens, 70 + 30 + 0 + 15);
         assert_eq!(collect(&store, &home).unwrap(), 0);
     }
 }
