@@ -46,7 +46,23 @@
         backgroundColor: '#131828',
         borderColor: '#232b41',
         textStyle: { color: '#e2e8f0' },
-        valueFormatter: (v: unknown) => fmtTokens(Number(v)),
+        confine: true,
+        formatter: (params: unknown) => {
+          type TipParam = { axisValue?: string; marker: string; seriesName: string; value?: number };
+          const all = params as TipParam[];
+          const title = `<b>${all[0]?.axisValue ?? ''}</b>`;
+          const list = all
+            .filter((p) => Number(p.value ?? 0) > 0)
+            .sort((a, b) => Number(b.value) - Number(a.value));
+          if (!list.length) return `${title}<br/>no usage`;
+          return (
+            title +
+            '<br/>' +
+            list
+              .map((p) => `${p.marker}${p.seriesName}&nbsp;&nbsp;<b>${fmtTokens(Number(p.value))}</b>`)
+              .join('<br/>')
+          );
+        },
       },
       legend: { textStyle: { color: '#8b95ab' }, top: 0, type: 'scroll', icon: 'roundRect' },
       grid: { left: 8, right: 12, top: 32, bottom: 0, containLabel: true },
