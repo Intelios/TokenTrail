@@ -35,7 +35,8 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
             .prepare(
                 "SELECT m.id, m.session_id, m.time_created, m.data, s.directory, s.model
                  FROM message m LEFT JOIN session s ON s.id = m.session_id
-                 WHERE m.time_created > ?1 ORDER BY m.time_created",
+                 WHERE (CASE WHEN m.time_created < 100000000000 THEN m.time_created * 1000 ELSE m.time_created END) > ?1
+                 ORDER BY (CASE WHEN m.time_created < 100000000000 THEN m.time_created * 1000 ELSE m.time_created END)",
             )
             .map_err(|e| format!("opencode prepare: {e}"))?;
         let rows = stmt
