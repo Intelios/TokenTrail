@@ -277,7 +277,6 @@
     letter-spacing: 1.7px;
     text-transform: uppercase;
   }
-  .hero .kick s { text-decoration: none; color: var(--org); }
   .hero .n {
     font-family: var(--font-disp);
     font-weight: 400;
