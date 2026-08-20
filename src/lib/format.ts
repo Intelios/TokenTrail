@@ -53,7 +53,7 @@ export function fmtTokensSplit(n: number): { value: string; unit: string } {
 }
 
 export function fmtCost(n: number | null): string {
-  if (n == null) return '—';
+  if (n == null || !isFinite(n)) return '—';
   if (n >= 1000) return '$' + Math.round(n).toLocaleString();
   if (n >= 1) return '$' + n.toFixed(2);
   if (n >= 0.01) return '$' + n.toFixed(2);
