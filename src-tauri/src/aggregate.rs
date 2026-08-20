@@ -413,7 +413,7 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
                 COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
-         GROUP BY u.project ORDER BY 2 DESC",
+         GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
     );
@@ -554,7 +554,7 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
     let sql = format!(
         "SELECT COALESCE(project, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
                 COUNT(DISTINCT session_id), SUM(cost_usd), MIN(ts), MAX(ts)
-         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY project ORDER BY 2 DESC",
+         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
     );
@@ -957,5 +957,41 @@ mod tests {
     fn model_detail_unknown_model_returns_none() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         assert!(model_detail(&store, "nonexistent-model").unwrap().is_none());
+    }
+
+    #[test]
+    fn by_project_and_model_detail_collapse_null_and_unknown_project() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                UsageEvent {
+                    source: Source::Zcode,
+                    project: None,
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    ..test_event("gpt-5", now, 0)
+                },
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    project: Some("unknown".into()),
+                    input_tokens: 50,
+                    output_tokens: 10,
+                    ..test_event("gpt-5", now - 1000, 0)
+                },
+            ])
+            .unwrap();
+
+        let proj = by_project(&store, 30).unwrap();
+        assert_eq!(proj.len(), 1);
+        assert_eq!(proj[0].project, "unknown");
+        assert_eq!(proj[0].tokens, 180);
+        assert_eq!(proj[0].events, 2);
+
+        let detail = model_detail(&store, "gpt-5").unwrap().unwrap();
+        assert_eq!(detail.by_project.len(), 1);
+        assert_eq!(detail.by_project[0].project, "unknown");
+        assert_eq!(detail.by_project[0].tokens, 180);
+        assert_eq!(detail.by_project[0].events, 2);
     }
 }

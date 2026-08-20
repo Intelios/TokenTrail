@@ -159,6 +159,7 @@ export const api = {
   syncNow: () => invoke<IngestStats[]>('sync_now'),
   exportData: (format: 'csv' | 'json') => invoke<string>('export_data', { format }),
   modelAliases: () => invoke<ModelAlias[]>('get_model_aliases'),
+  rawModels: () => invoke<string[]>('get_raw_models'),
   mergeModels: (names: string[], canonical: string) =>
     invoke<void>('merge_models', { names, canonical }),
   unmergeModels: (canonical: string) => invoke<void>('unmerge_models', { canonical }),

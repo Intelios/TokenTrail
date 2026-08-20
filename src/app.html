@@ -125,6 +125,7 @@
               case 'get_source_status':
                 return SOURCES.map((s, i) => ({ source: s, display: s.replace('_', ' '), path: '/home/dev/.config/' + s, found: i !== 5 }));
               case 'get_model_aliases': return [];
+              case 'get_raw_models': return MODELS.map((m) => m[0]);
               case 'get_hidden_models': return ['codex-auto-review'];
               case 'sync_now': return SOURCES.map((s) => ({ source: s, processed: Math.round(rng() * 400), error: null }));
               case 'export_data': return '/home/dev/.local/share/TokenTrail/usage.' + (args.format ?? 'csv');
