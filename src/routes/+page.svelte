@@ -75,7 +75,24 @@
       tooltip: {
         trigger: 'axis',
         ...TOOLTIP,
-        valueFormatter: (v: unknown) => fmtTokens(Number(v)),
+        confine: true,
+        formatter: (params: unknown) => {
+          type TipParam = { axisValue?: string; marker: string; seriesName: string; value?: number };
+          const all = params as TipParam[];
+          const title = `<b>${all[0]?.axisValue ?? ''}</b>`;
+          const rows = all.filter((p) => Number(p.value ?? 0) > 0);
+          if (!rows.length) return `${title}<br/>no usage`;
+          const total = rows.reduce((sum, p) => sum + Number(p.value ?? 0), 0);
+          return (
+            title +
+            '<br/>' +
+            rows
+              .map((p) => `${p.marker}${p.seriesName}&nbsp;&nbsp;<b>${fmtTokens(Number(p.value))}</b>`)
+              .join('<br/>') +
+            `<div style="border-top:1px solid rgba(232,228,217,0.3);margin-top:6px;padding-top:5px;display:flex;justify-content:space-between;gap:24px;">` +
+            `<span style="opacity:0.65;letter-spacing:1px;">TOTAL</span><b>${fmtTokens(total)}</b></div>`
+          );
+        },
       },
       grid: { left: 0, right: 0, top: 8, bottom: 0 },
       xAxis: { type: 'category', data: dailyDates, show: false },
