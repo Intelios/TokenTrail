@@ -261,7 +261,9 @@ pub fn export_data(
                     esc(&r.0), r.1, esc(r.2.as_deref().unwrap_or("")),
                     esc(r.3.as_deref().unwrap_or("")), esc(r.4.as_deref().unwrap_or("")),
                     r.5, r.6, r.7.unwrap_or(0), r.8, r.9,
-                    r.10.unwrap_or(0), r.11.unwrap_or(0), r.12,
+                    r.10.map(|d| d.to_string()).unwrap_or_default(),
+                    r.11.map(|t| t.to_string()).unwrap_or_default(),
+                    r.12,
                     r.13.map(|c| c.to_string()).unwrap_or_default(),
                 )
                 .map_err(|e| e.to_string())?;
@@ -276,4 +278,109 @@ pub fn export_data(
 pub fn get_family_stats(state: State<AppState>, days: i64) -> Result<Vec<FamilyStatsRow>, String> {
     let store = state.store.lock().map_err(|_| "store lock poisoned")?;
     aggregate::family_stats(&store, days).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_csv_export_handles_missing_latencies() {
+        let r = (
+            "antigravity".to_string(),
+            1700000000000_i64,
+            Some("session-1".to_string()),
+            Some("proj".to_string()),
+            Some("gemini-1.5-pro".to_string()),
+            100_i64,
+            50_i64,
+            None::<i64>,
+            0_i64,
+            0_i64,
+            None::<i64>, // duration_ms missing
+            None::<i64>, // ttft_ms missing
+            0_i64,
+            Some(0.001_f64),
+        );
+
+        let esc = |s: &str| {
+            if s.contains(',') || s.contains('"') || s.contains('\n') {
+                format!("\"{}\"", s.replace('"', "\"\""))
+            } else {
+                s.to_string()
+            }
+        };
+
+        let formatted = format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            esc(&r.0),
+            r.1,
+            esc(r.2.as_deref().unwrap_or("")),
+            esc(r.3.as_deref().unwrap_or("")),
+            esc(r.4.as_deref().unwrap_or("")),
+            r.5,
+            r.6,
+            r.7.unwrap_or(0),
+            r.8,
+            r.9,
+            r.10.map(|d| d.to_string()).unwrap_or_default(),
+            r.11.map(|t| t.to_string()).unwrap_or_default(),
+            r.12,
+            r.13.map(|c| c.to_string()).unwrap_or_default(),
+        );
+
+        assert_eq!(
+            formatted,
+            "antigravity,1700000000000,session-1,proj,gemini-1.5-pro,100,50,0,0,0,,,0,0.001"
+        );
+    }
+
+    #[test]
+    fn test_csv_export_includes_present_latencies() {
+        let r = (
+            "antigravity".to_string(),
+            1700000000000_i64,
+            Some("session-1".to_string()),
+            Some("proj".to_string()),
+            Some("gemini-1.5-pro".to_string()),
+            100_i64,
+            50_i64,
+            None::<i64>,
+            0_i64,
+            0_i64,
+            Some(1250_i64), // duration_ms present
+            Some(320_i64),  // ttft_ms present
+            0_i64,
+            Some(0.001_f64),
+        );
+
+        let esc = |s: &str| {
+            if s.contains(',') || s.contains('"') || s.contains('\n') {
+                format!("\"{}\"", s.replace('"', "\"\""))
+            } else {
+                s.to_string()
+            }
+        };
+
+        let formatted = format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            esc(&r.0),
+            r.1,
+            esc(r.2.as_deref().unwrap_or("")),
+            esc(r.3.as_deref().unwrap_or("")),
+            esc(r.4.as_deref().unwrap_or("")),
+            r.5,
+            r.6,
+            r.7.unwrap_or(0),
+            r.8,
+            r.9,
+            r.10.map(|d| d.to_string()).unwrap_or_default(),
+            r.11.map(|t| t.to_string()).unwrap_or_default(),
+            r.12,
+            r.13.map(|c| c.to_string()).unwrap_or_default(),
+        );
+
+        assert_eq!(
+            formatted,
+            "antigravity,1700000000000,session-1,proj,gemini-1.5-pro,100,50,0,0,0,1250,320,0,0.001"
+        );
+    }
 }
