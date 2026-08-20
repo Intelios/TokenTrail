@@ -1,8 +1,6 @@
 use crate::collectors::{clean_model, parse_ts_ms, read_tail, sorted_glob};
 use crate::models::{Source, UsageEvent};
 use crate::store::Store;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// Claude Code writes one JSONL per session under ~/.claude/projects/…,
@@ -56,9 +54,7 @@ fn parse_line(line: &str, is_sub_path: bool) -> Option<UsageEvent> {
     let source_event_id = if !msg_id.is_empty() || !request_id.is_empty() {
         format!("{msg_id}:{request_id}")
     } else {
-        let mut h = DefaultHasher::new();
-        line.hash(&mut h);
-        format!("h{:x}", h.finish())
+        format!("h{:x}", fnv1a64(line))
     };
     Some(UsageEvent {
         source: Source::ClaudeCode,
@@ -80,6 +76,17 @@ fn parse_line(line: &str, is_sub_path: bool) -> Option<UsageEvent> {
         is_subagent: is_sub_path
             || v.get("isSidechain").and_then(|x| x.as_bool()).unwrap_or(false),
     })
+}
+
+fn fnv1a64(data: &str) -> u64 {
+    const OFFSET: u64 = 14695981039346656037;
+    const PRIME: u64 = 1099511628211;
+    let mut h = OFFSET;
+    for b in data.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(PRIME);
+    }
+    h
 }
 
 #[cfg(test)]
