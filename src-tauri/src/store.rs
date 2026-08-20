@@ -207,6 +207,16 @@ impl Store {
             .ok()
     }
 
+    pub fn get_raw_models(&self) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT DISTINCT model FROM usage_event WHERE model IS NOT NULL AND model <> '' ORDER BY model")?;
+        let rows = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn get_model_aliases(&self) -> rusqlite::Result<Vec<ModelAlias>> {
         let mut stmt = self
             .conn
@@ -528,5 +538,82 @@ mod tests {
             .rename_model("deepseek-v4-flash:0731", "deepseek-v4-flash:0731")
             .unwrap();
         assert!(store.get_model_aliases().unwrap().is_empty());
+    }
+
+    #[test]
+    fn get_raw_models_returns_distinct_models() {
+        let store = test_store();
+        let e1 = UsageEvent {
+            source: Source::Zcode,
+            source_event_id: "r1".into(),
+            ts: 1000,
+            session_id: None,
+            project: None,
+            provider: None,
+            model: Some("gpt-4o".into()),
+            input_tokens: 100,
+            output_tokens: 100,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: None,
+            ttft_ms: None,
+            is_subagent: false,
+        };
+        let e2 = UsageEvent {
+            source: Source::Zcode,
+            source_event_id: "r2".into(),
+            ts: 2000,
+            session_id: None,
+            project: None,
+            provider: None,
+            model: Some("gpt-4o-2024-08-06".into()),
+            input_tokens: 100,
+            output_tokens: 100,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: None,
+            ttft_ms: None,
+            is_subagent: false,
+        };
+        let e3 = UsageEvent {
+            source: Source::Zcode,
+            source_event_id: "r3".into(),
+            ts: 3000,
+            session_id: None,
+            project: None,
+            provider: None,
+            model: Some("gpt-4o".into()),
+            input_tokens: 100,
+            output_tokens: 100,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: None,
+            ttft_ms: None,
+            is_subagent: false,
+        };
+        let e4 = UsageEvent {
+            source: Source::Zcode,
+            source_event_id: "r4".into(),
+            ts: 4000,
+            session_id: None,
+            project: None,
+            provider: None,
+            model: None,
+            input_tokens: 100,
+            output_tokens: 100,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: None,
+            ttft_ms: None,
+            is_subagent: false,
+        };
+        store.insert_events(&[e1, e2, e3, e4]).unwrap();
+
+        let raw = store.get_raw_models().unwrap();
+        assert_eq!(raw, vec!["gpt-4o", "gpt-4o-2024-08-06"]);
     }
 }

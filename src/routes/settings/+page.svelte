@@ -16,6 +16,7 @@
   // model merges & rename
   let modelNames = $state<string[]>([]);
   let aliases = $state<ModelAlias[]>([]);
+  let rawModels = $state<string[]>([]);
   let mergeFilter = $state('');
   let selected = $state<string[]>([]);
   let canonical = $state('');
@@ -38,14 +39,16 @@
 
   async function loadMerges() {
     try {
-      const [byModel, aliasRows, hiddenRows] = await Promise.all([
+      const [byModel, aliasRows, hiddenRows, rawModelRows] = await Promise.all([
         api.byModel(3650),
         api.modelAliases(),
         api.hiddenModels(),
+        api.rawModels(),
       ]);
       modelNames = byModel.map((r) => r.model);
       aliases = aliasRows;
       hidden = hiddenRows;
+      rawModels = rawModelRows;
       selected = selected.filter((n) => modelNames.includes(n));
       hideSelected = hideSelected.filter((n) => modelNames.includes(n));
       if (!selected.includes(canonical)) canonical = selected[0] ?? '';
@@ -116,10 +119,12 @@
     return q ? modelNames.filter((n) => n.toLowerCase().includes(q)) : modelNames;
   });
 
+  const rawModelSet = $derived(new Set(rawModels));
+
   const customRenames = $derived.by(() => {
     return aliases.filter((a) => {
       const allForCanon = aliases.filter((x) => x.canonical === a.canonical);
-      return allForCanon.length === 1 && a.alias !== a.canonical;
+      return allForCanon.length === 1 && !rawModelSet.has(a.canonical);
     });
   });
 
@@ -131,7 +136,7 @@
       else map.set(a.canonical, [a.alias]);
     }
     return [...map.entries()]
-      .filter(([, list]) => list.length >= 2)
+      .filter(([canonicalName, list]) => list.length >= 2 || rawModelSet.has(canonicalName))
       .map(([canonicalName, aliasList]) => ({ canonical: canonicalName, aliases: aliasList }));
   });
 
