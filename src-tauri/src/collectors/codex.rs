@@ -69,7 +69,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 source: Source::Codex,
                 source_event_id: format!("{sid}:{ts}:{input}:{out}"),
                 ts,
-                session_id: (!sid.is_empty()).then(|| sid),
+                session_id: (!sid.is_empty()).then_some(sid),
                 project: meta.cwd.clone(),
                 provider: current_ns.clone().or_else(|| Some("openai".into())),
                 model,

@@ -183,13 +183,31 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let (total, input, output, cr, cw, events, sessions, cost, first_ts, last_ts): (
-        i64, i64, i64, i64, i64, i64, i64, Option<f64>, Option<i64>, Option<i64>,
-    ) = conn.query_row(&totals_sql, [], |r| {
-        Ok((
-            r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
-            r.get(7)?, r.get(8)?, r.get(9)?,
-        ))
+    struct Totals {
+        total: i64,
+        input: i64,
+        output: i64,
+        cr: i64,
+        cw: i64,
+        events: i64,
+        sessions: i64,
+        cost: Option<f64>,
+        first_ts: Option<i64>,
+        last_ts: Option<i64>,
+    }
+    let t = conn.query_row(&totals_sql, [], |r| {
+        Ok(Totals {
+            total: r.get(0)?,
+            input: r.get(1)?,
+            output: r.get(2)?,
+            cr: r.get(3)?,
+            cw: r.get(4)?,
+            events: r.get(5)?,
+            sessions: r.get(6)?,
+            cost: r.get(7)?,
+            first_ts: r.get(8)?,
+            last_ts: r.get(9)?,
+        })
     })?;
 
     let source_sql = format!(
@@ -224,17 +242,17 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
     dates.clear();
 
     Ok(Overview {
-        total_tokens: total,
-        input_tokens: input,
-        output_tokens: output,
-        cache_read_tokens: cr,
-        cache_write_tokens: cw,
-        events,
-        sessions,
+        total_tokens: t.total,
+        input_tokens: t.input,
+        output_tokens: t.output,
+        cache_read_tokens: t.cr,
+        cache_write_tokens: t.cw,
+        events: t.events,
+        sessions: t.sessions,
         active_days,
-        cost_usd: cost,
-        first_ts,
-        last_ts,
+        cost_usd: t.cost,
+        first_ts: t.first_ts,
+        last_ts: t.last_ts,
         current_streak: current,
         longest_streak: longest,
         by_source,
@@ -658,7 +676,7 @@ fn shift_day(s: &str, delta: i64) -> Option<String> {
     for _ in 0..steps {
         d = if delta < 0 { d.previous_day()? } else { d.next_day()? };
     }
-    Some(d.format(&day).ok()?)
+    d.format(&day).ok()
 }
 
 /// RFC3339 -> epoch ms, shared by the collectors.
