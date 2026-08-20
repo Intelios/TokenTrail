@@ -89,6 +89,7 @@ pub fn run() {
             commands::get_heatmap,
             commands::get_hourly,
             commands::get_source_status,
+            commands::get_raw_models,
             commands::get_model_aliases,
             commands::merge_models,
             commands::unmerge_models,

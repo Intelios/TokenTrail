@@ -82,6 +82,15 @@ pub fn get_source_status(state: State<AppState>) -> Vec<SourceStatus> {
 }
 
 #[tauri::command]
+pub fn get_raw_models(state: State<AppState>) -> Vec<String> {
+    state
+        .store
+        .lock()
+        .map(|store| store.get_raw_models().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
 pub fn get_model_aliases(state: State<AppState>) -> Vec<ModelAlias> {
     state
         .store
