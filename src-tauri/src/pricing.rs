@@ -207,6 +207,15 @@ mod tests {
     }
 
     #[test]
+    fn muse_spark_prices() {
+        // Muse Spark 1.2 (and the identically-priced 1.1) via the family prefix.
+        assert_eq!(rates_for("muse-spark-1.2").map(|r| r.input), Some(1.25));
+        assert_eq!(rates_for("muse-spark-1.2").map(|r| r.output), Some(4.25));
+        assert_eq!(rates_for("meta/muse-spark-1.2").map(|r| r.cache_read), Some(0.15));
+        assert_eq!(rates_for("muse-spark-1.1").map(|r| r.input), Some(1.25));
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
