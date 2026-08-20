@@ -252,7 +252,7 @@
   {#if burst}
     <div class="noteband up" style="animation-delay:420ms">
       <span class="fg">NOTE</span>
-      <p>You work in bursts — <b>{burst.share}%</b> of your tokens land on just <b>{burst.topN} days</b> of the last {burst.days} active.</p>
+      <p>You work in bursts — <b>{burst.share}%</b> of your tokens land on just <b>{burst.topN} {burst.topN === 1 ? 'day' : 'days'}</b> of the last {burst.days} active.</p>
     </div>
   {/if}
 {/if}
