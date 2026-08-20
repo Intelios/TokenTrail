@@ -72,9 +72,9 @@ pub fn read_tail(path: &Path, offset: u64) -> std::io::Result<(String, u64)> {
     }
 }
 
-/// Strip harness decorations: "claude-opus-5[ffe]" / "model/variant".
+/// Strip harness decorations and provider prefixes: "claude-opus-5[ffe]" / "anthropic/claude-sonnet-4.5".
 pub fn clean_model(m: &str) -> String {
-    let base = m.split('/').next().unwrap_or(m);
+    let base = m.rsplit('/').next().unwrap_or(m);
     base.split('[').next().unwrap_or(base).to_string()
 }
 
@@ -103,4 +103,19 @@ pub(crate) fn test_store(tag: &str) -> Store {
 #[cfg(test)]
 pub(crate) fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleans_model_decorations_and_provider_prefixes() {
+        assert_eq!(clean_model("claude-opus-5"), "claude-opus-5");
+        assert_eq!(clean_model("claude-opus-5[ffe]"), "claude-opus-5");
+        assert_eq!(clean_model("anthropic/claude-sonnet-4.5"), "claude-sonnet-4.5");
+        assert_eq!(clean_model("bedrock/claude-3-5-sonnet"), "claude-3-5-sonnet");
+        assert_eq!(clean_model("provider/model[extra]"), "model");
+        assert_eq!(clean_model("deepseek/deepseek-chat"), "deepseek-chat");
+    }
 }

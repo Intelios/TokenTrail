@@ -128,4 +128,11 @@ mod tests {
         // nothing new on an immediate re-run
         assert_eq!(collect(&store, &home).unwrap(), 0);
     }
+
+    #[test]
+    fn parses_namespaced_proxy_models() {
+        let line = r#"{"type":"assistant","sessionId":"sess-b","cwd":"/Users/jack/proj","timestamp":"2026-08-01T10:00:05.000Z","requestId":"req-1","version":"2.0.1","isSidechain":false,"message":{"id":"msg_1","model":"anthropic/claude-sonnet-4.5","usage":{"input_tokens":10,"output_tokens":100}}}"#;
+        let ev = parse_line(line, false).unwrap();
+        assert_eq!(ev.model.as_deref(), Some("claude-sonnet-4.5"));
+    }
 }
