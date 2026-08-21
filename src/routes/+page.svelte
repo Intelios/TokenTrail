@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
   import Spark from '$lib/Spark.svelte';
@@ -13,7 +12,7 @@
     sourceLabel,
     MODEL_PALETTE,
   } from '$lib/format';
-  import { TOOLTIP, ANIM, stackedBand } from '$lib/chartTheme';
+  import { dailyColumns, dailyOption, spineTotals, dailyRange } from '$lib/dailyColumns';
 
   // stack order matches the Marathon mockup legend
   const SOURCE_ORDER = ['claude_code', 'codex', 'zcode', 'antigravity', 'opencode', 'gemini'];
@@ -57,76 +56,24 @@
     return served + fresh > 0 ? (served / (served + fresh)) * 100 : 0;
   });
 
-  // ── stacked daily chart ──
-  const dailyDates = $derived([...new Set(daily.map((r) => r.date))].sort());
+  // ── daily stacked columns ──
   const dailySources = $derived(
     SOURCE_ORDER.filter((s) => daily.some((r) => r.source === s)).concat(
       [...new Set(daily.map((r) => r.source))].filter((s) => !SOURCE_ORDER.includes(s)),
     ),
   );
 
-  const dailyOption = $derived.by(() => {
-    if (!daily.length) return undefined;
-    const map = new Map(daily.map((r) => [`${r.date}|${r.source}`, r.tokens]));
-    return {
-      backgroundColor: 'transparent',
-      ...ANIM,
-      animationDelay: (idx: number) => idx * 90,
-      tooltip: {
-        trigger: 'axis',
-        ...TOOLTIP,
-        confine: true,
-        formatter: (params: unknown) => {
-          type TipParam = { axisValue?: string; marker: string; seriesName: string; value?: number };
-          const all = params as TipParam[];
-          const title = `<b>${all[0]?.axisValue ?? ''}</b>`;
-          const rows = all.filter((p) => Number(p.value ?? 0) > 0);
-          if (!rows.length) return `${title}<br/>no usage`;
-          const total = rows.reduce((sum, p) => sum + Number(p.value ?? 0), 0);
-          return (
-            title +
-            '<br/>' +
-            rows
-              .map((p) => `${p.marker}${p.seriesName}&nbsp;&nbsp;<b>${fmtTokens(Number(p.value))}</b>`)
-              .join('<br/>') +
-            `<div style="border-top:1px solid rgba(232,228,217,0.3);margin-top:6px;padding-top:5px;display:flex;justify-content:space-between;gap:24px;">` +
-            `<span style="opacity:0.65;letter-spacing:1px;">TOTAL</span><b>${fmtTokens(total)}</b></div>`
-          );
-        },
-      },
-      grid: { left: 0, right: 0, top: 8, bottom: 0 },
-      xAxis: { type: 'category', data: dailyDates, show: false },
-      yAxis: { type: 'value', show: false, min: 0 },
-      series: dailySources.map((s, i) =>
-        stackedBand(sourceLabel(s), dailyDates.map((d) => map.get(`${d}|${s}`) ?? 0), sourceColor(s), {
-          delay: i * 90,
-        }),
-      ),
-    } satisfies EChartsOption;
-  });
+  const dayCols = $derived(dailyColumns(daily, dailySources));
+  const dayOption = $derived(dailyOption(dayCols, dailySources));
+  const dayRange = $derived(dailyRange(dayCols));
 
-  // month labels for the custom axis row under the plot
-  const monthMarks = $derived.by(() => {
-    if (!dailyDates.length) return [] as string[];
-    const marks: string[] = [];
-    let lastMonth = '';
-    for (const d of dailyDates) {
-      const m = d.slice(0, 7);
-      if (m !== lastMonth) {
-        marks.push(new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short' }).toUpperCase());
-        lastMonth = m;
-      }
-    }
-    return marks;
-  });
-
-  // second half of the window vs the first half
+  // second half of the charted calendar vs the first half
   const deltaPct = $derived.by(() => {
-    const n = dailyTotals.length;
-    if (n < 8) return null;
-    const mid = Math.floor(n / 2);
-    const first = dailyTotals.slice(0, mid).reduce((a, b) => a + b, 0);
-    const second = dailyTotals.slice(mid).reduce((a, b) => a + b, 0);
+    const days = spineTotals(dayCols);
+    if (days.length < 8) return null;
+    const mid = Math.floor(days.length / 2);
+    const first = days.slice(0, mid).reduce((a, b) => a + b, 0);
+    const second = days.slice(mid).reduce((a, b) => a + b, 0);
     if (first === 0) return null;
     return ((second - first) / first) * 100;
   });
@@ -201,10 +148,10 @@
     </div>
   </section>
 
-  <!-- stacked daily chart -->
+  <!-- daily stacked columns -->
   <section class="daily">
     <div class="hd">
-      <h3>Daily tokens by provider — last 150 days</h3>
+      <h3>Daily tokens by provider{dayRange ? ` — ${dayRange}` : ''}</h3>
       <div class="rt">
         {#if deltaPct !== null}
           <b>{deltaPct >= 0 ? '▲' : '▼'} {Math.abs(deltaPct).toFixed(0)}% VS PREV</b>
@@ -217,17 +164,12 @@
       {/each}
     </div>
     <div class="plot">
-      {#if dailyOption}
-        <Chart option={dailyOption} height="fill" />
+      {#if dayOption}
+        <Chart option={dayOption} height="fill" />
       {:else}
         <div class="loading">no usage recorded yet</div>
       {/if}
     </div>
-    {#if monthMarks.length}
-      <div class="ax">
-        {#each monthMarks as m}<span>{m}</span>{/each}
-      </div>
-    {/if}
   </section>
 
   <!-- lower split: models + harnesses -->
@@ -350,16 +292,6 @@
     margin-top: 8px;
     display: flex;
     flex-direction: column;
-  }
-  .daily .ax {
-    display: flex;
-    justify-content: space-between;
-    flex: none;
-    padding-top: 6px;
-    border-top: 2px solid var(--ink);
-    font: 500 9px/1 var(--font-mono);
-    letter-spacing: 1.4px;
-    opacity: 0.5;
   }
 
   .low { display: grid; grid-template-columns: 1.5fr 1fr; }

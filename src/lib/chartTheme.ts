@@ -60,6 +60,30 @@ export function stackedBand(
   };
 }
 
+/** Marathon stacked column: hard corners, bars sweeping in left to right. */
+export function stackedColumn(
+  name: string,
+  data: Array<number | null>,
+  color: string,
+  opts: { delay?: number; stack?: string } = {},
+) {
+  return {
+    name,
+    type: 'bar' as const,
+    stack: opts.stack ?? 'total',
+    barMaxWidth: 40,
+    barCategoryGap: '28%',
+    // keep a quiet-but-real bucket from rendering as nothing next to a huge one
+    barMinHeight: 3,
+    itemStyle: { color },
+    // the axisPointer shadow already marks the hovered column — dimming every
+    // other one on top of it just makes the chart flicker
+    emphasis: { focus: 'none' as const },
+    animationDelay: (idx: number) => (opts.delay ?? 0) + idx * 22,
+    data,
+  };
+}
+
 /** Donut with 2px bone slice borders, slices sweeping in staggered. */
 export function donutSeries(
   data: Array<{ name: string; value: number; itemStyle?: Record<string, unknown> }>,
