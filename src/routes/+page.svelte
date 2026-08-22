@@ -8,9 +8,9 @@
     fmtCost,
     fmtTokens,
     fmtTokensSplit,
-    sourceColor,
+    sourceSwatch,
     sourceLabel,
-    MODEL_PALETTE,
+    modelSwatch,
   } from '$lib/format';
   import { dailyColumns, dailyOption, spineTotals, dailyRange } from '$lib/dailyColumns';
 
@@ -160,7 +160,7 @@
     </div>
     <div class="legend">
       {#each dailySources as s}
-        <span><i style="background:{sourceColor(s)}"></i>{sourceLabel(s)}</span>
+        <span><i style="background:{sourceSwatch(s)}"></i>{sourceLabel(s)}</span>
       {/each}
     </div>
     <div class="plot">
@@ -179,12 +179,12 @@
       {#if models.length}
         {#each models as m, i}
           <div class="rankbar up" style="animation-delay:{180 + i * 60}ms">
-            <span class="chip" style="background:{MODEL_PALETTE[i % MODEL_PALETTE.length]}">{i + 1}</span>
+            <span class="chip" style="background:{modelSwatch(m.model, i)}">{i + 1}</span>
             <span class="nm" title={m.model}>{m.model}</span>
             <span class="tr">
               <div
                 class="gw"
-                style="width:{Math.max(2, Math.round((m.tokens / maxModelTokens) * 100))}%;background:{MODEL_PALETTE[i % MODEL_PALETTE.length]};animation-delay:{240 + i * 60}ms"
+                style="width:{Math.max(2, Math.round((m.tokens / maxModelTokens) * 100))}%;background:{modelSwatch(m.model, i)};animation-delay:{240 + i * 60}ms"
               ></div>
             </span>
             <b><AnimatedNumber value={m.tokens} format={fmtTokens} duration={1100} /></b>

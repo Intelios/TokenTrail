@@ -10,9 +10,11 @@
     fmtCost,
     fmtTokens,
     fmtTokensSplit,
-    sourceColor,
+    sourceSwatch,
     sourceLabel,
-    MODEL_PALETTE,
+    modelColor,
+    modelSwatch,
+    modelFlat,
   } from '$lib/format';
   import { TOOLTIP, ANIM, donutSeries } from '$lib/chartTheme';
 
@@ -116,7 +118,7 @@
     const data = top8.map((r, i) => ({
       name: r.model,
       value: metricVal(r),
-      itemStyle: { color: MODEL_PALETTE[i % MODEL_PALETTE.length] },
+      itemStyle: { color: modelColor(r.model, i) },
     }));
     if (otherVal > 0) data.push({ name: 'Other', value: otherVal, itemStyle: { color: '#8a8578' } });
     return {
@@ -213,12 +215,12 @@
         <h3><span>{metricLabel === 'calls' ? 'Call share' : metricLabel === 'cost' ? 'Cost share' : 'Token share'} — top 6</span></h3>
         {#each top6 as r, i}
           <div class="rankbar up" style="animation-delay:{i * 50}ms">
-            <span class="chip" style="background:{MODEL_PALETTE[i % MODEL_PALETTE.length]}">{i + 1}</span>
+            <span class="chip" style="background:{modelSwatch(r.model, i)}">{i + 1}</span>
             <span class="nm" title={r.model}>{r.model}</span>
             <span class="tr">
               <div
                 class="gw"
-                style="width:{Math.max(2, Math.round((metricVal(r) / maxTop6) * 100))}%;background:{MODEL_PALETTE[i % MODEL_PALETTE.length]};animation-delay:{100 + i * 50}ms"
+                style="width:{Math.max(2, Math.round((metricVal(r) / maxTop6) * 100))}%;background:{modelSwatch(r.model, i)};animation-delay:{100 + i * 50}ms"
               ></div>
             </span>
             <b><AnimatedNumber value={metricVal(r)} format={fmtMetric} duration={1100} /></b>
@@ -254,7 +256,7 @@
         <tbody>
           {#each sorted as r, i}
             {@const trend = trendByModel.get(r.model)}
-            {@const color = MODEL_PALETTE[i % MODEL_PALETTE.length]}
+            {@const color = modelSwatch(r.model, i)}
             <tr class="up" style="animation-delay:{i * 45}ms; cursor:pointer" onclick={() => goto(modelUrl(r.model))}>
               <td class="rk"><span class="chip" style="background:{color}">{i + 1}</span></td>
               <td>
@@ -262,7 +264,7 @@
                 {#if r.sources.length}
                   <div class="tagrow">
                     {#each r.sources as s}
-                      <span class="stag"><i style="background:{sourceColor(s)}"></i>{sourceLabel(s)}</span>
+                      <span class="stag"><i style="background:{sourceSwatch(s)}"></i>{sourceLabel(s)}</span>
                     {/each}
                   </div>
                 {/if}
@@ -279,7 +281,7 @@
               <td class="num">{r.events ? fmtTokens(r.tokens / r.events) : '—'}</td>
               <td>
                 {#if trend && trend.length > 1}
-                  <Spark values={trend} width={94} height={20} color={color} delay={200 + i * 45} />
+                  <Spark values={trend} width={94} height={20} color={modelFlat(r.model, i)} delay={200 + i * 45} />
                 {:else}
                   <span class="dim">—</span>
                 {/if}

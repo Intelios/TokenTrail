@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, type IngestStats, type ModelAlias, type SourceStatus } from '$lib/api';
-  import { normalizeModelName, sourceColor } from '$lib/format';
+  import { normalizeModelName, sourceSwatch } from '$lib/format';
 
   type Tab = 'sources' | 'merges' | 'hidden' | 'export';
   let activeTab = $state<Tab>('sources');
@@ -285,7 +285,7 @@
         <div class="srclist">
           {#each sources as s}
             <div class="src-item">
-              <span class="dot" style="background:{sourceColor(s.source)}"></span>
+              <span class="dot" style="background:{sourceSwatch(s.source)}"></span>
               <div class="meta">
                 <div class="nm">{s.display}</div>
                 <div class="p">{s.path}</div>
@@ -316,7 +316,7 @@
               <div class="res-title">Last Sync Stats:</div>
               {#each stats as s}
                 <div class="res-row">
-                  <span class="stag"><i style="background:{sourceColor(s.source)}"></i>{s.source}</span>
+                  <span class="stag"><i style="background:{sourceSwatch(s.source)}"></i>{s.source}</span>
                   <span class="res-cnt">{s.processed} events</span>
                   {#if s.error}
                     <span class="error">{s.error}</span>

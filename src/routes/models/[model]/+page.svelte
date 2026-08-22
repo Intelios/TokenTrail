@@ -10,9 +10,9 @@
     fmtDate,
     fmtDateTime,
     fmtTokens,
-    MODEL_PALETTE,
+    modelColor,
     MIX_COLORS,
-    sourceColor,
+    sourceSwatch,
     sourceLabel,
     basename,
   } from '$lib/format';
@@ -104,7 +104,7 @@
         {
           type: 'bar',
           data: detail.daily.map((d) => d.tokens),
-          itemStyle: { color: MODEL_PALETTE[0] },
+          itemStyle: { color: modelColor(detail.model, 0) },
           animationDelay: (idx: number) => idx * 8,
         },
       ],
@@ -231,7 +231,7 @@
               {#each detail.by_source as s}
                 <tr>
                   <td>
-                    <span class="stag"><i style="background:{sourceColor(s.source)}"></i>{sourceLabel(s.source)}</span>
+                    <span class="stag"><i style="background:{sourceSwatch(s.source)}"></i>{sourceLabel(s.source)}</span>
                   </td>
                   <td class="num">{fmtTokens(s.tokens)}</td>
                   <td class="num">{s.events.toLocaleString()}</td>

@@ -30,6 +30,13 @@ const FAMILY_RULES: &[(&str, &str)] = &[
     ("qwen", "Qwen"),
     ("glm", "GLM"),
     ("mimo", "MiMo"),
+    // Meta — Llama weights plus the Muse line; family groups by provider
+    ("meta-llama", "Meta"),
+    ("llama", "Meta"),
+    ("muse", "Meta"),
+    ("codestral", "Mistral"),
+    ("mistral", "Mistral"),
+    ("grok", "Grok"),
 ];
 
 /// Assign a model display name to its family.  Returns "Other" when no
@@ -84,6 +91,19 @@ mod tests {
         assert_eq!(family_for("kimi-k2"), "Kimi");
         assert_eq!(family_for("qwen3.8-max"), "Qwen");
         assert_eq!(family_for("mimo-v2.5-pro"), "MiMo");
+    }
+
+    #[test]
+    fn meta_mistral_grok() {
+        assert_eq!(family_for("llama-4-maverick"), "Meta");
+        assert_eq!(family_for("Llama-4-Scout"), "Meta");
+        assert_eq!(family_for("meta-llama-3.3-70b"), "Meta");
+        assert_eq!(family_for("muse-spark-1.2"), "Meta");
+        assert_eq!(family_for("Muse-Spark-1.2[ffe]"), "Meta");
+        assert_eq!(family_for("mistral-large-latest"), "Mistral");
+        assert_eq!(family_for("codestral-latest"), "Mistral");
+        assert_eq!(family_for("grok-4"), "Grok");
+        assert_eq!(family_for("grok-code-fast-1"), "Grok");
     }
 
     #[test]

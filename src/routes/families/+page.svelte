@@ -10,9 +10,11 @@
     fmtCost,
     fmtTokens,
     fmtTokensSplit,
-    sourceColor,
+    sourceSwatch,
     sourceLabel,
     familyColor,
+    familySwatch,
+    familyFlat,
   } from '$lib/format';
   import { TOOLTIP, ANIM, donutSeries } from '$lib/chartTheme';
 
@@ -259,7 +261,7 @@
           </span>
         </h3>
         {#each top6 as f, i}
-          {@const color = familyColor(f.family, i)}
+          {@const color = familySwatch(f.family, i)}
           <div class="rankbar up" style="animation-delay:{i * 50}ms">
             <span class="chip" style="background:{color}">{i + 1}</span>
             <span class="nm" title={f.family}>{f.family}</span>
@@ -285,7 +287,8 @@
     <!-- family sections -->
     <div class="fw">
       {#each sorted as f, fi}
-        {@const color = familyColor(f.family, fi)}
+        {@const color = familySwatch(f.family, fi)}
+        {@const flat = familyFlat(f.family, fi)}
         {@const isOpen = expanded.has(f.family)}
         <div class="fam" class:open={isOpen}>
           <!-- family header -->
@@ -295,7 +298,7 @@
             <span class="fcnt">{f.models.length} model{f.models.length !== 1 ? 's' : ''}</span>
             <span class="ftags">
               {#each f.sources as s}
-                <span class="stag"><i style="background:{sourceColor(s)}"></i>{sourceLabel(s)}</span>
+                <span class="stag"><i style="background:{sourceSwatch(s)}"></i>{sourceLabel(s)}</span>
               {/each}
             </span>
             <span class="fstat">{fmtTokens(f.tokens)}</span>
@@ -361,7 +364,7 @@
                       <td class="num">{m.events ? fmtTokens(m.tokens / m.events) : '—'}</td>
                       <td>
                         {#if trend && trend.length > 1}
-                          <Spark values={trend} width={94} height={20} color={color} delay={200 + mi * 40} />
+                          <Spark values={trend} width={94} height={20} color={flat} delay={200 + mi * 40} />
                         {:else}
                           <span class="dim">—</span>
                         {/if}

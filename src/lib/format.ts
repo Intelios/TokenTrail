@@ -1,11 +1,19 @@
-/// Marathon source palette — must stay in sync with chartTheme.ts tokens.
-export const SOURCE_COLORS: Record<string, string> = {
-  claude_code: '#ff4d00',
-  codex: '#00c2c2',
+import { linearGrad, cssColor, flatColor, type ChartColor } from './chartTheme';
+
+/// Brand-locked palettes — each harness and model family wears its maker's
+/// actual brand color. Flat values are hex strings; gradients (Gemini) are
+/// ECharts specs. Use the *Swatch helpers for DOM and *Flat for SVG strokes.
+
+/** Gemini sparkle sweep — shared by the Gemini family and Antigravity. */
+export const GEMINI_STOPS = ['#4796E3', '#9177C7', '#CA6673'];
+
+export const SOURCE_COLORS: Record<string, ChartColor> = {
+  claude_code: '#D97757',
+  codex: '#10A37F',
   zcode: '#7c5cff',
-  antigravity: '#c8e600',
+  antigravity: linearGrad(GEMINI_STOPS),
   opencode: '#ff1f6f',
-  gemini: '#3d8eff',
+  gemini: '#4796E3',
 };
 
 export const SOURCE_LABEL: Record<string, string> = {
@@ -17,17 +25,23 @@ export const SOURCE_LABEL: Record<string, string> = {
   antigravity: 'Antigravity',
 };
 
-/// Marathon accents by rank, then ink-shades for the long tail.
+/// Default palette for models with no brand family — TokenTrail's own
+/// Marathon accents (cyan, acid, magenta, violet; orange/blue/green zones
+/// belong to brands), cycling by rank, then ink-shades for the tail.
 export const MODEL_PALETTE = [
-  '#ff4d00', '#00c2c2', '#c8e600', '#ff1f6f', '#7c5cff',
-  '#3d8eff', '#8a8578', '#6e6a5e', '#4a473e', '#b5afa0', '#2e2c26',
+  '#00c2c2', '#c8e600', '#ff1f6f', '#7c5cff', '#8a8578', '#4a473e',
 ];
 
 /// Input / Output / Cache read / Cache write — shared by charts across pages.
 export const MIX_COLORS = ['#3d8eff', '#00c2c2', '#c8e600', '#ff1f6f'];
 
-export function sourceColor(s: string): string {
+export function sourceColor(s: string): ChartColor {
   return SOURCE_COLORS[s] ?? '#8a8578';
+}
+
+/** CSS background value for DOM swatches — turns gradients into linear-gradient(). */
+export function sourceSwatch(s: string): string {
+  return cssColor(sourceColor(s));
 }
 
 export function sourceLabel(s: string): string {
@@ -75,31 +89,83 @@ export function basename(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-/**
- * Mirror of Rust `pricing::normalize_model`: strip to the last path segment
- * ("anthropic/claude-sonnet-4.5" → "claude-sonnet-4.5"), strip `[suffix]`
- * decorations, trim, and lowercase. Used to detect likely-duplicate model
- * names (e.g. "GLM-5.3" vs "glm-5.3") for merge suggestions.
- */
-/// Identity palette for model families — stable colors regardless of rank,
-/// so "Claude" is always orange and "GPT" always teal.
-export const FAMILY_COLORS: Record<string, string> = {
-  Claude: '#ff4d00',
-  GPT: '#00c2c2',
-  Gemini: '#3d8eff',
-  DeepSeek: '#ff1f6f',
-  Kimi: '#7c5cff',
-  Qwen: '#c8e600',
+/// Provider brand colors per model family — keys must stay in sync with the
+/// FAMILY_RULES prefixes in src-tauri/src/families.rs. Gemini wears its
+/// sparkle gradient; GLM/Grok keep monochrome ink tones (their brand is ink).
+/// "Other" is deliberately absent: unbranded models cycle MODEL_PALETTE by
+/// rank in familyColor() instead of sharing one flat gray.
+export const FAMILY_COLORS: Record<string, ChartColor> = {
+  Claude: '#D97757',
+  GPT: '#10A37F',
+  Gemini: linearGrad(GEMINI_STOPS),
+  DeepSeek: '#4D6BFE',
+  Meta: '#0064E0',
+  Mistral: '#CC5500',
+  Kimi: '#007CFF',
+  Qwen: '#615CED',
   GLM: '#6e6a5e',
-  MiMo: '#b5afa0',
-  Other: '#8a8578',
+  Grok: '#0d0d0b',
+  MiMo: '#FF6900',
 };
 
-export function familyColor(family: string, rank: number): string {
+export function familyColor(family: string, rank: number): ChartColor {
   return FAMILY_COLORS[family] ?? MODEL_PALETTE[rank % MODEL_PALETTE.length];
 }
 
+/** CSS background value for family chips/bars in DOM. */
+export function familySwatch(family: string, rank: number): string {
+  return cssColor(familyColor(family, rank));
+}
+
+/** Flat hex for SVG strokes (Spark lines) where gradients can't go. */
+export function familyFlat(family: string, rank: number): string {
+  return flatColor(familyColor(family, rank));
+}
+
+/**
+ * Strip to the last path segment ("anthropic/claude-sonnet-4.5" →
+ * "claude-sonnet-4.5"), strip `[suffix]` decorations, trim, and lowercase.
+ * Mirror of Rust `pricing::normalize_model`; used for duplicate-model
+ * detection and family matching.
+ */
 export function normalizeModelName(s: string): string {
   const base = s.split('/').pop() ?? s;
   return (base.split('[')[0] ?? base).trim().toLowerCase();
+}
+
+/// Mirror of Rust `families::FAMILY_RULES` — prefix order matters (specific
+/// prefixes before catch-alls within a brand).
+const FAMILY_RULES: ReadonlyArray<readonly [string, string]> = [
+  ['o3-mini', 'GPT'], ['o3', 'GPT'], ['o4', 'GPT'], ['codex', 'GPT'], ['gpt', 'GPT'],
+  ['claude-opus-4', 'Claude'], ['claude-opus', 'Claude'], ['claude-fable', 'Claude'],
+  ['claude-sonnet', 'Claude'], ['claude-haiku', 'Claude'], ['claude', 'Claude'],
+  ['gemini-3.7-flash', 'Gemini'], ['gemini-2.5-pro', 'Gemini'], ['gemini', 'Gemini'],
+  ['deepseek-v4-pro', 'DeepSeek'], ['deepseek', 'DeepSeek'],
+  ['kimi', 'Kimi'], ['qwen', 'Qwen'], ['glm', 'GLM'], ['mimo', 'MiMo'],
+  ['meta-llama', 'Meta'], ['llama', 'Meta'], ['muse', 'Meta'], ['codestral', 'Mistral'], ['mistral', 'Mistral'], ['grok', 'Grok'],
+];
+
+/// Mirror of Rust `families::family_for` — assigns a model display name to
+/// its provider family so per-model UI can wear brand colors.
+export function familyFor(model: string): string {
+  const base = normalizeModelName(model);
+  for (const [prefix, family] of FAMILY_RULES) {
+    if (base.startsWith(prefix)) return family;
+  }
+  return 'Other';
+}
+
+/// Brand color for an individual model, resolved through its family.
+export function modelColor(model: string, rank: number): ChartColor {
+  return familyColor(familyFor(model), rank);
+}
+
+/** CSS background value for per-model chips/bars in DOM. */
+export function modelSwatch(model: string, rank: number): string {
+  return cssColor(modelColor(model, rank));
+}
+
+/** Flat hex for per-model SVG strokes (Spark lines). */
+export function modelFlat(model: string, rank: number): string {
+  return flatColor(modelColor(model, rank));
 }

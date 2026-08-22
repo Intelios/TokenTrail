@@ -3,7 +3,7 @@
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import { api, type DailyCacheRow, type DailyModelRow } from '$lib/api';
-  import { fmtTokens, MODEL_PALETTE, MIX_COLORS } from '$lib/format';
+  import { fmtTokens, modelColor, MIX_COLORS } from '$lib/format';
   import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, LEGEND_TEXT, stackedBand, dateTick } from '$lib/chartTheme';
 
   let days = $state(365);
@@ -82,7 +82,7 @@
         splitLine: SPLIT_LINE,
       },
       series: models.map((m, i) =>
-        stackedBand(m, dates.map((d) => map.get(`${d}|${m}`) ?? 0), MODEL_PALETTE[i % MODEL_PALETTE.length], {
+        stackedBand(m, dates.map((d) => map.get(`${d}|${m}`) ?? 0), modelColor(m, i), {
           delay: Math.min(i, 8) * 90,
         }),
       ),

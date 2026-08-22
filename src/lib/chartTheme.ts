@@ -8,6 +8,53 @@ export const HAIR = 'rgba(13,13,11,0.16)';
 export const DIM = 'rgba(13,13,11,0.55)';
 export const MONO = "'IBM Plex Mono', monospace";
 
+export interface GradStop {
+  offset: number;
+  color: string;
+}
+
+/** Plain-object ECharts linear gradient — accepted anywhere a color string
+ *  goes (itemStyle, lineStyle, per-slice pie colors). */
+export interface LinearGradientSpec {
+  type: 'linear';
+  x: number;
+  y: number;
+  x2: number;
+  y2: number;
+  colorStops: GradStop[];
+}
+
+export type ChartColor = string | LinearGradientSpec;
+
+/** Diagonal brand sweep (Gemini's blue→purple→pink sparkle). */
+export function linearGrad(stops: readonly string[]): LinearGradientSpec {
+  return {
+    type: 'linear',
+    x: 0,
+    y: 0,
+    x2: 1,
+    y2: 1,
+    colorStops: stops.map((color, i) => ({
+      offset: stops.length > 1 ? i / (stops.length - 1) : 0,
+      color,
+    })),
+  };
+}
+
+/** CSS background value for DOM swatches (legend dots, chips, rank bars). */
+export function cssColor(c: ChartColor): string {
+  if (typeof c === 'string') return c;
+  const stops = c.colorStops.map((s) => `${s.color} ${Math.round(s.offset * 100)}%`).join(', ');
+  return `linear-gradient(135deg, ${stops})`;
+}
+
+/** Flat hex for surfaces that cannot take a gradient (SVG strokes). */
+export function flatColor(c: ChartColor): string {
+  if (typeof c === 'string') return c;
+  const stops = c.colorStops;
+  return stops[Math.floor(stops.length / 2)]?.color ?? stops[0].color;
+}
+
 /** Ink tooltip with bone text — hard corners, no shadow. */
 export const TOOLTIP = {
   backgroundColor: INK,
@@ -42,7 +89,7 @@ export const ANIM = {
 export function stackedBand(
   name: string,
   data: Array<number | null>,
-  color: string,
+  color: ChartColor,
   opts: { delay?: number; stack?: string; lineWidth?: number; opacity?: number } = {},
 ) {
   return {
@@ -64,7 +111,7 @@ export function stackedBand(
 export function stackedColumn(
   name: string,
   data: Array<number | null>,
-  color: string,
+  color: ChartColor,
   opts: { delay?: number; stack?: string } = {},
 ) {
   return {
