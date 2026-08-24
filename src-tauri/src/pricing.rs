@@ -216,6 +216,23 @@ mod tests {
     }
 
     #[test]
+    fn kimi_prices() {
+        // Kimi K3 has its own $3/$15 rates, distinct from the K2.x catch-all.
+        assert_eq!(rates_for("kimi-k3").map(|r| r.input), Some(3.0));
+        assert_eq!(rates_for("kimi-k3").map(|r| r.output), Some(15.0));
+        assert_eq!(rates_for("kimi-k3").map(|r| r.cache_read), Some(0.3));
+        assert_eq!(rates_for("moonshot/kimi-k3-250824").map(|r| r.input), Some(3.0));
+        // K2.7 Code is a coding model at $0.95/$4, far below the K2.x catch-all.
+        assert_eq!(rates_for("kimi-k2.7-code").map(|r| r.input), Some(0.95));
+        assert_eq!(rates_for("kimi-k2.7-code").map(|r| r.output), Some(4.0));
+        assert_eq!(rates_for("kimi-k2.7-code").map(|r| r.cache_read), Some(0.19));
+        // K2.6 / K2.5 match their own entries; unknown K2.x variants fall back.
+        assert_eq!(rates_for("kimi-k2.6").map(|r| r.input), Some(0.95));
+        assert_eq!(rates_for("kimi-k2.5").map(|r| r.input), Some(0.6));
+        assert_eq!(rates_for("kimi-k2.9").map(|r| r.input), Some(2.78));
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
