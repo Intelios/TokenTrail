@@ -173,10 +173,19 @@ mod tests {
         // gpt-5.6-sol is far pricier than the generic gpt-5 / gpt families.
         assert_eq!(rates_for("gpt-5.6-sol").map(|r| r.input), Some(5.0));
         assert_eq!(rates_for("gpt-5.6-luna").map(|r| r.input), Some(0.2));
-        assert_eq!(rates_for("gpt-5.5").map(|r| r.input), Some(1.25));
+        assert_eq!(rates_for("gpt-5.5").map(|r| r.input), Some(5.0));
+        assert_eq!(rates_for("gpt-5.5").map(|r| r.output), Some(30.0));
         // claude-opus-4 keeps the older Opus 4.x rate; opus-5 uses the new one.
         assert_eq!(rates_for("claude-opus-4-8").map(|r| r.input), Some(15.0));
         assert_eq!(rates_for("claude-opus-5").map(|r| r.input), Some(5.0));
+        // Sonnet 5 dropped to $2/$10; older Sonnet 4.x keeps the $3/$15 rate.
+        assert_eq!(rates_for("claude-sonnet-5").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("claude-sonnet-5").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("claude-sonnet-4.5").map(|r| r.input), Some(3.0));
+        // MiMo-V2.5-Pro has its own rates above the generic mimo catch-all.
+        assert_eq!(rates_for("mimo-v2.5-pro").map(|r| r.input), Some(0.435));
+        assert_eq!(rates_for("mimo-v2.5-pro").map(|r| r.output), Some(0.87));
+        assert_eq!(rates_for("mimo-v2.5-pro").map(|r| r.cache_read), Some(0.0036));
         // deepseek-v4-pro outranks the deepseek catch-all; the free variant is $0.
         assert_eq!(rates_for("deepseek-v4-pro:0813-cloud").map(|r| r.input), Some(1.32));
         assert_eq!(rates_for("deepseek-v4-flash-free").map(|r| r.input), Some(0.0));
