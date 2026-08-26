@@ -17,6 +17,7 @@
     modelFlat,
   } from '$lib/format';
   import { TOOLTIP, ANIM, donutSeries } from '$lib/chartTheme';
+  import { readPref, writePref } from '$lib/prefs';
 
   const RANGES: [number, string][] = [
     [7, '7D'],
@@ -33,8 +34,13 @@
 
   const RANGE_LABEL: Record<number, string> = { 7: '7 days', 30: '30 days', 90: '90 days', 3650: 'all time' };
 
-  let days = $state(90);
-  let metric = $state<'tokens' | 'cost' | 'calls'>('tokens');
+  const PREF_DAYS = 'tt.models.days';
+  const PREF_METRIC = 'tt.models.metric';
+
+  let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
+  let metric = $state(
+    readPref<'tokens' | 'cost' | 'calls'>(PREF_METRIC, 'tokens', (v) => METRICS.some(([m]) => m === v)),
+  );
   let rows = $state<ModelStatsRow[]>([]);
   let trendRows = $state<DailyModelRow[]>([]);
   let error = $state('');
@@ -65,6 +71,12 @@
   $effect(() => {
     days;
     load();
+  });
+
+  // remember the chosen range / metric across visits
+  $effect(() => {
+    writePref(PREF_DAYS, days);
+    writePref(PREF_METRIC, metric);
   });
 
   onMount(() => {
