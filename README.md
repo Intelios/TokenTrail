@@ -64,4 +64,4 @@ Tauri 2 (Rust backend) · SvelteKit + Svelte 5 frontend · ECharts · SQLite
 
 ## License
 
-Released under the MIT license.
+[MIT](LICENSE) — do whatever you want with it.
