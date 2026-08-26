@@ -253,6 +253,17 @@ mod tests {
     }
 
     #[test]
+    fn longcat_prices() {
+        // LongCat-2.0 (Meituan) lists at $0.75/$2.95 with $0.015 cached input;
+        // cache writes are undocumented and bill at the uncached input rate.
+        assert_eq!(rates_for("longcat-2.0").map(|r| r.input), Some(0.75));
+        assert_eq!(rates_for("longcat-2.0").map(|r| r.output), Some(2.95));
+        assert_eq!(rates_for("longcat-2.0").map(|r| r.cache_read), Some(0.015));
+        assert_eq!(rates_for("longcat-2.0").map(|r| r.cache_write), Some(0.75));
+        assert_eq!(rates_for("meituan/longcat-2.0").map(|r| r.output), Some(2.95));
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);

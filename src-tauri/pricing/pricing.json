@@ -39,6 +39,7 @@
     { "prefix": "kimi-k2.6", "rates": { "input": 0.95, "output": 4.0, "cache_read": 0.16, "cache_write": 0.95 } },
     { "prefix": "kimi-k2.5", "rates": { "input": 0.6, "output": 3.0, "cache_read": 0.1, "cache_write": 0.6 } },
     { "prefix": "kimi", "rates": { "input": 2.78, "output": 13.89, "cache_read": 0.28, "cache_write": 2.78 } },
+    { "prefix": "longcat-2", "rates": { "input": 0.75, "output": 2.95, "cache_read": 0.015, "cache_write": 0.75 } },
     { "prefix": "qwen", "rates": { "input": 2.0, "output": 6.0, "cache_read": 0.25, "cache_write": 2.5 } },
     { "prefix": "mimo-v2.5-pro", "rates": { "input": 0.435, "output": 0.87, "cache_read": 0.0036, "cache_write": 0.435 } },
     { "prefix": "mimo", "rates": { "input": 0.112, "output": 0.224, "cache_read": 0.003, "cache_write": 0.112 } },
