@@ -242,6 +242,17 @@ mod tests {
     }
 
     #[test]
+    fn glm_flash_prices() {
+        // GLM-5.3-Flash lists at $0.15/$0.50, far below the GLM-5.x catch-all.
+        assert_eq!(rates_for("glm-5.3-flash").map(|r| r.input), Some(0.15));
+        assert_eq!(rates_for("glm-5.3-flash").map(|r| r.output), Some(0.5));
+        assert_eq!(rates_for("glm-5.3-flash").map(|r| r.cache_read), Some(0.03));
+        assert_eq!(rates_for("zai/glm-5.3-flash").map(|r| r.input), Some(0.15));
+        // Other GLM variants keep the catch-all rate.
+        assert_eq!(rates_for("glm-5.3").map(|r| r.input), Some(1.4));
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
