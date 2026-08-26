@@ -14,6 +14,8 @@
 
 TokenTrail is a desktop app that reads the usage logs your AI coding tools already write on your machine and turns them into a single, clear picture — tokens, cost estimates, sessions, projects, and daily trends. No accounts, no setup: open it and your history is there.
 
+![TokenTrail's overview dashboard](images/overview.png)
+
 ## Supported tools
 
 | Harness | Notes |
