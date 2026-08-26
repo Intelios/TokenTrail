@@ -18,7 +18,7 @@ TokenTrail is a desktop app that reads the usage logs your AI coding tools alrea
 
 | Harness | Notes |
 | --- | --- |
-| ZCode | Local session logs |
+| ZCode | Local session logs + subagents |
 | Claude Code | Includes subagent sessions |
 | Codex | Sessions + subagent threads |
 | OpenCode | Per-project usage |
