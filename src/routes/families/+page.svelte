@@ -69,10 +69,6 @@
       families = fam;
       trendRows = trends;
       error = '';
-      // Expand top family on first load.
-      if (expanded.size === 0 && fam.length) {
-        expanded = new Set([fam[0].family]);
-      }
     } catch (e) {
       error = String(e);
     }
