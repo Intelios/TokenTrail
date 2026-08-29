@@ -180,6 +180,78 @@
     }
   }
 
+  interface SingleFeedItem {
+    type: 'single';
+    id: string;
+    event: LeaderboardEvent;
+  }
+
+  interface GroupedOvertakeItem {
+    type: 'grouped_overtake';
+    id: string;
+    model: string;
+    date: string;
+    tokens: number;
+    overtakes: LeaderboardEvent[];
+  }
+
+  type FeedItem = SingleFeedItem | GroupedOvertakeItem;
+
+  let expandedGroups = $state<Record<string, boolean>>({});
+
+  function toggleGroup(id: string) {
+    expandedGroups[id] = !expandedGroups[id];
+  }
+
+  const feedItems = $derived.by(() => {
+    const items: FeedItem[] = [];
+    let i = 0;
+    while (i < events.length) {
+      const ev = events[i];
+      if (ev.kind === 'overtake') {
+        let j = i + 1;
+        const group: LeaderboardEvent[] = [ev];
+        while (
+          j < events.length &&
+          events[j].kind === 'overtake' &&
+          events[j].date === ev.date &&
+          events[j].model === ev.model
+        ) {
+          group.push(events[j]);
+          j++;
+        }
+
+        if (group.length > 1) {
+          const maxTokens = Math.max(...group.map((g) => g.tokens));
+          items.push({
+            type: 'grouped_overtake',
+            id: `grp-${ev.model}-${ev.date}`,
+            model: ev.model,
+            date: ev.date,
+            tokens: maxTokens,
+            overtakes: group,
+          });
+          i = j;
+        } else {
+          items.push({
+            type: 'single',
+            id: `ev-${ev.model}-${ev.date}-${i}`,
+            event: ev,
+          });
+          i++;
+        }
+      } else {
+        items.push({
+          type: 'single',
+          id: `ev-${ev.model}-${ev.date}-${i}`,
+          event: ev,
+        });
+        i++;
+      }
+    }
+    return items;
+  });
+
   function formatDateShort(d: string): string {
     if (!d) return '—';
     const parts = d.split('-');
@@ -285,26 +357,79 @@
           <div class="loading feed-empty">no leaderboard events in this period</div>
         {:else}
           <div class="feedlist">
-            {#each events as ev, i}
-              <div class="feedrow up" style="animation-delay:{Math.min(300, i * 25)}ms">
-                <span class="fchip {ev.kind}">{chipLabel(ev.kind)}</span>
-                <span class="fbody">
-                  {#if ev.kind === 'overtake'}
-                    <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
-                    <span class="fverb">passed</span>
-                    {#if ev.other_model}
-                      <a class="fother" style="color:{modelFlat(ev.other_model, 1)}" href={modelUrl(ev.other_model)} title={ev.other_model}>{ev.other_model}</a>
+            {#each feedItems as item, i}
+              {#if item.type === 'single'}
+                {@const ev = item.event}
+                <div class="feedrow up" style="animation-delay:{Math.min(300, i * 25)}ms">
+                  <span class="fchip {ev.kind}">{chipLabel(ev.kind)}</span>
+                  <span class="fbody">
+                    {#if ev.kind === 'overtake'}
+                      <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
+                      <span class="fverb">passed</span>
+                      {#if ev.other_model}
+                        <a class="fother" style="color:{modelFlat(ev.other_model, 1)}" href={modelUrl(ev.other_model)} title={ev.other_model}>{ev.other_model}</a>
+                      {/if}
+                    {:else}
+                      <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
+                      <span class="fact">{formatAction(ev)}</span>
                     {/if}
-                  {:else}
-                    <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
-                    <span class="fact">{formatAction(ev)}</span>
-                  {/if}
-                </span>
-                <span class="fstat" class:plus={ev.kind === 'overtake'}>
-                  {formatStat(ev)}
-                </span>
-                <span class="fdate">{formatDateShort(ev.date)}</span>
-              </div>
+                  </span>
+                  <span class="fstat" class:plus={ev.kind === 'overtake'}>
+                    {formatStat(ev)}
+                  </span>
+                  <span class="fdate">{formatDateShort(ev.date)}</span>
+                </div>
+              {:else}
+                <!-- Grouped multi-overtake summary row -->
+                <div
+                  class="feedrow up grp-row"
+                  class:expanded={expandedGroups[item.id]}
+                  style="animation-delay:{Math.min(300, i * 25)}ms"
+                  onclick={() => toggleGroup(item.id)}
+                  role="button"
+                  tabindex="0"
+                  onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && toggleGroup(item.id)}
+                >
+                  <span class="fchip overtake">OVERTAKE</span>
+                  <span class="fbody">
+                    <a
+                      class="fmodel"
+                      style="color:{modelFlat(item.model, 0)}"
+                      href={modelUrl(item.model)}
+                      title={item.model}
+                      onclick={(e) => e.stopPropagation()}
+                    >
+                      {item.model}
+                    </a>
+                    <span class="fverb">passed {item.overtakes.length} models</span>
+                    <span class="fchevron" class:open={expandedGroups[item.id]}>▶</span>
+                  </span>
+                  <span class="fstat plus">+{fmtTokens(item.tokens)}</span>
+                  <span class="fdate">{formatDateShort(item.date)}</span>
+                </div>
+
+                <!-- Tree branches for individual passed models -->
+                {#if expandedGroups[item.id]}
+                  <div class="tree-container up">
+                    {#each item.overtakes as sub}
+                      <div class="tree-row">
+                        <span class="fverb">passed</span>
+                        {#if sub.other_model}
+                          <a
+                            class="fother"
+                            style="color:{modelFlat(sub.other_model, 1)}"
+                            href={modelUrl(sub.other_model)}
+                            title={sub.other_model}
+                          >
+                            {sub.other_model}
+                          </a>
+                        {/if}
+                        <span class="fstat sub-stat plus">+{fmtTokens(sub.tokens)}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
             {/each}
           </div>
         {/if}
@@ -575,6 +700,70 @@
     white-space: nowrap;
     letter-spacing: 0.4px;
     width: 44px;
+  }
+
+  .grp-row {
+    cursor: pointer;
+    user-select: none;
+  }
+  .grp-row.expanded {
+    background: rgba(13, 13, 11, 0.03);
+    border-left-color: var(--mag);
+  }
+
+  .fchevron {
+    font-size: 7.5px;
+    color: var(--dim);
+    display: inline-block;
+    transition: transform 0.15s ease, color 0.15s;
+    margin-left: 2px;
+    line-height: 1;
+    flex: none;
+  }
+  .fchevron.open {
+    transform: rotate(90deg);
+    color: var(--ink);
+  }
+
+  /* Tree container & branches */
+  .tree-container {
+    position: relative;
+    background: rgba(13, 13, 11, 0.025);
+    border-bottom: 1px solid var(--hair);
+  }
+  .tree-container::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    top: 0;
+    bottom: 14px;
+    width: 1.5px;
+    background: var(--hair);
+  }
+  .tree-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 10px 0 34px;
+    font-size: 11px;
+  }
+  .tree-row::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    top: 13.5px;
+    width: 10px;
+    height: 1.5px;
+    background: var(--hair);
+  }
+  .tree-row:hover {
+    background: rgba(13, 13, 11, 0.03);
+  }
+  .sub-stat {
+    margin-left: auto;
+    font-size: 10.5px;
   }
 
   .tw { flex: 1; min-height: 0; overflow: auto; }
