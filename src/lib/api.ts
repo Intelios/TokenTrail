@@ -144,6 +144,15 @@ export interface ModelDetail {
   daily: HeatmapCell[];
 }
 
+export interface LeaderboardEvent {
+  kind: 'overtake' | 'record' | 'debut' | 'first_seen';
+  model: string;
+  other_model: string | null;
+  rank: number | null;
+  date: string;
+  tokens: number;
+}
+
 export const api = {
   overview: () => invoke<Overview>('get_overview'),
   daily: (days: number) => invoke<DailyRow[]>('get_daily', { days }),
@@ -170,4 +179,5 @@ export const api = {
   unhideModel: (name: string) => invoke<void>('unhide_model', { name }),
   removeModelAlias: (alias: string) => invoke<void>('remove_model_alias', { alias }),
   familyStats: (days: number) => invoke<FamilyStatsRow[]>('get_family_stats', { days }),
+  leaderboardEvents: (days: number) => invoke<LeaderboardEvent[]>('get_leaderboard_events', { days }),
 };

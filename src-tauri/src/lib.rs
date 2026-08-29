@@ -99,7 +99,8 @@ pub fn run() {
             commands::hide_models,
             commands::unhide_model,
             commands::export_data,
-            commands::get_family_stats
+            commands::get_family_stats,
+            commands::get_leaderboard_events
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,6 +1,6 @@
 use crate::aggregate::{
     self, DailyCacheRow, DailyModelRow, DailyRow, FamilyStatsRow, HeatmapCell, HourRow,
-    ModelDetail, ModelRow, ModelStatsRow, Overview, ProjectRow,
+    LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow, Overview, ProjectRow,
 };
 use crate::collectors;
 use crate::models::{IngestStats, ModelAlias, SourceStatus};
@@ -17,6 +17,15 @@ pub fn sync_now(state: State<AppState>) -> Result<Vec<IngestStats>, String> {
 pub fn get_overview(state: State<AppState>) -> Result<Overview, String> {
     let store = state.store.lock().map_err(|_| "store lock poisoned")?;
     aggregate::overview(&store).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_leaderboard_events(
+    state: State<AppState>,
+    days: i64,
+) -> Result<Vec<LeaderboardEvent>, String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    aggregate::leaderboard_events(&store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

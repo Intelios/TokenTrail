@@ -1,22 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import type { EChartsOption } from 'echarts';
-  import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
   import Spark from '$lib/Spark.svelte';
-  import { api, type DailyModelRow, type ModelStatsRow } from '$lib/api';
+  import { api, type DailyModelRow, type ModelStatsRow, type LeaderboardEvent } from '$lib/api';
   import {
     fmtCost,
     fmtTokens,
     fmtTokensSplit,
     sourceSwatch,
     sourceLabel,
-    modelColor,
     modelSwatch,
     modelFlat,
   } from '$lib/format';
-  import { TOOLTIP, ANIM, donutSeries } from '$lib/chartTheme';
   import { readPref, writePref } from '$lib/prefs';
 
   const RANGES: [number, string][] = [
@@ -43,6 +39,7 @@
   );
   let rows = $state<ModelStatsRow[]>([]);
   let trendRows = $state<DailyModelRow[]>([]);
+  let events = $state<LeaderboardEvent[]>([]);
   let error = $state('');
 
   function metricVal(r: ModelStatsRow): number {
@@ -59,9 +56,14 @@
 
   async function load() {
     try {
-      const [rs, trends] = await Promise.all([api.modelStats(days), api.dailyByModel(90)]);
+      const [rs, trends, evs] = await Promise.all([
+        api.modelStats(days),
+        api.dailyByModel(90),
+        api.leaderboardEvents(days),
+      ]);
       rows = rs;
       trendRows = trends;
+      events = evs;
       error = '';
     } catch (e) {
       error = String(e);
@@ -123,27 +125,6 @@
   const top6 = $derived(sorted.slice(0, 6));
   const maxTop6 = $derived(Math.max(1, ...top6.map(metricVal)));
 
-  const donutOption = $derived.by(() => {
-    if (!sorted.length) return undefined;
-    const top8 = sorted.slice(0, 8);
-    const otherVal = sorted.slice(8).reduce((s, r) => s + metricVal(r), 0);
-    const data = top8.map((r, i) => ({
-      name: r.model,
-      value: metricVal(r),
-      itemStyle: { color: modelColor(r.model, i) },
-    }));
-    if (otherVal > 0) data.push({ name: 'Other', value: otherVal, itemStyle: { color: '#8a8578' } });
-    return {
-      backgroundColor: 'transparent',
-      ...ANIM,
-      tooltip: {
-        ...TOOLTIP,
-        formatter: (p: any) => `${p.name}<br/>${fmtMetric(Number(p.value ?? 0))} (${p.percent}%)`,
-      },
-      series: [donutSeries(data)],
-    } satisfies EChartsOption;
-  });
-
   const topModelShare = $derived.by(() => {
     if (!sorted.length || !totalMetric) return null;
     const top = sorted[0];
@@ -158,6 +139,59 @@
 
   function modelUrl(name: string): string {
     return '/models/' + encodeURIComponent(name);
+  }
+
+  function chipLabel(kind: LeaderboardEvent['kind']): string {
+    switch (kind) {
+      case 'overtake':
+        return 'OVERTAKE';
+      case 'record':
+        return 'RECORD';
+      case 'debut':
+        return 'DEBUT';
+      case 'first_seen':
+        return 'FIRST SEEN';
+    }
+  }
+
+  function formatAction(ev: LeaderboardEvent): string {
+    switch (ev.kind) {
+      case 'overtake':
+        return `passed ${ev.other_model ?? 'rival'} for #${ev.rank ?? '?'}`;
+      case 'record':
+        return 'new daily peak';
+      case 'debut':
+        return `entered top 5 (#${ev.rank ?? '?'})`;
+      case 'first_seen':
+        return 'first sighting';
+    }
+  }
+
+  function formatStat(ev: LeaderboardEvent): string {
+    switch (ev.kind) {
+      case 'overtake':
+        return `+${fmtTokens(ev.tokens)}`;
+      case 'record':
+        return `${fmtTokens(ev.tokens)}/d`;
+      case 'debut':
+        return `#${ev.rank ?? '?'}`;
+      case 'first_seen':
+        return fmtTokens(ev.tokens);
+    }
+  }
+
+  function formatDateShort(d: string): string {
+    if (!d) return '—';
+    const parts = d.split('-');
+    if (parts.length === 3) {
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const m = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      if (m >= 0 && m < 12 && !isNaN(day)) {
+        return `${monthNames[m]} ${day}`;
+      }
+    }
+    return d;
   }
 </script>
 
@@ -240,10 +274,24 @@
           </div>
         {/each}
       </div>
-      <div class="donut">
-        <h3><span>Share of {metricLabel}</span></h3>
-        {#if donutOption}
-          <Chart option={donutOption} height={170} />
+      <div class="feed">
+        <h3><span>LEADERBOARD · {RANGE_LABEL[days]}</span></h3>
+        {#if !events.length}
+          <div class="loading feed-empty">no leaderboard events in this period</div>
+        {:else}
+          <div class="feedlist">
+            {#each events as ev, i}
+              <div class="feedrow up" style="animation-delay:{Math.min(300, i * 25)}ms">
+                <span class="fchip {ev.kind}">{chipLabel(ev.kind)}</span>
+                <span class="fbody">
+                  <a class="fmodel" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
+                  <span class="fact">{formatAction(ev)}</span>
+                </span>
+                <span class="fstat">{formatStat(ev)}</span>
+                <span class="fdate">{formatDateShort(ev.date)}</span>
+              </div>
+            {/each}
+          </div>
         {/if}
       </div>
     </div>
@@ -361,7 +409,7 @@
 
   .mcharts { display: grid; grid-template-columns: 1.3fr 0.7fr; border-bottom: 2px solid var(--ink); }
   .mbars { padding: 14px clamp(22px, 1.8vw, 40px) 15px; border-right: 2px solid var(--ink); }
-  .mbars h3, .donut h3 {
+  .mbars h3, .feed h3 {
     font: 600 11px/1 var(--font-ui);
     letter-spacing: 1.6px;
     text-transform: uppercase;
@@ -369,8 +417,85 @@
     display: flex;
     justify-content: space-between;
   }
-  .donut { padding: 14px 18px 10px; display: flex; flex-direction: column; }
-  .donut h3 { align-self: stretch; }
+  .feed { padding: 14px 18px 10px; display: flex; flex-direction: column; min-height: 0; max-height: 240px; }
+  .feed h3 { align-self: stretch; margin-bottom: 8px; }
+  .feedlist { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  .feed-empty { padding: 30px 10px; }
+
+  .feedrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 4px;
+    border-bottom: 1px solid var(--hair);
+    font-size: 11.5px;
+  }
+  .feedrow:last-child { border-bottom: none; }
+  .feedrow:hover { background: var(--hair); }
+
+  .fchip {
+    font: 600 8.5px/1 var(--font-mono);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 3px 5px;
+    flex: none;
+    width: 66px;
+    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .fchip.overtake { background: var(--mag); color: #fff; }
+  .fchip.record { background: var(--acd); color: var(--ink); }
+  .fchip.debut { background: var(--vio); color: #fff; }
+  .fchip.first_seen { background: var(--cyn); color: var(--ink); }
+
+  .fbody {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    overflow: hidden;
+  }
+  .fmodel {
+    color: var(--ink);
+    font-weight: 600;
+    font-size: 12px;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+    max-width: 100%;
+  }
+  .fmodel:hover { color: var(--org); text-decoration: underline; }
+  .fact {
+    font: 400 10.5px/1 var(--font-ui);
+    color: var(--dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .fstat {
+    font: 500 11px/1 var(--font-mono);
+    color: var(--ink);
+    text-align: right;
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .fdate {
+    font: 400 10px/1 var(--font-mono);
+    color: var(--dim);
+    flex: none;
+    text-align: right;
+    margin-left: 2px;
+    white-space: nowrap;
+  }
 
   .tw { flex: 1; min-height: 0; overflow: auto; }
   .tw td { padding: clamp(8px, 1vh, 17px) 12px; }
@@ -417,5 +542,6 @@
     .mc { border-bottom: 2px solid var(--ink); }
     .mcharts { grid-template-columns: 1fr; }
     .mbars { border-right: none; border-bottom: 2px solid var(--ink); }
+    .feed { border-bottom: 2px solid var(--ink); max-height: 280px; }
   }
 </style>

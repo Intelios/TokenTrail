@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
@@ -168,6 +168,16 @@ pub struct FamilyStatsRow {
     pub last_ts: Option<i64>,
     pub sources: Vec<String>,
     pub models: Vec<ModelStatsRow>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct LeaderboardEvent {
+    pub kind: String,
+    pub model: String,
+    pub other_model: Option<String>,
+    pub rank: Option<i64>,
+    pub date: String,
+    pub tokens: i64,
 }
 
 type DbResult<T> = Result<T, rusqlite::Error>;
@@ -623,6 +633,183 @@ pub fn hourly(store: &Store) -> DbResult<Vec<HourRow>> {
     Ok(rows)
 }
 
+pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardEvent>> {
+    let cutoff_ts = cutoff(days);
+    let cutoff_date: String = store.conn().query_row(
+        "SELECT date(?1/1000, 'unixepoch')",
+        [cutoff_ts],
+        |r| r.get(0),
+    )?;
+
+    let sql = format!(
+        "SELECT date(ts/1000,'unixepoch') AS d,
+                COALESCE(a.canonical, u.model, 'unknown') AS model,
+                COALESCE(SUM({T}),0) AS tokens
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE {H}
+         GROUP BY 1, 2
+         ORDER BY d ASC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt = store.conn().prepare(&sql)?;
+    let rows: Vec<(String, String, i64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut aliased_models: HashSet<String> = HashSet::new();
+    if let Ok(mut alias_stmt) = store.conn().prepare("SELECT alias FROM model_alias UNION SELECT canonical FROM model_alias") {
+        if let Ok(alias_rows) = alias_stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for name in alias_rows.flatten() {
+                aliased_models.insert(name);
+            }
+        }
+    }
+
+    let mut days_map: BTreeMap<String, Vec<(String, i64)>> = BTreeMap::new();
+    for (d, model, tokens) in rows {
+        days_map.entry(d).or_default().push((model, tokens));
+    }
+
+    let mut cumulative_tokens: HashMap<String, i64> = HashMap::new();
+    let mut first_seen_date: HashMap<String, String> = HashMap::new();
+    let mut ever_top5: HashSet<String> = HashSet::new();
+    let mut pre_window_daily_max: HashMap<String, i64> = HashMap::new();
+    let mut in_window_daily_max: HashMap<String, i64> = HashMap::new();
+    let mut prev_rankings: HashMap<String, usize> = HashMap::new();
+
+    let mut events: Vec<LeaderboardEvent> = Vec::new();
+
+    for (d, day_models) in &days_map {
+        let in_window = d >= &cutoff_date;
+
+        // 1. First seen & Record days
+        for (model, daily_tokens) in day_models {
+            let is_first_time = !first_seen_date.contains_key(model);
+            if is_first_time {
+                first_seen_date.insert(model.clone(), d.clone());
+                if in_window && !aliased_models.contains(model) {
+                    events.push(LeaderboardEvent {
+                        kind: "first_seen".into(),
+                        model: model.clone(),
+                        other_model: None,
+                        rank: None,
+                        date: d.clone(),
+                        tokens: *daily_tokens,
+                    });
+                }
+            }
+
+            if !in_window {
+                let cur = pre_window_daily_max.entry(model.clone()).or_insert(0);
+                if *daily_tokens > *cur {
+                    *cur = *daily_tokens;
+                }
+            } else if pre_window_daily_max.contains_key(model) {
+                let cur_record = in_window_daily_max
+                    .get(model)
+                    .cloned()
+                    .unwrap_or_else(|| pre_window_daily_max[model]);
+                if *daily_tokens > cur_record {
+                    in_window_daily_max.insert(model.clone(), *daily_tokens);
+                    events.push(LeaderboardEvent {
+                        kind: "record".into(),
+                        model: model.clone(),
+                        other_model: None,
+                        rank: None,
+                        date: d.clone(),
+                        tokens: *daily_tokens,
+                    });
+                }
+            }
+        }
+
+        // 2. Cumulative totals
+        for (model, daily_tokens) in day_models {
+            *cumulative_tokens.entry(model.clone()).or_insert(0) += *daily_tokens;
+        }
+
+        // 3. Current standings across all known models
+        let mut standings: Vec<(String, i64)> = cumulative_tokens
+            .iter()
+            .map(|(m, &t)| (m.clone(), t))
+            .collect();
+        standings.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        let mut curr_rankings: HashMap<String, usize> = HashMap::new();
+        for (idx, (model, _)) in standings.iter().enumerate() {
+            curr_rankings.insert(model.clone(), idx + 1);
+        }
+
+        // 4. Debut (entered top 5 for the first time with prior history)
+        for (model, _) in day_models {
+            if let Some(&rank) = curr_rankings.get(model) {
+                if rank <= 5 && !ever_top5.contains(model) {
+                    let first_d = first_seen_date.get(model);
+                    let has_prior_history = first_d.map(|fd| fd < d).unwrap_or(false);
+                    if has_prior_history && in_window {
+                        events.push(LeaderboardEvent {
+                            kind: "debut".into(),
+                            model: model.clone(),
+                            other_model: None,
+                            rank: Some(rank as i64),
+                            date: d.clone(),
+                            tokens: *cumulative_tokens.get(model).unwrap_or(&0),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Mark models in top 5 so far
+        for (idx, (model, _)) in standings.iter().enumerate() {
+            if idx < 5 {
+                ever_top5.insert(model.clone());
+            }
+        }
+
+        // 5. Overtakes (top 10 adjacent rank swaps)
+        if !prev_rankings.is_empty() && in_window {
+            for (model, _) in day_models {
+                if let Some(&curr_rank) = curr_rankings.get(model) {
+                    if curr_rank <= 10 {
+                        if let Some(&prev_rank) = prev_rankings.get(model) {
+                            for (other_model, &other_prev_rank) in &prev_rankings {
+                                if other_model != model && other_prev_rank < prev_rank {
+                                    if let Some(&other_curr_rank) = curr_rankings.get(other_model) {
+                                        if curr_rank < other_curr_rank {
+                                            let my_tokens = *cumulative_tokens.get(model).unwrap_or(&0);
+                                            let other_tokens = *cumulative_tokens.get(other_model).unwrap_or(&0);
+                                            let gap = my_tokens - other_tokens;
+                                            if gap > 0 {
+                                                events.push(LeaderboardEvent {
+                                                    kind: "overtake".into(),
+                                                    model: model.clone(),
+                                                    other_model: Some(other_model.clone()),
+                                                    rank: Some(curr_rank as i64),
+                                                    date: d.clone(),
+                                                    tokens: gap,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        prev_rankings = curr_rankings;
+    }
+
+    events.sort_by(|a, b| b.date.cmp(&a.date));
+    events.truncate(40);
+    Ok(events)
+}
+
 /// (current, longest) consecutive-day streaks over a sorted list of ISO dates.
 /// Days are UTC; the current streak tolerates "today hasn't happened yet".
 fn streaks(dates: &[String]) -> (i64, i64) {
@@ -1011,5 +1198,140 @@ mod tests {
         assert_eq!(detail.by_project[0].project, "unknown");
         assert_eq!(detail.by_project[0].tokens, 180);
         assert_eq!(detail.by_project[0].events, 2);
+    }
+
+    #[test]
+    fn leaderboard_overtake_3_day_swap() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day1 = now - 2 * day_ms;
+        let day2 = now - 1 * day_ms;
+        let day3 = now;
+
+        // Day 1: Model A gets 1000, Model B gets 800
+        // Day 2: Model B gets 300 (total 1100 > A's 1000 -> B overtakes A for #1, gap 100)
+        // Day 3: Model A gets 200 (total 1200 > B's 1100 -> A overtakes B for #1, gap 100)
+        store
+            .insert_events(&[
+                test_event("model-a", day1, 1000),
+                test_event("model-b", day1, 800),
+                test_event("model-b", day2, 300),
+                test_event("model-a", day3, 200),
+            ])
+            .unwrap();
+
+        let events = leaderboard_events(&store, 30).unwrap();
+        let overtakes: Vec<_> = events.iter().filter(|e| e.kind == "overtake").collect();
+        assert_eq!(overtakes.len(), 2);
+        assert_eq!(overtakes[0].model, "model-a");
+        assert_eq!(overtakes[0].other_model, Some("model-b".into()));
+        assert_eq!(overtakes[0].rank, Some(1));
+        assert_eq!(overtakes[0].tokens, 100);
+
+        assert_eq!(overtakes[1].model, "model-b");
+        assert_eq!(overtakes[1].other_model, Some("model-a".into()));
+        assert_eq!(overtakes[1].rank, Some(1));
+        assert_eq!(overtakes[1].tokens, 100);
+    }
+
+    #[test]
+    fn leaderboard_record_gated_on_pre_window_history() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let pre_window_day = now - 50 * day_ms;
+        let in_window_day1 = now - 10 * day_ms;
+        let in_window_day2 = now - 9 * day_ms;
+        let in_window_day3 = now - 8 * day_ms;
+
+        // Model A has pre-window daily max of 1000 tokens
+        // Model B has ONLY in-window events
+        store
+            .insert_events(&[
+                test_event("model-a", pre_window_day, 1000),
+                test_event("model-a", in_window_day1, 1500), // record day (1500 > 1000)
+                test_event("model-a", in_window_day2, 1200), // not a record (1200 <= 1500)
+                test_event("model-a", in_window_day3, 2000), // record day (2000 > 1500)
+                test_event("model-b", in_window_day1, 5000), // no pre-window history -> skipped
+            ])
+            .unwrap();
+
+        let events = leaderboard_events(&store, 30).unwrap();
+        let records: Vec<_> = events.iter().filter(|e| e.kind == "record").collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].model, "model-a");
+        assert_eq!(records[0].tokens, 2000);
+        assert_eq!(records[1].model, "model-a");
+        assert_eq!(records[1].tokens, 1500);
+
+        // Model B should not have any record events
+        assert!(!events.iter().any(|e| e.kind == "record" && e.model == "model-b"));
+    }
+
+    #[test]
+    fn leaderboard_debut_vs_first_seen() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let pre_day = now - 40 * day_ms;
+        let in_day1 = now - 10 * day_ms;
+        let in_day2 = now - 5 * day_ms;
+
+        // 5 established models in top 5
+        store
+            .insert_events(&[
+                test_event("m1", pre_day, 10_000),
+                test_event("m2", pre_day, 10_000),
+                test_event("m3", pre_day, 10_000),
+                test_event("m4", pre_day, 10_000),
+                test_event("m5", pre_day, 10_000),
+                // Model C first seen on in_day1 at rank 6 (below top 5)
+                test_event("model-c", in_day1, 100),
+                // Model C on in_day2 jumps into top 5 with prior history -> debut
+                test_event("model-c", in_day2, 20_000),
+                // Model D first seen on in_day2 with 50_000 (immediately #1, but first sighting, not debut)
+                test_event("model-d", in_day2, 50_000),
+            ])
+            .unwrap();
+
+        let events = leaderboard_events(&store, 30).unwrap();
+        let debuts: Vec<_> = events.iter().filter(|e| e.kind == "debut").collect();
+        assert_eq!(debuts.len(), 1);
+        assert_eq!(debuts[0].model, "model-c");
+        assert!(debuts[0].rank.unwrap() <= 5);
+
+        let first_seens: Vec<_> = events.iter().filter(|e| e.kind == "first_seen").collect();
+        assert!(first_seens.iter().any(|e| e.model == "model-c"));
+        assert!(first_seens.iter().any(|e| e.model == "model-d"));
+    }
+
+    #[test]
+    fn leaderboard_respects_hidden_and_alias() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                test_event("raw-a1", now, 500),
+                test_event("raw-a2", now, 600),
+                test_event("hidden-x", now, 1000),
+                test_event("unmerged-model", now, 400),
+            ])
+            .unwrap();
+
+        store
+            .merge_models(&["raw-a1".into(), "raw-a2".into()], "raw-a1")
+            .unwrap();
+        store.hide_models(&["hidden-x".into()]).unwrap();
+
+        let events = leaderboard_events(&store, 30).unwrap();
+        // hidden-x produces no events
+        assert!(!events.iter().any(|e| e.model == "hidden-x"));
+        // raw-a2 folded into raw-a1
+        assert!(events.iter().all(|e| e.model != "raw-a2"));
+        // merged/aliased model raw-a1 does NOT emit first_seen
+        assert!(!events.iter().any(|e| e.kind == "first_seen" && e.model == "raw-a1"));
+        // unmerged model DOES emit first_seen
+        assert!(events.iter().any(|e| e.kind == "first_seen" && e.model == "unmerged-model"));
     }
 }
