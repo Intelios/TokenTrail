@@ -150,7 +150,7 @@
       case 'debut':
         return 'DEBUT';
       case 'first_seen':
-        return 'FIRST SEEN';
+        return 'SIGHTED';
     }
   }
 
@@ -161,7 +161,7 @@
       case 'record':
         return 'new daily peak';
       case 'debut':
-        return `entered top 5 (#${ev.rank ?? '?'})`;
+        return `entered top 5`;
       case 'first_seen':
         return 'first sighting';
     }
@@ -174,7 +174,7 @@
       case 'record':
         return `${fmtTokens(ev.tokens)}/d`;
       case 'debut':
-        return `#${ev.rank ?? '?'}`;
+        return fmtTokens(ev.tokens);
       case 'first_seen':
         return fmtTokens(ev.tokens);
     }
@@ -184,7 +184,7 @@
     if (!d) return '—';
     const parts = d.split('-');
     if (parts.length === 3) {
-      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
       const m = parseInt(parts[1], 10) - 1;
       const day = parseInt(parts[2], 10);
       if (m >= 0 && m < 12 && !isNaN(day)) {
@@ -275,7 +275,12 @@
         {/each}
       </div>
       <div class="feed">
-        <h3><span>LEADERBOARD · {RANGE_LABEL[days]}</span></h3>
+        <div class="feedhd">
+          <h3>
+            <span class="live-tag"><i class="live-dot"></i>LEADERBOARD</span>
+            <span class="range-sub">· {RANGE_LABEL[days]}</span>
+          </h3>
+        </div>
         {#if !events.length}
           <div class="loading feed-empty">no leaderboard events in this period</div>
         {:else}
@@ -284,10 +289,20 @@
               <div class="feedrow up" style="animation-delay:{Math.min(300, i * 25)}ms">
                 <span class="fchip {ev.kind}">{chipLabel(ev.kind)}</span>
                 <span class="fbody">
-                  <a class="fmodel" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
-                  <span class="fact">{formatAction(ev)}</span>
+                  {#if ev.kind === 'overtake'}
+                    <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
+                    <span class="fverb">passed</span>
+                    {#if ev.other_model}
+                      <a class="fother" style="color:{modelFlat(ev.other_model, 1)}" href={modelUrl(ev.other_model)} title={ev.other_model}>{ev.other_model}</a>
+                    {/if}
+                  {:else}
+                    <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
+                    <span class="fact">{formatAction(ev)}</span>
+                  {/if}
                 </span>
-                <span class="fstat">{formatStat(ev)}</span>
+                <span class="fstat" class:plus={ev.kind === 'overtake'}>
+                  {formatStat(ev)}
+                </span>
                 <span class="fdate">{formatDateShort(ev.date)}</span>
               </div>
             {/each}
@@ -409,7 +424,7 @@
 
   .mcharts { display: grid; grid-template-columns: 1.3fr 0.7fr; border-bottom: 2px solid var(--ink); }
   .mbars { padding: 14px clamp(22px, 1.8vw, 40px) 15px; border-right: 2px solid var(--ink); }
-  .mbars h3, .feed h3 {
+  .mbars h3 {
     font: 600 11px/1 var(--font-ui);
     letter-spacing: 1.6px;
     text-transform: uppercase;
@@ -418,7 +433,42 @@
     justify-content: space-between;
   }
   .feed { padding: 14px 18px 10px; display: flex; flex-direction: column; min-height: 0; max-height: 240px; }
-  .feed h3 { align-self: stretch; margin-bottom: 8px; }
+  .feedhd {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    gap: 8px;
+  }
+  .feedhd h3 {
+    font: 600 11px/1 var(--font-ui);
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .live-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink);
+    font-weight: 700;
+  }
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--org);
+    display: inline-block;
+    animation: tt-pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .range-sub {
+    font: 500 10px/1 var(--font-mono);
+    color: var(--dim);
+    letter-spacing: 0.8px;
+  }
+
   .feedlist { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
   .feed-empty { padding: 30px 10px; }
 
@@ -426,21 +476,26 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 30px;
-    padding: 0 4px;
+    height: 32px;
+    padding: 0 6px;
     border-bottom: 1px solid var(--hair);
     font-size: 11.5px;
+    border-left: 2px solid transparent;
+    transition: background 0.12s, border-left-color 0.12s;
   }
   .feedrow:last-child { border-bottom: none; }
-  .feedrow:hover { background: var(--hair); }
+  .feedrow:hover {
+    background: rgba(13, 13, 11, 0.04);
+    border-left-color: var(--org);
+  }
 
   .fchip {
-    font: 600 8.5px/1 var(--font-mono);
-    letter-spacing: 0.5px;
+    font: 700 8.5px/1 var(--font-mono);
+    letter-spacing: 0.6px;
     text-transform: uppercase;
     padding: 3px 5px;
     flex: none;
-    width: 66px;
+    width: 70px;
     text-align: center;
     display: inline-flex;
     align-items: center;
@@ -455,46 +510,71 @@
     flex: 1;
     min-width: 0;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 6px;
     overflow: hidden;
   }
   .fmodel {
-    color: var(--ink);
-    font-weight: 600;
-    font-size: 12px;
+    font: 700 12px/1.2 var(--font-ui);
     text-decoration: none;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex-shrink: 0;
-    max-width: 100%;
+    max-width: 140px;
   }
-  .fmodel:hover { color: var(--org); text-decoration: underline; }
+  .fmodel:hover { text-decoration: underline; }
+
+  .fverb {
+    font: 600 11px/1 var(--font-ui);
+    color: var(--ink);
+    opacity: 0.82;
+    flex: none;
+    letter-spacing: 0.2px;
+  }
+  .fother {
+    font: 600 11.5px/1.2 var(--font-ui);
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
+    opacity: 0.8;
+  }
+  .fother:hover { opacity: 1; text-decoration: underline; }
+
   .fact {
-    font: 400 10.5px/1 var(--font-ui);
-    color: var(--dim);
+    font: 600 11px/1 var(--font-ui);
+    color: var(--ink);
+    opacity: 0.82;
+    letter-spacing: 0.2px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex-shrink: 1;
     min-width: 0;
   }
+
   .fstat {
-    font: 500 11px/1 var(--font-mono);
+    font: 600 11px/1 var(--font-mono);
     color: var(--ink);
     text-align: right;
     flex: none;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
+  .fstat.plus { color: var(--ink); }
+
   .fdate {
-    font: 400 10px/1 var(--font-mono);
+    font: 500 9.5px/1 var(--font-mono);
     color: var(--dim);
     flex: none;
     text-align: right;
     margin-left: 2px;
     white-space: nowrap;
+    letter-spacing: 0.4px;
+    width: 44px;
   }
 
   .tw { flex: 1; min-height: 0; overflow: auto; }
