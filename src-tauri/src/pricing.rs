@@ -264,6 +264,19 @@ mod tests {
     }
 
     #[test]
+    fn hy4_prices() {
+        // Tencent Hunyuan Hy4 preview: $0.834/$2.501 with $0.042 cached input;
+        // cache writes are undocumented and bill at the uncached input rate.
+        assert_eq!(rates_for("hy4-preview").map(|r| r.input), Some(0.834));
+        assert_eq!(rates_for("hy4-preview").map(|r| r.output), Some(2.501));
+        assert_eq!(rates_for("hy4-preview").map(|r| r.cache_read), Some(0.042));
+        assert_eq!(rates_for("hy4-preview").map(|r| r.cache_write), Some(0.834));
+        // Both provider-stripped and Hunyuan-branded spellings resolve.
+        assert_eq!(rates_for("tencent/hy4-preview").map(|r| r.input), Some(0.834));
+        assert_eq!(rates_for("hunyuan-hy4-preview").map(|r| r.input), Some(0.834));
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
