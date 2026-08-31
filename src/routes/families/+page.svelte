@@ -649,6 +649,9 @@
     display: inline-block;
     vertical-align: middle;
   }
+  .shbar > div {
+    height: 100%;
+  }
 
   .modellink {
     color: var(--ink);

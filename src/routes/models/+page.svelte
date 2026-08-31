@@ -795,6 +795,7 @@
   }
 
   .shbar { height: 9px; background: var(--hair); width: 64px; display: inline-block; vertical-align: middle; }
+  .shbar > div { height: 100%; }
 
   .modellink { color: var(--ink); font-weight: 600; font-size: 12.5px; text-decoration: none; }
   .modellink:hover { color: var(--org); text-decoration: underline; }
