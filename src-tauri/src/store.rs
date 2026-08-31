@@ -176,6 +176,35 @@ impl Store {
         );
     }
 
+    /// Record that `path` is somewhere this source reads from, and list them back.
+    ///
+    /// For sources whose target can be swapped underneath them: a collector that only
+    /// ever looks at wherever it is pointed *now* stops keeping the others current the
+    /// moment the pointer moves. Remembering is what makes several of them one source.
+    ///
+    /// A path is never forgotten. One that has gone missing is skipped, not dropped —
+    /// an external drive comes back, and a library on it should still be there when it
+    /// does. The cost of keeping a genuinely dead entry is one `exists()` per sync.
+    pub fn remember_path(&self, source: &str, path: &str) {
+        let _ = self.conn.execute(
+            "INSERT OR IGNORE INTO ingest_state(source,path,updated_at)
+             VALUES(?1,?2,strftime('%s','now'))",
+            params![source, path],
+        );
+    }
+
+    pub fn known_paths(&self, source: &str) -> Vec<String> {
+        let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT path FROM ingest_state WHERE source=?1 AND path<>'' ORDER BY path")
+        else {
+            return Vec::new();
+        };
+        stmt.query_map(params![source], |r| r.get(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     pub fn get_watermark(&self, key: &str) -> i64 {
         self.conn
             .query_row(

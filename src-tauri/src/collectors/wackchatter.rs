@@ -120,13 +120,36 @@ fn project_for(character: Option<&str>) -> Option<String> {
 // The transcripts
 // ---------------------------------------------------------------------------
 
-/// Resolve the library from the pointer WackChatter publishes on every boot.
-fn library_db(dir: &Path) -> Option<PathBuf> {
+/// Which library WackChatter published on its last boot.
+///
+/// Only ever the *current* one, because that is all the pointer can say — it is rewritten
+/// on every launch and a machine can hold several libraries. Reading only this one would
+/// mean the rest stop being kept current the moment someone launches the other install.
+fn pointed_library(dir: &Path) -> Option<PathBuf> {
     let raw = std::fs::read_to_string(dir.join("library.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let data_dir = v.get("dataDir").and_then(|x| x.as_str())?;
-    let db = PathBuf::from(data_dir).join("chats.db");
-    db.exists().then_some(db)
+    let data_dir = PathBuf::from(v.get("dataDir").and_then(|x| x.as_str())?);
+    data_dir.join("chats.db").exists().then_some(data_dir)
+}
+
+/// A library's identity, for keying its read cursor.
+///
+/// One cursor per library, not one per source. There can be more than one library on a
+/// machine — a second checkout, a copy on an external drive — and the pointer names
+/// whichever booted last. Sharing a cursor between them means the newer library's
+/// timestamp hides the older one's history completely, and it never comes back, because
+/// nothing about the skipped library will ever be modified later than a cursor that has
+/// already passed it.
+///
+/// `.wackchatter` marks a folder as a library and records the moment it became one —
+/// the only thing about it that survives the folder being moved or renamed. The path is
+/// the fallback: never wrong, just re-reads everything after a move.
+fn library_key(data_dir: &Path) -> String {
+    std::fs::read_to_string(data_dir.join(".wackchatter"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("created").and_then(|c| c.as_str()).map(String::from))
+        .unwrap_or_else(|| data_dir.display().to_string())
 }
 
 /// One SQL shape for both transcript tables.
@@ -147,7 +170,8 @@ fn swipe_query(table: &str, parent: &str, owner: &str, extra_where: &str) -> Str
                 json_extract(s.value, '$.gen_started'),
                 json_extract(s.value, '$.gen_finished'),
                 json_extract(s.value, '$.send_date'),
-                {owner}
+                {owner},
+                p.modified
          FROM {table} m, json_each(m.swipe_info) s, {parent} p
          WHERE p.id = m.{parent_key} AND m.is_user = 0 AND m.position > 0
            AND p.modified >= ?1 {extra_where}",
@@ -171,19 +195,46 @@ type SwipeRow = (
     Option<String>, // gen_finished
     Option<String>, // send_date
     Option<String>, // character (chats only)
+    i64,            // parent `modified` — the cursor column, not an event field
 );
 
+/// Read every library this machine has ever pointed at, not only the current one.
+///
+/// The pointer names whichever install booted last, so a second checkout — or a copy on
+/// a drive — would otherwise go stale the moment the other one is launched. Registering
+/// each library as it appears and reading all of them makes "WackChatter" one source
+/// regardless of how many libraries are behind it. Each keeps its own cursor, so this
+/// costs one cheap no-op query per idle library per sync.
 fn collect_db(store: &Store, dir: &Path) -> Option<usize> {
-    let db = library_db(dir)?;
+    const REGISTRY: &str = "wackchatter:library";
+    if let Some(current) = pointed_library(dir) {
+        store.remember_path(REGISTRY, &current.display().to_string());
+    }
+    let mut processed = 0usize;
+    for path in store.known_paths(REGISTRY) {
+        processed += collect_library(store, Path::new(&path)).unwrap_or(0);
+    }
+    Some(processed)
+}
+
+/// One library. `None` when it cannot be opened — a folder that has been deleted, or a
+/// drive that is not plugged in right now. Neither is an error worth failing a sync over.
+fn collect_library(store: &Store, data_dir: &Path) -> Option<usize> {
+    let db = data_dir.join("chats.db");
+    if !db.exists() {
+        return None;
+    }
     let conn = open_readonly(&db).ok()?;
+    let library = library_key(data_dir);
 
     let mut processed = 0usize;
-    // Two watermarks, because the two tables advance independently: a week of Co-Creator
-    // work must not be skipped because a chat was touched more recently.
-    for (table, parent, owner, prefix, key) in [
-        ("messages", "chats", "p.character_id", "wcd", "wackchatter:chats"),
-        ("cocreator_messages", "cocreator_sessions", "NULL", "wcc", "wackchatter:cocreator"),
+    // Two cursors per library, because the two tables advance independently: a week of
+    // Co-Creator work must not be skipped because a chat was touched more recently.
+    for (table, parent, owner, prefix, scope) in [
+        ("messages", "chats", "p.character_id", "wcd", "chats"),
+        ("cocreator_messages", "cocreator_sessions", "NULL", "wcc", "cocreator"),
     ] {
+        let key = &format!("wackchatter:{scope}:{library}");
         // Overlapping the watermark covers the window between a swipe being written and
         // its chat's `modified` settling, the same guard opencode.rs uses.
         let watermark = store.get_watermark(key).saturating_sub(OVERLAP_MS);
@@ -209,28 +260,34 @@ fn collect_db(store: &Store, dir: &Path) -> Option<usize> {
                 r.get(10)?,
                 r.get(11)?,
                 r.get(12)?,
+                r.get(13)?,
             ))
         }) else {
             continue;
         };
 
         let mut events = Vec::new();
-        let mut max_ts = 0i64;
+        // The cursor has to be over the column the query filters on. Advancing it by the
+        // event's own timestamp instead compares two different clocks — `gen_finished` is
+        // when the provider stopped writing, `modified` is when the chat was next saved —
+        // and a library whose two clocks are far apart is then read wrongly forever.
+        // Advanced for skipped rows too, or an unreadable swipe is rescanned every sync.
+        let mut max_modified = 0i64;
         for row in rows.flatten() {
+            max_modified = max_modified.max(row.13);
             let Some(ev) = from_swipe(row, prefix) else { continue };
-            max_ts = max_ts.max(ev.ts);
             events.push(ev);
         }
         processed += store.insert_events(&events).ok()?;
-        if max_ts > 0 {
-            store.set_watermark(key, max_ts);
+        if max_modified > 0 {
+            store.set_watermark(key, max_modified);
         }
     }
     Some(processed)
 }
 
 fn from_swipe(row: SwipeRow, prefix: &str) -> Option<UsageEvent> {
-    let (parent, message, swipe, gen_id, model, api, out, prompt, reported, started, finished, sent, character) =
+    let (parent, message, swipe, gen_id, model, api, out, prompt, reported, started, finished, sent, character, _modified) =
         row;
 
     let output = out.unwrap_or(0);
@@ -388,8 +445,24 @@ mod tests {
 
     /// A minimal WackChatter library: the two transcript tables and a pointer to them.
     fn seed_library(home: &Path, swipes: &str) -> PathBuf {
-        let lib = home.join("Library");
+        seed_named_library(home, "Library", "chat-a", swipes, 1756634405000)
+    }
+
+    fn seed_named_library(
+        home: &Path,
+        name: &str,
+        chat: &str,
+        swipes: &str,
+        modified: i64,
+    ) -> PathBuf {
+        let lib = home.join(name);
         std::fs::create_dir_all(&lib).unwrap();
+        // The marker is what tells two libraries apart; `created` is unique to each.
+        std::fs::write(
+            lib.join(".wackchatter"),
+            format!("{{\"app\":\"wackchatter\",\"version\":1,\"created\":\"{name}\"}}"),
+        )
+        .unwrap();
         let db = lib.join("chats.db");
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(
@@ -407,12 +480,17 @@ mod tests {
                                               swipe_id INTEGER, swipes TEXT NOT NULL,
                                               swipe_info TEXT NOT NULL,
                                               PRIMARY KEY (session_id, id));
-             INSERT INTO chats VALUES ('chat-a','Ayla.png','First contact',1,1756634405000,0,'{}');",
+             ",
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO messages VALUES ('chat-a','msg-1',1,'Ayla',0,0,0,'[\"hi\"]',?1)",
-            [swipes],
+            "INSERT INTO chats VALUES (?1,'Ayla.png','First contact',1,?2,0,'{}')",
+            rusqlite::params![chat, modified],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages VALUES (?1,'msg-1',1,'Ayla',0,0,0,'[\"hi\"]',?2)",
+            rusqlite::params![chat, swipes],
         )
         .unwrap();
         drop(conn);
@@ -428,6 +506,11 @@ mod tests {
     }
 
     const SWIPE: &str = r#"[{"send_date":"2026-08-31T10:00:00.000Z","gen_started":"2026-08-31T10:00:00.000Z","gen_finished":"2026-08-31T10:00:05.000Z","extra":{"api":"openrouter","model":"anthropic/claude-sonnet-5","token_count":612,"prompt_tokens":8421,"usage_reported":true,"generation_id":"gen-1"}}]"#;
+
+    /// What almost all stored history actually looks like: an estimated completion count,
+    /// no prompt side, and no generation id, because none of that existed when it was
+    /// written. Its identity comes from its place in the transcript instead.
+    const LEGACY_SWIPE: &str = r#"[{"send_date":"2026-01-02T03:04:05.000Z","extra":{"api":"openrouter","model":"sao10k/l3-euryale-70b","token_count":420}}]"#;
 
     #[test]
     fn backfills_transcripts_through_the_library_pointer() {
@@ -479,10 +562,7 @@ mod tests {
         let store = test_store("wc-legacy");
         // What every swipe written before 2026-08 looks like: an estimated completion
         // count, no prompt side, no id, no reported flag.
-        seed_library(
-            &home,
-            r#"[{"send_date":"2026-01-02T03:04:05.000Z","extra":{"api":"openrouter","model":"sao10k/l3-euryale-70b","token_count":420}}]"#,
-        );
+        seed_library(&home, LEGACY_SWIPE);
 
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let (id, input, output, est, cost): (String, i64, i64, i64, Option<f64>) = store
@@ -561,6 +641,150 @@ mod tests {
         assert_eq!(unpriced, vec!["l3-euryale-70b"]);
 
         assert_eq!(collect(&store, &home).unwrap(), 0);
+    }
+
+    /// Point the pointer at a second, older library and its history must still land.
+    ///
+    /// This is a real bug that shipped: one cursor shared by every library meant the
+    /// newer one's timestamp hid the older one entirely, and permanently — nothing in a
+    /// skipped library will ever be modified later than a cursor that has already passed
+    /// it. Two checkouts on one machine is the ordinary way to hit it; moving a library
+    /// to a drive holding an older copy is the other.
+    #[test]
+    fn a_second_older_library_is_not_swallowed_by_the_first() {
+        let home = test_home("wc-two-libs");
+        let store = test_store("wc-two-libs");
+        let pointer = home.join(".wackchatter/library.json");
+
+        // The library in daily use, touched this morning.
+        let recent = seed_named_library(&home, "Recent", "chat-recent", LEGACY_SWIPE, 1756634405000);
+        collect(&store, &home).unwrap();
+
+        // A second library whose newest chat is a full day older.
+        let older = seed_named_library(&home, "Older", "chat-older", LEGACY_SWIPE, 1756548005000);
+        assert_ne!(recent, older);
+        std::fs::write(
+            &pointer,
+            format!(
+                "{{\"version\":1,\"dataDir\":{:?}}}",
+                older.parent().unwrap().display().to_string()
+            ),
+        )
+        .unwrap();
+
+        collect(&store, &home).unwrap();
+        assert_eq!(
+            sessions(&store),
+            vec!["chat-older", "chat-recent"],
+            "the older library was swallowed by the newer one's cursor"
+        );
+    }
+
+    #[test]
+    fn a_library_keeps_its_cursor_when_the_pointer_moves_away_and_back() {
+        let home = test_home("wc-lib-cursor");
+        let store = test_store("wc-lib-cursor");
+        let a = seed_named_library(&home, "A", "chat-a", LEGACY_SWIPE, 1756634405000);
+        let b = seed_named_library(&home, "B", "chat-b", LEGACY_SWIPE, 1756548005000);
+        aim_pointer(&home, a.parent().unwrap());
+        collect(&store, &home).unwrap();
+        aim_pointer(&home, b.parent().unwrap());
+        collect(&store, &home).unwrap();
+        assert_eq!(sessions(&store), vec!["chat-a", "chat-b"]);
+
+        // Each library's cursor is its own, so a settled sync re-reads only the overlap
+        // window and never the whole transcript again.
+        let touched = collect(&store, &home).unwrap();
+        assert!(touched <= 2, "a settled sync rescanned more than the overlap: {touched}");
+    }
+
+    /// Add a chat to a library that already exists, without touching the pointer.
+    fn add_chat(data_dir: &Path, chat: &str, swipes: &str, modified: i64) {
+        let conn = rusqlite::Connection::open(data_dir.join("chats.db")).unwrap();
+        conn.execute(
+            "INSERT INTO chats VALUES (?1,'Brooke.png','Later',1,?2,0,'{}')",
+            rusqlite::params![chat, modified],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages VALUES (?1,'msg-1',1,'Brooke',0,0,0,'[\"hi\"]',?2)",
+            rusqlite::params![chat, swipes],
+        )
+        .unwrap();
+    }
+
+    fn sessions(store: &Store) -> Vec<String> {
+        store
+            .conn()
+            .prepare("SELECT DISTINCT session_id FROM usage_event ORDER BY session_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .flatten()
+            .collect()
+    }
+
+    fn aim_pointer(home: &Path, data_dir: &Path) {
+        std::fs::write(
+            home.join(".wackchatter/library.json"),
+            format!("{{\"version\":1,\"dataDir\":{:?}}}", data_dir.display().to_string()),
+        )
+        .unwrap();
+    }
+
+    /// A library goes on being read after the pointer has moved off it.
+    ///
+    /// The pointer names whichever install booted last. Two checkouts on one machine is
+    /// an ordinary setup, and reading only the current one means the other silently stops
+    /// being tracked the moment you launch its sibling.
+    #[test]
+    fn every_library_seen_stays_current_not_just_the_pointed_one() {
+        let home = test_home("wc-all-libs");
+        let store = test_store("wc-all-libs");
+        let a = seed_named_library(&home, "A", "chat-a", LEGACY_SWIPE, 1756634405000);
+        let b = seed_named_library(&home, "B", "chat-b", LEGACY_SWIPE, 1756548005000);
+        let (a_dir, b_dir) = (a.parent().unwrap().to_path_buf(), b.parent().unwrap().to_path_buf());
+
+        // Both get registered as the pointer visits them.
+        aim_pointer(&home, &a_dir);
+        collect(&store, &home).unwrap();
+        aim_pointer(&home, &b_dir);
+        collect(&store, &home).unwrap();
+        assert_eq!(sessions(&store), vec!["chat-a", "chat-b"]);
+
+        // New work in A while the pointer still names B — the case that was broken.
+        add_chat(&a_dir, "chat-a2", LEGACY_SWIPE, 1756720805000);
+        collect(&store, &home).unwrap();
+        assert!(sessions(&store).contains(&"chat-a2".to_string()), "A stopped being read");
+
+        // And new work in B is still picked up too.
+        add_chat(&b_dir, "chat-b2", LEGACY_SWIPE, 1756720805000);
+        collect(&store, &home).unwrap();
+        assert_eq!(sessions(&store), vec!["chat-a", "chat-a2", "chat-b", "chat-b2"]);
+    }
+
+    /// An unplugged drive is not a deleted library.
+    #[test]
+    fn a_library_that_goes_missing_is_skipped_and_picked_up_again() {
+        let home = test_home("wc-missing-lib");
+        let store = test_store("wc-missing-lib");
+        let a = seed_named_library(&home, "A", "chat-a", LEGACY_SWIPE, 1756634405000);
+        let a_dir = a.parent().unwrap().to_path_buf();
+        collect(&store, &home).unwrap();
+        assert_eq!(sessions(&store), vec!["chat-a"]);
+
+        // The drive comes out. The sync must not fail, and the library must not be
+        // forgotten — being unreachable now says nothing about being gone for good.
+        let stashed = home.join("stashed.db");
+        std::fs::rename(&a, &stashed).unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+        assert_eq!(sessions(&store), vec!["chat-a"], "history must survive the absence");
+
+        // It comes back with new work on it, and is read without being re-pointed at.
+        std::fs::rename(&stashed, &a).unwrap();
+        add_chat(&a_dir, "chat-a2", LEGACY_SWIPE, 1756720805000);
+        collect(&store, &home).unwrap();
+        assert_eq!(sessions(&store), vec!["chat-a", "chat-a2"]);
     }
 
     #[test]
