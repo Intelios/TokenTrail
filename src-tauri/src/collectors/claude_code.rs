@@ -75,6 +75,8 @@ fn parse_line(line: &str, is_sub_path: bool) -> Option<UsageEvent> {
         ttft_ms: None,
         is_subagent: is_sub_path
             || v.get("isSidechain").and_then(|x| x.as_bool()).unwrap_or(false),
+        // Harnesses report real usage; nothing here is guessed.
+        estimated: false,
     })
 }
 

@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type IngestStats, type ModelAlias, type SourceStatus } from '$lib/api';
+  import { api, type EstimatedShare, type IngestStats, type ModelAlias, type SourceStatus } from '$lib/api';
   import { normalizeModelName, sourceSwatch } from '$lib/format';
 
   type Tab = 'sources' | 'merges' | 'hidden' | 'export';
   let activeTab = $state<Tab>('sources');
 
   let sources = $state<SourceStatus[]>([]);
+  let estimated = $state<EstimatedShare[]>([]);
   let syncing = $state(false);
   let stats = $state<IngestStats[] | null>(null);
   let exportPath = $state('');
@@ -30,11 +31,23 @@
 
   async function load() {
     try {
-      sources = await api.sourceStatus();
+      [sources, estimated] = await Promise.all([api.sourceStatus(), api.estimatedShare()]);
       error = '';
     } catch (e) {
       error = String(e);
     }
+  }
+
+  /**
+   * How much of a source's history is the reporting app's own guess.
+   *
+   * Only shown when there is any: every coding harness reports what the provider billed,
+   * so a "0% estimated" badge on all six would be noise around the one that differs.
+   */
+  function estimatedPct(source: string): number | null {
+    const row = estimated.find((e) => e.source === source);
+    if (!row || row.events === 0 || row.estimated === 0) return null;
+    return Math.round((row.estimated / row.events) * 100);
   }
 
   async function loadMerges() {
@@ -290,6 +303,11 @@
                 <div class="nm">{s.display}</div>
                 <div class="p">{s.path}</div>
               </div>
+              {#if estimatedPct(s.source) !== null}
+                <span class="tag est" title="Token counts this app estimated itself, because the provider reported none. Cost is never computed from them.">
+                  {estimatedPct(s.source)}% estimated
+                </span>
+              {/if}
               {#if s.found}
                 <span class="tag ok">installed</span>
               {:else}

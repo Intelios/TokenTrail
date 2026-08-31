@@ -100,6 +100,7 @@ fn parse_message(v: &Value, fallback_ts: Option<i64>) -> Option<UsageEvent> {
         duration_ms: None,
         ttft_ms: None,
         is_subagent: false,
+        estimated: false,
     })
 }
 

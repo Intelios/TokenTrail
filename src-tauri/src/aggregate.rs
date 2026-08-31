@@ -633,6 +633,33 @@ pub fn hourly(store: &Store) -> DbResult<Vec<HourRow>> {
     Ok(rows)
 }
 
+/// How much of a source's history is the reporting app's own guess.
+///
+/// Only WackChatter can be anything but zero — every coding harness writes the provider's
+/// real usage. Surfaced so the Sources list can say so, rather than letting an estimate
+/// pass silently as a measurement.
+#[derive(Debug, Serialize)]
+pub struct EstimatedShare {
+    pub source: String,
+    pub events: i64,
+    pub estimated: i64,
+}
+
+pub fn estimated_share(store: &Store) -> DbResult<Vec<EstimatedShare>> {
+    let sql = format!(
+        "SELECT source, COUNT(*), COALESCE(SUM(estimated),0)
+         FROM usage_event u WHERE {H} GROUP BY source HAVING SUM(estimated) > 0",
+        H = NOT_HIDDEN
+    );
+    let mut stmt = store.conn().prepare(&sql)?;
+    let rows: Vec<EstimatedShare> = stmt
+        .query_map([], |r| {
+            Ok(EstimatedShare { source: r.get(0)?, events: r.get(1)?, estimated: r.get(2)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardEvent>> {
     let cutoff_ts = cutoff(days);
     let cutoff_date: String = store.conn().query_row(
@@ -913,6 +940,7 @@ mod tests {
             duration_ms: None,
             ttft_ms: None,
             is_subagent: false,
+            estimated: false,
         }
     }
 

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS usage_event (
     ttft_ms INTEGER,
     is_subagent INTEGER NOT NULL DEFAULT 0,
     cost_usd REAL,
+    estimated INTEGER NOT NULL DEFAULT 0,
     UNIQUE(source, source_event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_event(ts);
@@ -60,6 +61,13 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
+        // CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a column added
+        // after a release has to be added here too. Errors are ignored on purpose: the
+        // only one this can raise is "duplicate column name", which means it already ran.
+        let _ = conn.execute(
+            "ALTER TABLE usage_event ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         Ok(Self { conn })
     }
 
@@ -70,8 +78,8 @@ impl Store {
         let mut stmt = self.conn.prepare_cached(
             "INSERT INTO usage_event (source, source_event_id, ts, session_id, project, provider, model,
                 input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens,
-                duration_ms, ttft_ms, is_subagent, cost_usd)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+                duration_ms, ttft_ms, is_subagent, cost_usd, estimated)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
              ON CONFLICT(source, source_event_id) DO UPDATE SET
                 ts=excluded.ts, session_id=excluded.session_id, project=excluded.project,
                 provider=excluded.provider, model=excluded.model,
@@ -79,7 +87,8 @@ impl Store {
                 reasoning_tokens=excluded.reasoning_tokens,
                 cache_read_tokens=excluded.cache_read_tokens, cache_write_tokens=excluded.cache_write_tokens,
                 duration_ms=excluded.duration_ms, ttft_ms=excluded.ttft_ms,
-                is_subagent=excluded.is_subagent, cost_usd=excluded.cost_usd",
+                is_subagent=excluded.is_subagent, cost_usd=excluded.cost_usd,
+                estimated=excluded.estimated",
         )?;
         let mut n = 0;
         for e in events {
@@ -101,6 +110,7 @@ impl Store {
                 e.ttft_ms,
                 e.is_subagent as i64,
                 cost,
+                e.estimated as i64,
             ])?;
         }
         Ok(n)
@@ -494,6 +504,7 @@ mod tests {
             duration_ms: None,
             ttft_ms: None,
             is_subagent: false,
+            estimated: false,
         };
         store.insert_events(&[e]).unwrap();
         // Insert priced it at $18 (1M in + 1M out at $3/$15).
@@ -559,6 +570,7 @@ mod tests {
             duration_ms: None,
             ttft_ms: None,
             is_subagent: false,
+            estimated: false,
         };
         let e2 = UsageEvent {
             source: Source::Zcode,
@@ -576,6 +588,7 @@ mod tests {
             duration_ms: None,
             ttft_ms: None,
             is_subagent: false,
+            estimated: false,
         };
         let e3 = UsageEvent {
             source: Source::Zcode,
@@ -593,6 +606,7 @@ mod tests {
             duration_ms: None,
             ttft_ms: None,
             is_subagent: false,
+            estimated: false,
         };
         let e4 = UsageEvent {
             source: Source::Zcode,
@@ -610,6 +624,7 @@ mod tests {
             duration_ms: None,
             ttft_ms: None,
             is_subagent: false,
+            estimated: false,
         };
         store.insert_events(&[e1, e2, e3, e4]).unwrap();
 

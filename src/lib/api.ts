@@ -88,6 +88,16 @@ export interface HourRow {
   tokens: number;
 }
 
+/**
+ * Per-source count of events whose tokens the reporting app estimated rather than had
+ * reported to it. Sources with none are omitted, so an empty list is the usual answer.
+ */
+export interface EstimatedShare {
+  source: string;
+  events: number;
+  estimated: number;
+}
+
 export interface SourceStatus {
   source: string;
   display: string;
@@ -165,6 +175,8 @@ export const api = {
   heatmap: (days: number) => invoke<HeatmapCell[]>('get_heatmap', { days }),
   hourly: () => invoke<HourRow[]>('get_hourly'),
   sourceStatus: () => invoke<SourceStatus[]>('get_source_status'),
+
+  estimatedShare: () => invoke<EstimatedShare[]>('get_estimated_share'),
   syncNow: () => invoke<IngestStats[]>('sync_now'),
   exportData: (format: 'csv' | 'json') => invoke<string>('export_data', { format }),
   modelAliases: () => invoke<ModelAlias[]>('get_model_aliases'),

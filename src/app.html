@@ -17,7 +17,7 @@
           const iso = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
           const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-          const SOURCES = ['claude_code', 'codex', 'zcode', 'antigravity', 'opencode', 'gemini'];
+          const SOURCES = ['claude_code', 'codex', 'zcode', 'antigravity', 'opencode', 'gemini', 'wackchatter'];
           const WEIGHT = [0.55, 0.22, 0.1, 0.07, 0.04, 0.02];
           const MODELS = [
             ['claude-opus-5', 8.1e6, ['claude_code', 'zcode'], 118.4, 2910, 412],
@@ -124,6 +124,9 @@
                 return Array.from({ length: 24 }, (_, h) => ({ hour: h, tokens: Math.round(120000 * (h < 6 ? 1.4 - h * 0.15 : h >= 10 && h <= 18 ? 1.8 : 0.7) * (0.6 + rng() * 0.8)) }));
               case 'get_source_status':
                 return SOURCES.map((s, i) => ({ source: s, display: s.replace('_', ' '), path: '/home/dev/.config/' + s, found: i !== 5 }));
+              // Only WackChatter ever reports estimates; the harnesses are all measured.
+              case 'get_estimated_share':
+                return [{ source: 'wackchatter', events: 1400, estimated: 874 }];
               case 'get_model_aliases': return [];
               case 'get_raw_models': return MODELS.map((m) => m[0]);
               case 'get_hidden_models': return ['codex-auto-review'];

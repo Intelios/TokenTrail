@@ -146,6 +146,7 @@ mod tests {
             duration_ms: None,
             ttft_ms: None,
             is_subagent: false,
+            estimated: false,
         }
     }
 

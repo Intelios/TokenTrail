@@ -47,6 +47,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 cache_write_tokens: r.get::<_, i64>(10)?,
                 cache_read_tokens: r.get::<_, i64>(11)?,
                 is_subagent: false,
+                estimated: false,
             })
         })
         .map_err(|e| format!("zcode query: {e}"))?;

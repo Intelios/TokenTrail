@@ -1,6 +1,6 @@
 use crate::aggregate::{
-    self, DailyCacheRow, DailyModelRow, DailyRow, FamilyStatsRow, HeatmapCell, HourRow,
-    LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow, Overview, ProjectRow,
+    self, DailyCacheRow, DailyModelRow, DailyRow, EstimatedShare, FamilyStatsRow, HeatmapCell,
+    HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow, Overview, ProjectRow,
 };
 use crate::collectors;
 use crate::models::{IngestStats, ModelAlias, SourceStatus};
@@ -88,6 +88,12 @@ pub fn get_hourly(state: State<AppState>) -> Result<Vec<HourRow>, String> {
 #[tauri::command]
 pub fn get_source_status(state: State<AppState>) -> Vec<SourceStatus> {
     collectors::source_status(&state.home)
+}
+
+#[tauri::command]
+pub fn get_estimated_share(state: State<AppState>) -> Result<Vec<EstimatedShare>, String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    aggregate::estimated_share(&store).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -202,7 +208,7 @@ pub fn export_data(
         .prepare(
             "SELECT source, ts, session_id, project, model, input_tokens, output_tokens,
                     reasoning_tokens, cache_read_tokens, cache_write_tokens, duration_ms, ttft_ms,
-                    is_subagent, cost_usd
+                    is_subagent, cost_usd, estimated
              FROM usage_event ORDER BY ts",
         )
         .map_err(|e| e.to_string())?;
@@ -223,6 +229,7 @@ pub fn export_data(
                 r.get::<_, Option<i64>>(11)?,
                 r.get::<_, i64>(12)?,
                 r.get::<_, Option<f64>>(13)?,
+                r.get::<_, i64>(14)?,
             ))
         })
         .map_err(|e| e.to_string())?
@@ -245,6 +252,7 @@ pub fn export_data(
                         "reasoning_tokens": r.7, "cache_read_tokens": r.8,
                         "cache_write_tokens": r.9, "duration_ms": r.10, "ttft_ms": r.11,
                         "is_subagent": r.12 != 0, "cost_usd": r.13,
+                        "estimated": r.14 != 0,
                     })
                 })
                 .collect();
@@ -260,13 +268,13 @@ pub fn export_data(
             };
             writeln!(
                 out,
-                "source,ts,session_id,project,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,cost_usd"
+                "source,ts,session_id,project,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,cost_usd,estimated"
             )
             .map_err(|e| e.to_string())?;
             for r in &rows {
                 writeln!(
                     out,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     esc(&r.0), r.1, esc(r.2.as_deref().unwrap_or("")),
                     esc(r.3.as_deref().unwrap_or("")), esc(r.4.as_deref().unwrap_or("")),
                     r.5, r.6, r.7.unwrap_or(0), r.8, r.9,
@@ -274,6 +282,7 @@ pub fn export_data(
                     r.11.map(|t| t.to_string()).unwrap_or_default(),
                     r.12,
                     r.13.map(|c| c.to_string()).unwrap_or_default(),
+                    r.14,
                 )
                 .map_err(|e| e.to_string())?;
             }

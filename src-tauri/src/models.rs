@@ -9,6 +9,7 @@ pub enum Source {
     Opencode,
     Gemini,
     Antigravity,
+    WackChatter,
 }
 
 impl Source {
@@ -20,6 +21,7 @@ impl Source {
             Source::Opencode => "opencode",
             Source::Gemini => "gemini",
             Source::Antigravity => "antigravity",
+            Source::WackChatter => "wackchatter",
         }
     }
 
@@ -31,6 +33,7 @@ impl Source {
             Source::Opencode => "OpenCode",
             Source::Gemini => "Gemini CLI",
             Source::Antigravity => "Antigravity",
+            Source::WackChatter => "WackChatter",
         }
     }
 
@@ -43,6 +46,7 @@ impl Source {
             "opencode" => Some(Source::Opencode),
             "gemini" => Some(Source::Gemini),
             "antigravity" => Some(Source::Antigravity),
+            "wackchatter" => Some(Source::WackChatter),
             _ => None,
         }
     }
@@ -67,6 +71,13 @@ pub struct UsageEvent {
     pub duration_ms: Option<i64>,
     pub ttft_ms: Option<i64>,
     pub is_subagent: bool,
+    /// The token counts are the app's own guess, not the provider's report.
+    ///
+    /// Harnesses all report real usage, so this is false for every one of them. It exists
+    /// for sources that only sometimes get a number back — a count that was estimated and
+    /// a count that was billed are different claims, and merging them would quietly turn
+    /// one into the other.
+    pub estimated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

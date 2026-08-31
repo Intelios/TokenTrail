@@ -357,6 +357,8 @@ tbody tr:hover td { background: var(--hair); }
 }
 .tag.ok { color: var(--ink); border-color: var(--ink); background: var(--acd); }
 .tag.miss { opacity: 0.5; }
+/* A caveat, not a status: sits beside ok/miss rather than replacing one. */
+.tag.est { color: var(--ink); border-color: var(--ink); background: var(--org); white-space: nowrap; }
 
 .stag {
   display: inline-flex;

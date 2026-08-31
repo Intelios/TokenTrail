@@ -14,6 +14,7 @@ export const SOURCE_COLORS: Record<string, ChartColor> = {
   antigravity: linearGrad(GEMINI_STOPS),
   opencode: '#ff1f6f',
   gemini: '#4796E3',
+  wackchatter: '#c2ee4a',
 };
 
 export const SOURCE_LABEL: Record<string, string> = {
@@ -23,6 +24,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   opencode: 'OpenCode',
   gemini: 'Gemini CLI',
   antigravity: 'Antigravity',
+  wackchatter: 'WackChatter',
 };
 
 /// Default palette for models with no brand family — TokenTrail's own

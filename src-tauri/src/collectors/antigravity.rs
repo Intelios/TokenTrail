@@ -116,6 +116,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 duration_ms,
                 ttft_ms: None,
                 is_subagent: false,
+                estimated: false,
             });
         }
         processed += store

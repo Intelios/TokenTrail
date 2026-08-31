@@ -3,6 +3,7 @@ pub mod claude_code;
 pub mod codex;
 pub mod gemini;
 pub mod opencode;
+pub mod wackchatter;
 pub mod zcode;
 
 use crate::models::{IngestStats, Source, SourceStatus};
@@ -21,6 +22,7 @@ pub fn sync_all(store: &Store, home: &Path) -> Vec<IngestStats> {
         ("opencode", opencode::collect),
         ("gemini", gemini::collect),
         ("antigravity", antigravity::collect),
+        ("wackchatter", wackchatter::collect),
     ];
     runs.into_iter()
         .map(|(name, f)| match f(store, home) {
@@ -38,6 +40,8 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
         (Source::Opencode, home.join(".local/share/opencode")),
         (Source::Gemini, home.join(".gemini/tmp")),
         (Source::Antigravity, home.join(".gemini/antigravity/conversations")),
+        // The log, not the library: the library moves, and this path never does.
+        (Source::WackChatter, home.join(".wackchatter/usage.jsonl")),
     ];
     paths
         .into_iter()

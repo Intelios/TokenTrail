@@ -81,6 +81,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 duration_ms: None,
                 ttft_ms: None,
                 is_subagent: meta.is_subagent,
+                estimated: false,
             });
         }
         processed += store.insert_events(&events).map_err(|e| format!("codex insert: {e}"))?;

@@ -26,8 +26,13 @@ TokenTrail is a desktop app that reads the usage logs your AI coding tools alrea
 | OpenCode | Per-project usage |
 | Gemini CLI | Session history |
 | Antigravity | Conversation databases |
+| WackChatter | Roleplay chats — opt-in usage log, plus full transcript history |
 
 If a tool isn't installed, it's simply skipped — TokenTrail shows whatever it finds.
+
+WackChatter is the odd one out: not a coding tool, and the only source that can report a
+token count it worked out itself rather than one a provider billed. Those are marked
+**estimated** in Settings and never contribute a cost figure.
 
 ## What you get
 

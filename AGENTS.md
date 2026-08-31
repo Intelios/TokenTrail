@@ -1,6 +1,8 @@
 # TokenTrail — Workspace Instructions
 
-TokenTrail is a Tauri desktop app that aggregates AI-coding usage across local harnesses (ZCode, Claude Code, Codex, OpenCode, Gemini CLI, Antigravity) and shows it in a SvelteKit + ECharts dashboard.
+TokenTrail is a Tauri desktop app that aggregates AI usage across local tools (ZCode, Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, WackChatter) and shows it in a SvelteKit + ECharts dashboard.
+
+WackChatter note: its collector is the only one that reads two places for one source. `~/.wackchatter/usage.jsonl` is a live log the app writes when the user opts in — the only record of generations that never become a stored message (Arena rounds, rolling summaries, memory extraction, persona derivation). `<library>/chats.db` holds the transcripts, which carry per-swipe counts going back years; `~/.wackchatter/library.json` is how it is found, because the library moves. The two overlap for ordinary replies and dedupe on the generation id WackChatter mints per request, so `wackchatter.rs` is also the worked example of why event identity has to be stable.
 
 Antigravity note: its collector reads `~/.gemini/antigravity/conversations/*.db` — per-conversation SQLite files whose `gen_metadata` rows are protobuf blobs (ChatModelMetadata wire layout, hand-parsed in `antigravity.rs`). The internal format is undocumented and may change between Antigravity releases; the wire reader is deliberately tolerant and skips unparseable rows.
 
@@ -50,6 +52,7 @@ bun run tauri build  # production build
 - **Frontend never reads harness files directly.** All data comes from Tauri commands exposed through `src/lib/api.ts`. Add new commands in `commands.rs` and immediately expose them in `api.ts`.
 - **Backend never writes to harness files/databases.** All collectors open external databases read-only (`store::open_readonly`) and read log files with `read_tail`. TokenTrail's own database is the only writable store.
 - **Event identity is (source, source_event_id).** New collectors must provide stable IDs so re-ingestion is idempotent; the store upserts on conflict.
+- **An estimated count is not a measured one.** `usage_event.estimated` marks tokens the reporting app worked out itself because the provider reported none. Only WackChatter ever sets it. Never merge the two in a figure that reads as measured, and never derive a cost from an estimated row.
 - **Model strings are normalized before pricing lookup.** Use the same logic in both Rust (`pricing::normalize_model`) and TypeScript (`format.ts` source names). Do not duplicate pricing math on the frontend.
 - **Thread / subagent handling matters.** Claude Code flags `subagents/` paths and `isSidechain`; Codex uses `thread_source == "subagent"`. Keep subagent detection with the collector that knows the harness schema.
 
@@ -78,6 +81,7 @@ bun run tauri build  # production build
 - User-hidden models live in the `hidden_model` table (display names); every aggregate query in `aggregate.rs` excludes them via the `NOT_HIDDEN` fragment. Hiding never touches event data; `export_data` is unfiltered.
 - Cost is an **API-equivalent estimate** from bundled list prices, not actual subscription spend. Mention this whenever UI text touches cost.
 - `pricing.json` lists exact models and prefix-ordered families. If you add a new model family, add an entry with a longer-specific prefix *before* catch-all prefixes.
+- Schema changes need **both** an edit to the `SCHEMA` string in `store.rs` and an idempotent `ALTER TABLE` in `Store::open` — `CREATE TABLE IF NOT EXISTS` leaves an existing database untouched. `estimated` is the worked example.
 - Costs are stored per event at ingest time (`store.rs`), so changing `pricing.json` alone never updates history. Startup compares `pricing::pricing_fingerprint()` against the `pricing_fingerprint` watermark and runs `store::reprice_all()` when the embedded table changed. Thinking tokens are billed at the output rate for Antigravity only; other collectors' reported output already includes thinking.
 
 ## Tauri configuration
@@ -94,7 +98,7 @@ bun run tauri build  # production build
 
 ## Files to read before changing sensitive areas
 
-- New harness source → read an existing collector (`claude_code.rs` is the most complete JSONL example) and `models.rs`.
+- New harness source → read an existing collector (`claude_code.rs` is the most complete JSONL example; `wackchatter.rs` if the source needs both a log and a database) and `models.rs`. Adding a source means touching `models.rs` (enum + all three arms), `collectors/mod.rs` (the `runs` vec **and** `source_status`), `src/lib/format.ts` (`SOURCE_COLORS` / `SOURCE_LABEL`), `src/routes/+page.svelte` (`SOURCE_ORDER`) and the `?mock` fixture in `src/app.html`.
 - New aggregate metric → read `aggregate.rs` and mirror types in both `commands.rs` and `src/lib/api.ts`.
 - New UI route/page → read `src/routes/+layout.svelte` and `src/app.css` first.
 - Pricing model support → read `src-tauri/src/pricing.rs` and `src-tauri/pricing/pricing.json`.
