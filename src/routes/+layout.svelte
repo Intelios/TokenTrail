@@ -26,10 +26,46 @@
   let lastSync = $state('');
   let syncing = $state(false);
 
+  /* ── Nav pill refs ─────────────────────────────────────────────── */
+  let navEl: HTMLElement | undefined = $state();
+  let linkEls: (HTMLAnchorElement | undefined)[] = $state([]);
+  let pillReady = $state(false); // suppresses transition on first position
+
   function isActive(href: string): boolean {
     const path = $page.url.pathname;
     return href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
   }
+
+  /* ── Position the pill whenever the route changes ──────────────── */
+  $effect(() => {
+    // subscribe to the reactive pathname
+    const _path = $page.url.pathname;
+
+    if (!navEl) return;
+
+    const idx = links.findIndex((l) => isActive(l.href));
+    const el = idx >= 0 ? linkEls[idx] : undefined;
+    if (!el) return;
+
+    const navRect = navEl.getBoundingClientRect();
+    const linkRect = el.getBoundingClientRect();
+    const x = linkRect.left - navRect.left;
+    const w = linkRect.width;
+
+    if (!pillReady) {
+      // first position — jump without animating
+      navEl.classList.add('no-animate');
+      navEl.style.setProperty('--pill-x', `${x}px`);
+      navEl.style.setProperty('--pill-w', `${w}px`);
+      // force reflow then re-enable transitions
+      navEl.offsetHeight;
+      navEl.classList.remove('no-animate');
+      pillReady = true;
+    } else {
+      navEl.style.setProperty('--pill-x', `${x}px`);
+      navEl.style.setProperty('--pill-w', `${w}px`);
+    }
+  });
 
   async function doSync() {
     syncing = true;
@@ -61,9 +97,9 @@
 
 <header class="topnav">
   <div class="mk">TokenTrail</div>
-  <nav>
+  <nav bind:this={navEl}>
     {#each links as l, i}
-      <a href={l.href} class:on={isActive(l.href)}><u>0{i + 1}</u>{l.label}</a>
+      <a href={l.href} class:on={isActive(l.href)} bind:this={linkEls[i]}><u>0{i + 1}</u>{l.label}</a>
     {/each}
   </nav>
   <button class="sy" onclick={doSync} disabled={syncing} title="Sync now">
