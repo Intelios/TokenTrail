@@ -156,6 +156,54 @@ export interface ModelDetail {
   total_window_tokens: number;
 }
 
+export interface ProjectModelRow {
+  model: string;
+  tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  events: number;
+  sessions: number;
+  cost_usd: number | null;
+  first_ts: number | null;
+  last_ts: number | null;
+}
+
+export interface SessionRow {
+  session_id: string;
+  source: string;
+  events: number;
+  tokens: number;
+  cost_usd: number | null;
+  first_ts: number;
+  last_ts: number;
+  models: string[];
+}
+
+export interface ProjectDetail {
+  project: string;
+  tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+  sessions: number;
+  cost_usd: number | null;
+  first_ts: number | null;
+  last_ts: number | null;
+  active_days: number;
+  current_streak: number;
+  longest_streak: number;
+  peak_day: string | null;
+  peak_day_tokens: number;
+  by_model: ProjectModelRow[];
+  by_source: SourceTotals[];
+  daily: HeatmapCell[];
+  sessions_list: SessionRow[];
+  total_window_tokens: number;
+}
+
 export interface LeaderboardEvent {
   kind: 'overtake' | 'record' | 'debut' | 'first_seen';
   model: string;
@@ -175,6 +223,8 @@ export const api = {
   modelDetail: (model: string, days: number) =>
     invoke<ModelDetail | null>('get_model_detail', { model, days }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
+  projectDetail: (project: string, days: number) =>
+    invoke<ProjectDetail | null>('get_project_detail', { project, days }),
   heatmap: (days: number) => invoke<HeatmapCell[]>('get_heatmap', { days }),
   hourly: () => invoke<HourRow[]>('get_hourly'),
   sourceStatus: () => invoke<SourceStatus[]>('get_source_status'),

@@ -1,6 +1,7 @@
 use crate::aggregate::{
     self, DailyCacheRow, DailyModelRow, DailyRow, EstimatedShare, FamilyStatsRow, HeatmapCell,
-    HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow, Overview, ProjectRow,
+    HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow, Overview, ProjectDetail,
+    ProjectRow,
 };
 use crate::collectors;
 use crate::models::{IngestStats, ModelAlias, SourceStatus};
@@ -72,6 +73,16 @@ pub fn get_model_detail(
 pub fn get_by_project(state: State<AppState>, days: i64) -> Result<Vec<ProjectRow>, String> {
     let store = state.store.lock().map_err(|_| "store lock poisoned")?;
     aggregate::by_project(&store, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_project_detail(
+    state: State<AppState>,
+    project: String,
+    days: i64,
+) -> Result<Option<ProjectDetail>, String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    aggregate::project_detail(&store, &project, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

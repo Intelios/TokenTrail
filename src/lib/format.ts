@@ -90,8 +90,22 @@ export function fmtDateTime(ts: number | null): string {
 }
 
 export function basename(p: string): string {
-  const parts = p.split('/').filter(Boolean);
+  const parts = p.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? p;
+}
+
+export function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) {
+    return remSecs > 0 ? `${mins}m ${remSecs}s` : `${mins}m`;
+  }
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
 }
 
 /// Provider brand colors per model family — keys must stay in sync with the

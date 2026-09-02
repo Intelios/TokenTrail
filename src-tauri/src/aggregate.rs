@@ -156,6 +156,57 @@ pub struct ModelDetail {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProjectModelRow {
+    pub model: String,
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub cost_usd: Option<f64>,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionRow {
+    pub session_id: String,
+    pub source: String,
+    pub events: i64,
+    pub tokens: i64,
+    pub cost_usd: Option<f64>,
+    pub first_ts: i64,
+    pub last_ts: i64,
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectDetail {
+    pub project: String,
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub cost_usd: Option<f64>,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub active_days: i64,
+    pub current_streak: i64,
+    pub longest_streak: i64,
+    pub peak_day: Option<String>,
+    pub peak_day_tokens: i64,
+    pub by_model: Vec<ProjectModelRow>,
+    pub by_source: Vec<SourceTotals>,
+    pub daily: Vec<HeatmapCell>,
+    pub sessions_list: Vec<SessionRow>,
+    pub total_window_tokens: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct FamilyStatsRow {
     pub family: String,
     pub tokens: i64,
@@ -634,6 +685,242 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// Full detail card for a single project, keyed by project path (or 'unknown'),
+/// filtered by range in days. Returns `None` when the project has no recorded events.
+pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Option<ProjectDetail>> {
+    let is_unknown = project == "unknown";
+    let exists_sql = if is_unknown {
+        format!(
+            "SELECT 1 FROM usage_event u WHERE (u.project IS NULL OR u.project = 'unknown') AND {H} LIMIT 1",
+            H = NOT_HIDDEN
+        )
+    } else {
+        format!(
+            "SELECT 1 FROM usage_event u WHERE u.project = ?1 AND {H} LIMIT 1",
+            H = NOT_HIDDEN
+        )
+    };
+    let mut exists_stmt = store.conn().prepare(&exists_sql)?;
+    let exists_res = if is_unknown {
+        exists_stmt.query_row([], |_| Ok(()))
+    } else {
+        exists_stmt.query_row(rusqlite::params![project], |_| Ok(()))
+    };
+    match exists_res {
+        Ok(_) => {}
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(e) => return Err(e),
+    }
+
+    let cutoff_ts = cutoff(days);
+    let proj_filter = if is_unknown {
+        "(u.project IS NULL OR u.project = 'unknown')"
+    } else {
+        "u.project = ?2"
+    };
+
+    let sql = format!(
+        "SELECT COALESCE(SUM(u.input_tokens),0),
+                COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
+                COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
+                COALESCE(SUM(u.reasoning_tokens),0),
+                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
+         FROM usage_event u
+         WHERE u.ts >= ?1 AND {proj_filter} AND {H}",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt = store.conn().prepare(&sql)?;
+    let map_row = |r: &rusqlite::Row| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, i64>(6)?,
+            r.get::<_, i64>(7)?,
+            r.get::<_, Option<f64>>(8)?,
+            r.get::<_, Option<i64>>(9)?,
+            r.get::<_, Option<i64>>(10)?,
+        ))
+    };
+    let (inp, out, cr, cw, reasoning, total, events, sessions, cost, first_ts, last_ts) = if is_unknown {
+        stmt.query_row(rusqlite::params![cutoff_ts], map_row)?
+    } else {
+        stmt.query_row(rusqlite::params![cutoff_ts, project], map_row)?
+    };
+
+    let (inp, out, cr, cw, reasoning, total, events, sessions, cost, first_ts, last_ts) = if events == 0 {
+        (0, 0, 0, 0, 0, 0, 0, 0, None, None, None)
+    } else {
+        (inp, out, cr, cw, reasoning, total, events, sessions, cost, first_ts, last_ts)
+    };
+
+    // by_model
+    let sql_model = format!(
+        "SELECT COALESCE(a.canonical, u.model, 'unknown'),
+                COALESCE(SUM({T}),0),
+                COALESCE(SUM(u.input_tokens),0),
+                COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
+                COUNT(*),
+                COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd),
+                MIN(u.ts),
+                MAX(u.ts)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         GROUP BY 1 ORDER BY 2 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_model = store.conn().prepare(&sql_model)?;
+    let map_model = |r: &rusqlite::Row| {
+        Ok(ProjectModelRow {
+            model: r.get(0)?,
+            tokens: r.get(1)?,
+            input_tokens: r.get(2)?,
+            output_tokens: r.get(3)?,
+            events: r.get(4)?,
+            sessions: r.get(5)?,
+            cost_usd: r.get(6)?,
+            first_ts: r.get(7)?,
+            last_ts: r.get(8)?,
+        })
+    };
+    let by_model: Vec<ProjectModelRow> = if is_unknown {
+        stmt_model.query_map(rusqlite::params![cutoff_ts], map_model)?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt_model.query_map(rusqlite::params![cutoff_ts, project], map_model)?.collect::<Result<Vec<_>, _>>()?
+    };
+
+    // by_source
+    let sql_src = format!(
+        "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
+         FROM usage_event u
+         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         GROUP BY u.source ORDER BY 2 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_src = store.conn().prepare(&sql_src)?;
+    let map_src = |r: &rusqlite::Row| {
+        Ok(SourceTotals {
+            source: r.get(0)?,
+            tokens: r.get(1)?,
+            events: r.get(2)?,
+            sessions: r.get(3)?,
+            cost_usd: r.get(4)?,
+        })
+    };
+    let by_source: Vec<SourceTotals> = if is_unknown {
+        stmt_src.query_map(rusqlite::params![cutoff_ts], map_src)?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt_src.query_map(rusqlite::params![cutoff_ts, project], map_src)?.collect::<Result<Vec<_>, _>>()?
+    };
+
+    // daily series
+    let sql_daily = format!(
+        "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
+         FROM usage_event u
+         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         GROUP BY d ORDER BY d",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_daily = store.conn().prepare(&sql_daily)?;
+    let map_daily = |r: &rusqlite::Row| {
+        Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
+    };
+    let daily: Vec<HeatmapCell> = if is_unknown {
+        stmt_daily.query_map(rusqlite::params![cutoff_ts], map_daily)?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt_daily.query_map(rusqlite::params![cutoff_ts, project], map_daily)?.collect::<Result<Vec<_>, _>>()?
+    };
+
+    let dates: Vec<String> = daily.iter().map(|d| d.date.clone()).collect();
+    let active_days = dates.len() as i64;
+    let (current_streak, longest_streak) = streaks(&dates);
+    let peak = daily.iter().max_by_key(|d| d.tokens);
+
+    // sessions_list
+    let sql_sessions = format!(
+        "SELECT COALESCE(u.session_id, 'unknown'),
+                u.source,
+                COUNT(*),
+                COALESCE(SUM({T}),0),
+                SUM(u.cost_usd),
+                MIN(u.ts),
+                MAX(u.ts),
+                GROUP_CONCAT(DISTINCT COALESCE(a.canonical, u.model, 'unknown'))
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         GROUP BY COALESCE(u.session_id, 'unknown'), u.source
+         ORDER BY MAX(u.ts) DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_sessions = store.conn().prepare(&sql_sessions)?;
+    let map_session = |r: &rusqlite::Row| {
+        let models_str: Option<String> = r.get(7)?;
+        let mut models: Vec<String> = models_str
+            .map(|s| s.split(',').filter(|m| !m.is_empty()).map(String::from).collect())
+            .unwrap_or_default();
+        models.sort();
+        Ok(SessionRow {
+            session_id: r.get(0)?,
+            source: r.get(1)?,
+            events: r.get(2)?,
+            tokens: r.get(3)?,
+            cost_usd: r.get(4)?,
+            first_ts: r.get(5)?,
+            last_ts: r.get(6)?,
+            models,
+        })
+    };
+    let sessions_list: Vec<SessionRow> = if is_unknown {
+        stmt_sessions.query_map(rusqlite::params![cutoff_ts], map_session)?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt_sessions.query_map(rusqlite::params![cutoff_ts, project], map_session)?.collect::<Result<Vec<_>, _>>()?
+    };
+
+    // total window tokens across all projects
+    let total_sql = format!(
+        "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ?1 AND {H}",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut total_stmt = store.conn().prepare(&total_sql)?;
+    let total_window_tokens: i64 = total_stmt.query_row([cutoff_ts], |r| r.get(0))?;
+
+    Ok(Some(ProjectDetail {
+        project: project.to_string(),
+        tokens: total,
+        input_tokens: inp,
+        output_tokens: out,
+        reasoning_tokens: reasoning,
+        cache_read_tokens: cr,
+        cache_write_tokens: cw,
+        events,
+        sessions,
+        cost_usd: cost,
+        first_ts,
+        last_ts,
+        active_days,
+        current_streak,
+        longest_streak,
+        peak_day: peak.map(|p| p.date.clone()),
+        peak_day_tokens: peak.map(|p| p.tokens).unwrap_or(0),
+        by_model,
+        by_source,
+        daily,
+        sessions_list,
+        total_window_tokens,
+    }))
 }
 
 pub fn heatmap(store: &Store, days: i64) -> DbResult<Vec<HeatmapCell>> {
@@ -1516,5 +1803,162 @@ mod tests {
         assert!(!events.iter().any(|e| e.kind == "first_seen" && e.model == "raw-a1"));
         // unmerged model DOES emit first_seen
         assert!(events.iter().any(|e| e.kind == "first_seen" && e.model == "unmerged-model"));
+    }
+
+    #[test]
+    fn project_detail_returns_none_for_nonexistent_project() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        assert!(project_detail(&store, "nonexistent-proj", 30).unwrap().is_none());
+        assert!(project_detail(&store, "unknown", 30).unwrap().is_none());
+    }
+
+    #[test]
+    fn project_detail_aggregates_project_and_sessions() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    source_event_id: "cc-1".into(),
+                    project: Some("/path/to/my-app".into()),
+                    session_id: Some("sess-1".into()),
+                    input_tokens: 500,
+                    output_tokens: 100,
+                    ..test_event("claude-3-7-sonnet", now - 5000, 500)
+                },
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    source_event_id: "cc-2".into(),
+                    project: Some("/path/to/my-app".into()),
+                    session_id: Some("sess-1".into()),
+                    input_tokens: 400,
+                    output_tokens: 50,
+                    ..test_event("gpt-4o", now - 4000, 400)
+                },
+                UsageEvent {
+                    source: Source::Antigravity,
+                    source_event_id: "ag-1".into(),
+                    project: Some("/path/to/my-app".into()),
+                    session_id: Some("sess-2".into()),
+                    input_tokens: 300,
+                    output_tokens: 200,
+                    reasoning_tokens: Some(50),
+                    ..test_event("gemini-2.5-pro", now - 1000, 300)
+                },
+                UsageEvent {
+                    source: Source::Zcode,
+                    source_event_id: "zc-other".into(),
+                    project: Some("/path/to/other".into()),
+                    session_id: Some("sess-other".into()),
+                    input_tokens: 1000,
+                    output_tokens: 200,
+                    ..test_event("gpt-5", now, 1000)
+                },
+            ])
+            .unwrap();
+
+        let detail = project_detail(&store, "/path/to/my-app", 30).unwrap().unwrap();
+        assert_eq!(detail.project, "/path/to/my-app");
+        assert_eq!(detail.events, 3);
+        assert_eq!(detail.sessions, 2);
+        assert_eq!(detail.by_source.len(), 2);
+        assert_eq!(detail.by_model.len(), 3);
+        assert_eq!(detail.sessions_list.len(), 2);
+
+        // sessions_list is ordered by last_ts DESC
+        assert_eq!(detail.sessions_list[0].session_id, "sess-2");
+        assert_eq!(detail.sessions_list[0].events, 1);
+        assert_eq!(detail.sessions_list[0].models, vec!["gemini-2.5-pro"]);
+
+        assert_eq!(detail.sessions_list[1].session_id, "sess-1");
+        assert_eq!(detail.sessions_list[1].events, 2);
+        assert_eq!(detail.sessions_list[1].models, vec!["claude-3-7-sonnet", "gpt-4o"]);
+
+        // total window tokens includes /path/to/other (1200) + 1550 = 2750
+        assert_eq!(detail.total_window_tokens, 2750);
+    }
+
+    #[test]
+    fn project_detail_handles_unknown_and_null_project() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                UsageEvent {
+                    source: Source::Zcode,
+                    source_event_id: "zc-1".into(),
+                    project: None,
+                    session_id: Some("sess-u1".into()),
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    ..test_event("gpt-5", now - 2000, 100)
+                },
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    source_event_id: "cc-1".into(),
+                    project: Some("unknown".into()),
+                    session_id: Some("sess-u2".into()),
+                    input_tokens: 200,
+                    output_tokens: 40,
+                    ..test_event("gpt-5", now - 1000, 200)
+                },
+            ])
+            .unwrap();
+
+        let detail = project_detail(&store, "unknown", 30).unwrap().unwrap();
+        assert_eq!(detail.project, "unknown");
+        assert_eq!(detail.events, 2);
+        assert_eq!(detail.sessions, 2);
+        assert_eq!(detail.tokens, 360);
+        assert_eq!(detail.sessions_list.len(), 2);
+    }
+
+    #[test]
+    fn project_detail_respects_hidden_and_alias() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                UsageEvent {
+                    source: Source::Zcode,
+                    source_event_id: "zc-1".into(),
+                    project: Some("proj-x".into()),
+                    session_id: Some("s1".into()),
+                    input_tokens: 100,
+                    output_tokens: 20,
+                    ..test_event("raw-mod-1", now, 100)
+                },
+                UsageEvent {
+                    source: Source::Zcode,
+                    source_event_id: "zc-2".into(),
+                    project: Some("proj-x".into()),
+                    session_id: Some("s1".into()),
+                    input_tokens: 150,
+                    output_tokens: 30,
+                    ..test_event("raw-mod-2", now, 150)
+                },
+                UsageEvent {
+                    source: Source::Zcode,
+                    source_event_id: "zc-3".into(),
+                    project: Some("proj-x".into()),
+                    session_id: Some("s2".into()),
+                    input_tokens: 500,
+                    output_tokens: 100,
+                    ..test_event("hidden-mod", now, 500)
+                },
+            ])
+            .unwrap();
+
+        store.merge_models(&["raw-mod-1".into(), "raw-mod-2".into()], "raw-mod-1").unwrap();
+        store.hide_models(&["hidden-mod".into()]).unwrap();
+
+        let detail = project_detail(&store, "proj-x", 30).unwrap().unwrap();
+        assert_eq!(detail.events, 2); // hidden-mod excluded
+        assert_eq!(detail.by_model.len(), 1);
+        assert_eq!(detail.by_model[0].model, "raw-mod-1");
+        assert_eq!(detail.by_model[0].tokens, 300);
+        assert_eq!(detail.sessions_list.len(), 1);
+        assert_eq!(detail.sessions_list[0].models, vec!["raw-mod-1"]);
     }
 }

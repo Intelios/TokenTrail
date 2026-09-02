@@ -86,6 +86,7 @@ pub fn run() {
             commands::get_model_stats,
             commands::get_model_detail,
             commands::get_by_project,
+            commands::get_project_detail,
             commands::get_heatmap,
             commands::get_hourly,
             commands::get_source_status,

@@ -121,6 +121,72 @@
               }
               case 'get_by_project':
                 return PROJECTS.map((p, i) => ({ project: p[0], tokens: Math.round(totalTokens * p[1]), events: Math.round(totalEvents * p[1]), sessions: Math.round(totalSessions * p[1]), cost_usd: totalCost * p[1], first_ts: Date.now() - 400 * 86400000, last_ts: Date.now() - i * 172800000 }));
+              case 'get_project_detail': {
+                const proj = PROJECTS.find((x) => x[0] === args.project);
+                if (!proj && args.project !== 'unknown') return null;
+                const pShare = proj ? proj[1] : 0.05;
+                const pTokens = Math.round(totalTokens * pShare);
+                const pEvents = Math.round(totalEvents * pShare);
+                const pSessions = Math.round(totalSessions * pShare);
+                const pCost = totalCost * pShare;
+                const n = Math.min(args.days ?? 90, 150);
+                const daily = Array.from({ length: n }, (_, i) => ({ date: iso(n - 1 - i), tokens: Math.round(pTokens / 90 * (0.2 + rng() * 1.8)) }));
+                const by_model = MODELS.slice(0, 4).map((m, i) => {
+                  const share = [0.5, 0.3, 0.15, 0.05][i];
+                  return {
+                    model: m[0],
+                    tokens: Math.round(pTokens * share),
+                    input_tokens: Math.round(pTokens * share * 0.65),
+                    output_tokens: Math.round(pTokens * share * 0.35),
+                    events: Math.round(pEvents * share),
+                    sessions: Math.max(1, Math.round(pSessions * share)),
+                    cost_usd: pCost * share,
+                    first_ts: Date.now() - 120 * 86400000,
+                    last_ts: Date.now() - i * 3600000,
+                  };
+                });
+                const by_source = SOURCES.slice(0, 3).map((s, i) => ({
+                  source: s,
+                  tokens: Math.round(pTokens * (i === 0 ? 0.6 : i === 1 ? 0.3 : 0.1)),
+                  events: Math.round(pEvents * (i === 0 ? 0.6 : i === 1 ? 0.3 : 0.1)),
+                  sessions: Math.max(1, Math.round(pSessions * (i === 0 ? 0.6 : i === 1 ? 0.3 : 0.1))),
+                  cost_usd: pCost * (i === 0 ? 0.6 : i === 1 ? 0.3 : 0.1),
+                }));
+                const sessions_list = Array.from({ length: Math.min(pSessions, 15) }, (_, i) => ({
+                  session_id: 'sess-' + (1000 + i) + '-mock',
+                  source: SOURCES[i % 3],
+                  events: Math.round(10 + rng() * 40),
+                  tokens: Math.round(pTokens / pSessions * (0.5 + rng())),
+                  cost_usd: (pCost / pSessions) * (0.5 + rng()),
+                  first_ts: Date.now() - (i * 86400000 + Math.round(rng() * 3600000)),
+                  last_ts: Date.now() - i * 86400000,
+                  models: [MODELS[i % 4][0]],
+                }));
+                return {
+                  project: args.project,
+                  tokens: pTokens,
+                  input_tokens: Math.round(pTokens * 0.65),
+                  output_tokens: Math.round(pTokens * 0.35),
+                  reasoning_tokens: Math.round(pTokens * 0.08),
+                  cache_read_tokens: Math.round(pTokens * 1.4),
+                  cache_write_tokens: Math.round(pTokens * 0.3),
+                  events: pEvents,
+                  sessions: pSessions,
+                  cost_usd: pCost,
+                  first_ts: Date.now() - 150 * 86400000,
+                  last_ts: Date.now() - 1800000,
+                  active_days: Math.min(n, 42),
+                  current_streak: 5,
+                  longest_streak: 18,
+                  peak_day: iso(4),
+                  peak_day_tokens: Math.round(pTokens / 20),
+                  by_model,
+                  by_source,
+                  daily,
+                  sessions_list,
+                  total_window_tokens: totalTokens,
+                };
+              }
               case 'get_heatmap':
                 return Array.from({ length: args.days ?? 365 }, (_, i) => ({ date: iso((args.days ?? 365) - 1 - i), tokens: i % 7 < 5 && rng() > 0.25 ? Math.round(200000 + rng() * 2400000) : 0 }));
               case 'get_hourly':

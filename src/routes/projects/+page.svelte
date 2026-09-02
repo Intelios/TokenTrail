@@ -1,16 +1,25 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { api, type ProjectRow } from '$lib/api';
   import { basename, fmtCost, fmtDate, fmtTokens } from '$lib/format';
+  import { readPref, writePref } from '$lib/prefs';
 
   const RANGES: [number, string][] = [
+    [7, '7D'],
     [30, '30D'],
     [90, '90D'],
     [3650, 'ALL'],
   ];
-  let days = $state(3650);
+  const PREF_DAYS = 'tt.projects.days';
+
+  let days = $state(readPref(PREF_DAYS, 3650, (v) => RANGES.some(([d]) => d === v)));
   let projects = $state<ProjectRow[]>([]);
   let error = $state('');
+
+  function projectUrl(p: string): string {
+    return '/projects/' + encodeURIComponent(p);
+  }
 
   async function load() {
     try {
@@ -24,6 +33,10 @@
   $effect(() => {
     days;
     load();
+  });
+
+  $effect(() => {
+    writePref(PREF_DAYS, days);
   });
 
   onMount(() => {
@@ -65,9 +78,19 @@
         </thead>
         <tbody>
           {#each projects as p, i}
-            <tr class="up" style="animation-delay:{Math.min(i, 14) * 35}ms">
+            <tr
+              class="up projrow"
+              style="animation-delay:{Math.min(i, 14) * 35}ms; cursor:pointer"
+              onclick={() => goto(projectUrl(p.project))}
+            >
               <td>
-                <div>{p.project === 'unknown' ? 'Unknown' : basename(p.project)}</div>
+                <a
+                  class="projectlink"
+                  href={projectUrl(p.project)}
+                  onclick={(e) => e.stopPropagation()}
+                >
+                  {p.project === 'unknown' ? 'Unknown' : basename(p.project)}
+                </a>
                 {#if p.project !== 'unknown'}
                   <div class="path">{p.project}</div>
                 {/if}
@@ -116,5 +139,22 @@
   }
   .tw th {
     padding: 9px clamp(22px, 1.8vw, 40px);
+  }
+  .projrow:hover {
+    background: rgba(13, 13, 11, 0.03);
+  }
+  .projectlink {
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .projectlink:hover {
+    color: var(--org);
+  }
+  .path {
+    font: 400 10.5px/1.3 var(--font-mono);
+    opacity: 0.55;
+    margin-top: 2px;
   }
 </style>
