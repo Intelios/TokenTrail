@@ -152,6 +152,7 @@ pub struct ModelDetail {
     pub by_source: Vec<SourceTotals>,
     pub by_project: Vec<ProjectRow>,
     pub daily: Vec<HeatmapCell>,
+    pub total_window_tokens: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -376,9 +377,25 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
     Ok(rows)
 }
 
-/// Full detail card for a single model, keyed by display name (all-time).
+/// Full detail card for a single model, keyed by display name, filtered by range in days.
 /// Returns `None` when the model has no visible usage events.
-pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>> {
+pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<ModelDetail>> {
+    let exists_sql = format!(
+        "SELECT COALESCE(a.canonical, u.model, 'unknown')
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         LIMIT 1",
+        H = NOT_HIDDEN
+    );
+    let mut exists_stmt = store.conn().prepare(&exists_sql)?;
+    let canonical_name = match exists_stmt.query_row(rusqlite::params![model], |r| r.get::<_, String>(0)) {
+        Ok(name) => name,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+
+    let cutoff_ts = cutoff(days);
+
     let sql = format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(SUM(u.input_tokens),0),
@@ -388,13 +405,13 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
                 COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
                 SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
-         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY 1",
         T = TOKENS,
         H = NOT_HIDDEN
     );
     let mut stmt = store.conn().prepare(&sql)?;
-    let row = stmt.query_row(rusqlite::params![model], |r| {
+    let row = stmt.query_row(rusqlite::params![cutoff_ts, model], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, i64>(1)?,
@@ -413,7 +430,9 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
 
     let (name, inp, out, cr, cw, reasoning, total, events, sessions, cost, first_ts, last_ts) = match row {
         Ok(r) => r,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            (canonical_name, 0, 0, 0, 0, 0, 0, 0, 0, None, None, None)
+        }
         Err(e) => return Err(e),
     };
 
@@ -421,14 +440,14 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
     let sql_src = format!(
         "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
-         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY u.source ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
     );
     let mut stmt_src = store.conn().prepare(&sql_src)?;
     let by_source: Vec<SourceTotals> = stmt_src
-        .query_map(rusqlite::params![model], |r| {
+        .query_map(rusqlite::params![cutoff_ts, model], |r| {
             Ok(SourceTotals {
                 source: r.get(0)?,
                 tokens: r.get(1)?,
@@ -444,14 +463,14 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
         "SELECT COALESCE(u.project, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
                 COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
-         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
     );
     let mut stmt_proj = store.conn().prepare(&sql_proj)?;
     let by_project: Vec<ProjectRow> = stmt_proj
-        .query_map(rusqlite::params![model], |r| {
+        .query_map(rusqlite::params![cutoff_ts, model], |r| {
             Ok(ProjectRow {
                 project: r.get(0)?,
                 tokens: r.get(1)?,
@@ -468,14 +487,14 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
     let sql_daily = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
-         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY d ORDER BY d",
         T = TOKENS,
         H = NOT_HIDDEN
     );
     let mut stmt_daily = store.conn().prepare(&sql_daily)?;
     let daily: Vec<HeatmapCell> = stmt_daily
-        .query_map(rusqlite::params![model], |r| {
+        .query_map(rusqlite::params![cutoff_ts, model], |r| {
             Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -484,6 +503,14 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
     let active_days = dates.len() as i64;
     let (current_streak, longest_streak) = streaks(&dates);
     let peak = daily.iter().max_by_key(|d| d.tokens);
+
+    let total_sql = format!(
+        "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ?1 AND {H}",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut total_stmt = store.conn().prepare(&total_sql)?;
+    let total_window_tokens: i64 = total_stmt.query_row([cutoff_ts], |r| r.get(0))?;
 
     Ok(Some(ModelDetail {
         model: name,
@@ -506,6 +533,7 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
         by_source,
         by_project,
         daily,
+        total_window_tokens,
     }))
 }
 
@@ -1147,7 +1175,7 @@ mod tests {
             .unwrap();
 
         // Before merging: "GLM-5.3" matches the two raw rows with that model name.
-        let d = model_detail(&store, "GLM-5.3").unwrap().unwrap();
+        let d = model_detail(&store, "GLM-5.3", 30).unwrap().unwrap();
         assert_eq!(d.tokens, 155); // (100+20) + (30+5)
         assert_eq!(d.events, 2);
 
@@ -1156,7 +1184,7 @@ mod tests {
             .unwrap();
 
         // After merging: both variants fold under canonical name.
-        let d = model_detail(&store, "GLM-5.3").unwrap().unwrap();
+        let d = model_detail(&store, "GLM-5.3", 30).unwrap().unwrap();
         assert_eq!(d.model, "GLM-5.3");
         assert_eq!(d.tokens, 215); // (100+20) + (50+10) + (30+5)
         assert_eq!(d.events, 3);
@@ -1214,7 +1242,7 @@ mod tests {
             ])
             .unwrap();
 
-        let d = model_detail(&store, "claude-3-7-sonnet").unwrap().unwrap();
+        let d = model_detail(&store, "claude-3-7-sonnet", 30).unwrap().unwrap();
         assert_eq!(d.input_tokens, 2400); // 1000 + 800 + 600
         // Total output: 500 + 400 + (150 + 150) = 1200
         assert_eq!(d.output_tokens, 1200);
@@ -1229,13 +1257,94 @@ mod tests {
         let now = now_ms();
         store.insert_events(&[test_event("codex-auto-review", now, 100)]).unwrap();
         store.hide_models(&["codex-auto-review".into()]).unwrap();
-        assert!(model_detail(&store, "codex-auto-review").unwrap().is_none());
+        assert!(model_detail(&store, "codex-auto-review", 30).unwrap().is_none());
     }
 
     #[test]
     fn model_detail_unknown_model_returns_none() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
-        assert!(model_detail(&store, "nonexistent-model").unwrap().is_none());
+        assert!(model_detail(&store, "nonexistent-model", 30).unwrap().is_none());
+    }
+
+    #[test]
+    fn model_detail_respects_days_cutoff() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+
+        // Model A: today (100 tok), 10 days ago (200 tok), 50 days ago (300 tok)
+        // Model B: today (50 tok)
+        store
+            .insert_events(&[
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    input_tokens: 80,
+                    output_tokens: 20,
+                    ..test_event("model-a", now, 0)
+                },
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    input_tokens: 150,
+                    output_tokens: 50,
+                    ..test_event("model-a", now - 10 * day_ms, 0)
+                },
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    input_tokens: 250,
+                    output_tokens: 50,
+                    ..test_event("model-a", now - 50 * day_ms, 0)
+                },
+                UsageEvent {
+                    source: Source::Zcode,
+                    input_tokens: 40,
+                    output_tokens: 10,
+                    ..test_event("model-b", now, 0)
+                },
+            ])
+            .unwrap();
+
+        // 7-day range: only the event from today is visible
+        let d7 = model_detail(&store, "model-a", 7).unwrap().unwrap();
+        assert_eq!(d7.tokens, 100);
+        assert_eq!(d7.events, 1);
+        assert_eq!(d7.daily.len(), 1);
+        // Window total includes model-a (100) + model-b (50)
+        assert_eq!(d7.total_window_tokens, 150);
+
+        // 30-day range: today + 10 days ago (100 + 200 = 300)
+        let d30 = model_detail(&store, "model-a", 30).unwrap().unwrap();
+        assert_eq!(d30.tokens, 300);
+        assert_eq!(d30.events, 2);
+        assert_eq!(d30.daily.len(), 2);
+        assert_eq!(d30.total_window_tokens, 350);
+
+        // 90-day range: all 3 events (100 + 200 + 300 = 600)
+        let d90 = model_detail(&store, "model-a", 90).unwrap().unwrap();
+        assert_eq!(d90.tokens, 600);
+        assert_eq!(d90.events, 3);
+        assert_eq!(d90.daily.len(), 3);
+        assert_eq!(d90.total_window_tokens, 650);
+
+        // A model that exists in DB but has 0 events in the selected window (model-b in 50-day window 2 days ago? model-b only has today's event, so let's check a window where it has none if its event was 10 days ago)
+        // Let's test a model with no events in the last 5 days
+        let store2 = Store::open(std::path::Path::new(":memory:")).unwrap();
+        store2
+            .insert_events(&[UsageEvent {
+                source: Source::ClaudeCode,
+                input_tokens: 80,
+                output_tokens: 20,
+                ..test_event("older-model", now - 10 * day_ms, 0)
+            }])
+            .unwrap();
+
+        let d_empty = model_detail(&store2, "older-model", 5).unwrap().unwrap();
+        assert_eq!(d_empty.model, "older-model");
+        assert_eq!(d_empty.tokens, 0);
+        assert_eq!(d_empty.events, 0);
+        assert_eq!(d_empty.daily.len(), 0);
+        assert_eq!(d_empty.by_source.len(), 0);
+        assert_eq!(d_empty.by_project.len(), 0);
+        assert_eq!(d_empty.active_days, 0);
     }
 
     #[test]
@@ -1267,7 +1376,7 @@ mod tests {
         assert_eq!(proj[0].tokens, 180);
         assert_eq!(proj[0].events, 2);
 
-        let detail = model_detail(&store, "gpt-5").unwrap().unwrap();
+        let detail = model_detail(&store, "gpt-5", 30).unwrap().unwrap();
         assert_eq!(detail.by_project.len(), 1);
         assert_eq!(detail.by_project[0].project, "unknown");
         assert_eq!(detail.by_project[0].tokens, 180);

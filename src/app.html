@@ -103,18 +103,20 @@
               case 'get_model_detail': {
                 const m = MODELS.find((x) => x[0] === args.model);
                 if (!m) return null;
-                const daily = Array.from({ length: 120 }, (_, i) => ({ date: iso(119 - i), tokens: Math.round(m[1] / 90 * (0.3 + rng() * 1.7)) }));
+                const n = Math.min(args.days ?? 90, 150);
+                const daily = Array.from({ length: n }, (_, i) => ({ date: iso(n - 1 - i), tokens: Math.round(m[1] / 90 * (0.3 + rng() * 1.7)) }));
                 return {
                   model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31,
                   reasoning_tokens: Math.round(m[1] * 0.12),
                   cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5,
                   events: m[4], sessions: m[5], cost_usd: m[3],
-                  first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - 3600000,
-                  active_days: 187, current_streak: 12, longest_streak: 40,
+                  first_ts: Date.now() - Math.min(args.days ?? 300, 300) * 86400000, last_ts: Date.now() - 3600000,
+                  active_days: Math.min(187, n), current_streak: 12, longest_streak: 40,
                   peak_day: iso(9), peak_day_tokens: m[1] / 30,
                   by_source: m[2].map((s, i) => ({ source: s, tokens: m[1] * (i ? 0.3 : 0.7), events: m[4] * (i ? 0.3 : 0.7), sessions: m[5] * (i ? 0.3 : 0.7), cost_usd: m[3] * (i ? 0.3 : 0.7) })),
                   by_project: PROJECTS.map((p, i) => ({ project: p[0], tokens: m[1] * p[1], events: m[4] * p[1], sessions: m[5] * p[1], cost_usd: m[3] * p[1], first_ts: Date.now() - 280 * 86400000, last_ts: Date.now() - i * 7200000 })),
                   daily,
+                  total_window_tokens: totalTokens,
                 };
               }
               case 'get_by_project':

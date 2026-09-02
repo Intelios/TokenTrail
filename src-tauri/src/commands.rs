@@ -62,9 +62,10 @@ pub fn get_model_stats(state: State<AppState>, days: i64) -> Result<Vec<ModelSta
 pub fn get_model_detail(
     state: State<AppState>,
     model: String,
+    days: i64,
 ) -> Result<Option<ModelDetail>, String> {
     let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::model_detail(&store, &model).map_err(|e| e.to_string())
+    aggregate::model_detail(&store, &model, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

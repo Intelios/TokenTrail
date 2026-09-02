@@ -153,6 +153,7 @@ export interface ModelDetail {
   by_source: SourceTotals[];
   by_project: ProjectRow[];
   daily: HeatmapCell[];
+  total_window_tokens: number;
 }
 
 export interface LeaderboardEvent {
@@ -171,7 +172,8 @@ export const api = {
   dailyCache: (days: number) => invoke<DailyCacheRow[]>('get_daily_cache', { days }),
   byModel: (days: number) => invoke<ModelRow[]>('get_by_model', { days }),
   modelStats: (days: number) => invoke<ModelStatsRow[]>('get_model_stats', { days }),
-  modelDetail: (model: string) => invoke<ModelDetail | null>('get_model_detail', { model }),
+  modelDetail: (model: string, days: number) =>
+    invoke<ModelDetail | null>('get_model_detail', { model, days }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
   heatmap: (days: number) => invoke<HeatmapCell[]>('get_heatmap', { days }),
   hourly: () => invoke<HourRow[]>('get_hourly'),

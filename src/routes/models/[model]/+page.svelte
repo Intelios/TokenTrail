@@ -4,7 +4,7 @@
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
-  import { api, type ModelDetail, type Overview } from '$lib/api';
+  import { api, type ModelDetail } from '$lib/api';
   import {
     fmtCost,
     fmtDate,
@@ -18,9 +18,26 @@
     basename,
   } from '$lib/format';
   import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, donutSeries, dateTick } from '$lib/chartTheme';
+  import { readPref, writePref } from '$lib/prefs';
 
+  const RANGES: [number, string][] = [
+    [7, '7D'],
+    [30, '30D'],
+    [90, '90D'],
+    [3650, 'ALL'],
+  ];
+
+  const RANGE_LABEL: Record<number, string> = {
+    7: '7-day',
+    30: '30-day',
+    90: '90-day',
+    3650: 'all-time',
+  };
+
+  const PREF_DAYS = 'tt.models.days';
+
+  let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
   let detail = $state<ModelDetail | null>(null);
-  let overview = $state<Overview | null>(null);
   let error = $state('');
   let loading = $state(true);
 
@@ -28,11 +45,10 @@
 
   async function load() {
     if (!name) return;
-    loading = true;
+    if (!detail) loading = true;
     try {
-      const [d, o] = await Promise.all([api.modelDetail(name), api.overview()]);
+      const d = await api.modelDetail(name, days);
       detail = d;
-      overview = o;
       error = '';
     } catch (e) {
       error = String(e);
@@ -42,8 +58,16 @@
   }
 
   $effect(() => {
+    if (detail && detail.model !== name) {
+      detail = null;
+    }
     name;
+    days;
     load();
+  });
+
+  $effect(() => {
+    writePref(PREF_DAYS, days);
   });
 
   onMount(() => {
@@ -53,8 +77,8 @@
   });
 
   const usagePct = $derived.by(() => {
-    if (!detail || !overview || !overview.total_tokens) return null;
-    return ((detail.tokens / overview.total_tokens) * 100).toFixed(1);
+    if (!detail || !detail.total_window_tokens) return null;
+    return ((detail.tokens / detail.total_window_tokens) * 100).toFixed(1);
   });
 
   const donutOption = $derived.by(() => {
@@ -120,7 +144,13 @@
   {:else if loading}
     <div class="loading" style="padding:40px">loading model card…</div>
   {:else if !detail}
-    <div class="loading" style="padding:40px">No usage recorded for this model</div>
+    <div class="thd">
+      <div class="up">
+        <a class="backlink" href="/models">← All models</a>
+        <h1>{name}</h1>
+        <div class="sub">No usage recorded for this model</div>
+      </div>
+    </div>
   {:else}
     <!-- Header -->
     <div class="thd">
@@ -134,6 +164,11 @@
             · since {fmtDate(detail.first_ts)}
           {/if}
         </div>
+      </div>
+      <div class="pills up">
+        {#each RANGES as [d, label]}
+          <button class="pill" class:on={days === d} onclick={() => (days = d)}>{label}</button>
+        {/each}
       </div>
     </div>
 
@@ -167,7 +202,7 @@
         <div class="mc hl up" style="animation-delay:240ms">
           <div class="k">Share of usage</div>
           <div class="v"><AnimatedNumber value={Number(usagePct)} format={(n) => `${n.toFixed(1)}%`} /></div>
-          <div class="h">of all-time tokens</div>
+          <div class="h">of {RANGE_LABEL[days] ?? `${days}-day`} tokens</div>
         </div>
       {/if}
     </div>
@@ -300,8 +335,13 @@
   }
 
   .thd {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
     padding: 16px clamp(22px, 1.8vw, 40px) 14px;
     border-bottom: 2px solid var(--ink);
+    flex-wrap: wrap;
   }
   .backlink {
     display: inline-block;
