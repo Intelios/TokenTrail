@@ -37,6 +37,9 @@ export const MODEL_PALETTE = [
 /// Input / Output / Cache read / Cache write — shared by charts across pages.
 export const MIX_COLORS = ['#3d8eff', '#00c2c2', '#c8e600', '#ff1f6f'];
 
+/** Marathon violet accent for thinking / reasoning tokens. */
+export const REASONING_COLOR = '#7c5cff';
+
 export function sourceColor(s: string): ChartColor {
   return SOURCE_COLORS[s] ?? '#8a8578';
 }

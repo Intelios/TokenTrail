@@ -106,6 +106,7 @@
                 const daily = Array.from({ length: 120 }, (_, i) => ({ date: iso(119 - i), tokens: Math.round(m[1] / 90 * (0.3 + rng() * 1.7)) }));
                 return {
                   model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31,
+                  reasoning_tokens: Math.round(m[1] * 0.12),
                   cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5,
                   events: m[4], sessions: m[5], cost_usd: m[3],
                   first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - 3600000,

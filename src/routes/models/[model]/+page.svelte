@@ -12,6 +12,7 @@
     fmtTokens,
     modelColor,
     MIX_COLORS,
+    REASONING_COLOR,
     sourceSwatch,
     sourceLabel,
     basename,
@@ -58,11 +59,12 @@
 
   const donutOption = $derived.by(() => {
     if (!detail || !detail.tokens) return undefined;
+    const reasoning = detail.reasoning_tokens ?? 0;
+    const textOutput = Math.max(0, detail.output_tokens - reasoning);
     const data = [
       { name: 'Input', value: detail.input_tokens, itemStyle: { color: MIX_COLORS[0] } },
-      { name: 'Output', value: detail.output_tokens, itemStyle: { color: MIX_COLORS[1] } },
-      { name: 'Cache read', value: detail.cache_read_tokens, itemStyle: { color: MIX_COLORS[2] } },
-      { name: 'Cache write', value: detail.cache_write_tokens, itemStyle: { color: MIX_COLORS[3] } },
+      { name: 'Output', value: textOutput, itemStyle: { color: MIX_COLORS[1] } },
+      { name: 'Reasoning', value: reasoning, itemStyle: { color: REASONING_COLOR } },
     ].filter((d) => d.value > 0);
     if (!data.length) return undefined;
     return {
@@ -140,7 +142,9 @@
       <div class="mc up">
         <div class="k">Total tokens</div>
         <div class="v"><AnimatedNumber value={detail.tokens} format={fmtTokens} /></div>
-        <div class="h">{fmtTokens(detail.input_tokens)} in · {fmtTokens(detail.output_tokens)} out</div>
+        <div class="h">
+          {fmtTokens(detail.input_tokens)} in · {fmtTokens(detail.output_tokens)} out{#if detail.reasoning_tokens} · {fmtTokens(detail.reasoning_tokens)} reasoning{/if}
+        </div>
       </div>
       <div class="mc up" style="animation-delay:60ms">
         <div class="k">Est. cost</div>

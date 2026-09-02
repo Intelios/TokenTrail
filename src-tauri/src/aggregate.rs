@@ -136,6 +136,7 @@ pub struct ModelDetail {
     pub tokens: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub reasoning_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_write_tokens: i64,
     pub events: i64,
@@ -380,8 +381,10 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
 pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>> {
     let sql = format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown'),
-                COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+                COALESCE(SUM(u.input_tokens),0),
+                COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
+                COALESCE(SUM(u.reasoning_tokens),0),
                 COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
                 SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
@@ -401,13 +404,14 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
             r.get::<_, i64>(5)?,
             r.get::<_, i64>(6)?,
             r.get::<_, i64>(7)?,
-            r.get::<_, Option<f64>>(8)?,
-            r.get::<_, Option<i64>>(9)?,
+            r.get::<_, i64>(8)?,
+            r.get::<_, Option<f64>>(9)?,
             r.get::<_, Option<i64>>(10)?,
+            r.get::<_, Option<i64>>(11)?,
         ))
     });
 
-    let (name, inp, out, cr, cw, total, events, sessions, cost, first_ts, last_ts) = match row {
+    let (name, inp, out, cr, cw, reasoning, total, events, sessions, cost, first_ts, last_ts) = match row {
         Ok(r) => r,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
         Err(e) => return Err(e),
@@ -486,6 +490,7 @@ pub fn model_detail(store: &Store, model: &str) -> DbResult<Option<ModelDetail>>
         tokens: total,
         input_tokens: inp,
         output_tokens: out,
+        reasoning_tokens: reasoning,
         cache_read_tokens: cr,
         cache_write_tokens: cw,
         events,
@@ -1175,6 +1180,47 @@ mod tests {
 
         // Peak day has the highest tokens.
         assert!(d.peak_day_tokens > 0);
+        assert_eq!(d.reasoning_tokens, 0);
+    }
+
+    #[test]
+    fn model_detail_aggregates_reasoning_tokens() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                UsageEvent {
+                    source: Source::ClaudeCode,
+                    input_tokens: 1000,
+                    output_tokens: 500,
+                    reasoning_tokens: Some(300),
+                    ..test_event("claude-3-7-sonnet", now, 0)
+                },
+                UsageEvent {
+                    source: Source::Codex,
+                    input_tokens: 800,
+                    output_tokens: 400,
+                    reasoning_tokens: Some(200),
+                    ..test_event("claude-3-7-sonnet", now - 1000, 0)
+                },
+                UsageEvent {
+                    source: Source::Antigravity,
+                    input_tokens: 600,
+                    // Antigravity stores output_total - thinking in output_tokens
+                    output_tokens: 150,
+                    reasoning_tokens: Some(150),
+                    ..test_event("claude-3-7-sonnet", now - 2000, 0)
+                },
+            ])
+            .unwrap();
+
+        let d = model_detail(&store, "claude-3-7-sonnet").unwrap().unwrap();
+        assert_eq!(d.input_tokens, 2400); // 1000 + 800 + 600
+        // Total output: 500 + 400 + (150 + 150) = 1200
+        assert_eq!(d.output_tokens, 1200);
+        // Reasoning: 300 + 200 + 150 = 650
+        assert_eq!(d.reasoning_tokens, 650);
+        assert_eq!(d.events, 3);
     }
 
     #[test]
