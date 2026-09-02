@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { page } from '$app/stores';
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
@@ -58,12 +58,16 @@
   }
 
   $effect(() => {
-    if (detail && detail.model !== name) {
-      detail = null;
-    }
     name;
     days;
-    load();
+    untrack(() => {
+      // must not be reactive dependencies: load() assigns a fresh `detail`
+      // object every call, which would re-run this effect forever
+      if (detail && detail.model !== name) {
+        detail = null;
+      }
+      load();
+    });
   });
 
   $effect(() => {

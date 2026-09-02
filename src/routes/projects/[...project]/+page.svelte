@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { page } from '$app/stores';
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
   import type { EChartsOption } from 'echarts';
@@ -73,12 +73,16 @@
   }
 
   $effect(() => {
-    if (detail && detail.project !== projectName && detail.project !== '/' + projectName) {
-      detail = null;
-    }
     projectName;
     days;
-    load();
+    untrack(() => {
+      // must not be reactive dependencies: load() assigns a fresh `detail`
+      // object every call, which would re-run this effect forever
+      if (detail && detail.project !== projectName && detail.project !== '/' + projectName) {
+        detail = null;
+      }
+      load();
+    });
   });
 
   $effect(() => {
