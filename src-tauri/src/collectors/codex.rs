@@ -276,4 +276,108 @@ mod tests {
         assert_eq!(provider, "openai");
         assert_eq!(collect(&store, &home).unwrap(), 0);
     }
+
+    /// The reason TokenTrail keeps its own database: history must survive the
+    /// harness files being deleted (wiping ~/.codex to reclaim space), and a
+    /// fresh install afterwards must add to that history, never rewrite it.
+    #[test]
+    fn history_survives_source_wipe_and_reinstall() {
+        let home = test_home("codex-wipe");
+        let store = test_store("codex-wipe");
+        seed(&home);
+        assert_eq!(collect(&store, &home).unwrap(), 2);
+        let snapshot = |store: &Store| -> Vec<(String, i64, Option<String>, i64)> {
+            store
+                .conn()
+                .prepare("SELECT source_event_id, ts, model, cost_usd IS NOT NULL FROM usage_event ORDER BY source_event_id")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let before = snapshot(&store);
+
+        // Wipe ~/.codex entirely. The next sync finds no files and reports 0,
+        // and no stored event is ever removed because its source file is gone.
+        std::fs::remove_dir_all(home.join(".codex")).unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+        assert_eq!(snapshot(&store), before);
+
+        // The dashboard reads TokenTrail's database, not the harness files:
+        // aggregates still show the full history with sources deleted.
+        let ov = crate::aggregate::overview(&store).unwrap();
+        assert_eq!(ov.events, 2);
+        assert_eq!(ov.total_tokens, 200);
+
+        // Restart the app after the wipe: reopen usage.db from disk. The data
+        // lives here, not in anything derived from ~/.codex.
+        drop(store);
+        let store = Store::open(&home.join("usage.db")).unwrap();
+        assert_eq!(snapshot(&store), before);
+
+        // Fresh Codex install: a brand-new session (new thread id, new date)
+        // under a path that was just re-created. It must be ingested on top of
+        // the surviving history without disturbing it.
+        let dir = home.join(".codex/sessions/2026/08/20");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("rollout-2026-08-20T09-30-00-aaaa0000-bbbb-cccc-dddd-eeeeffff1111.jsonl"),
+            concat!(
+                r#"{"timestamp":"2026-08-20T09:30:00.000Z","type":"session_meta","payload":{"session_id":"aaaa0000-bbbb-cccc-dddd-eeeeffff1111","id":"rollout-2","cwd":"/Users/jack/fresh","thread_source":"user","model_provider":"openai"}}"#, "\n",
+                r#"{"timestamp":"2026-08-20T09:30:01.000Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/Users/jack/fresh","model":"gpt-5.6-luna"}}"#, "\n",
+                r#"{"timestamp":"2026-08-20T09:30:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":0,"output_tokens":25,"reasoning_output_tokens":3,"total_tokens":165},"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":0,"output_tokens":25,"reasoning_output_tokens":3,"total_tokens":165}}}}"#, "\n",
+            ),
+        )
+        .unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 1);
+        let after = snapshot(&store);
+        assert_eq!(after.len(), before.len() + 1);
+        assert!(after.starts_with(&before)); // pre-wipe rows byte-for-byte identical
+        let ov = crate::aggregate::overview(&store).unwrap();
+        assert_eq!(ov.events, 3);
+        assert_eq!(ov.total_tokens, 365);
+
+        // Steady state: nothing new, nothing duplicated.
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+        assert_eq!(snapshot(&store).len(), 3);
+    }
+
+    /// Restoring an older backup of a rollout file leaves it shorter than the
+    /// stored byte offset. read_tail must reset the cursor to 0 so the next
+    /// sync re-reads the file and upserts — the earlier-parsed turns that the
+    /// backup no longer contains stay in history instead of vanishing.
+    #[test]
+    fn restored_shorter_file_rereads_without_duplicates() {
+        let home = test_home("codex-truncate");
+        let store = test_store("codex-truncate");
+        seed(&home);
+        assert_eq!(collect(&store, &home).unwrap(), 2);
+        let path = home
+            .join(".codex/sessions/2026/08/02")
+            .join("rollout-2026-08-02T12-00-00-11111111-2222-3333-4444-555555555555.jsonl");
+
+        // The backup predates the second turn: fewer lines than bytes already
+        // consumed. This sync only resets the cursor; the next one re-reads.
+        let src = std::fs::read_to_string(fixture("codex_sample.jsonl")).unwrap();
+        let lines: Vec<&str> = src.lines().collect();
+        std::fs::write(&path, lines[..3].join("\n") + "\n").unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+
+        // Whole file re-read from offset 0: the surviving turn is upserted (a
+        // touched row counts as processed), the dropped turn is retained.
+        assert_eq!(collect(&store, &home).unwrap(), 1);
+        let rows: Vec<(String, i64)> = store
+            .conn()
+            .prepare("SELECT source_event_id, input_tokens + cache_read_tokens + cache_write_tokens + output_tokens FROM usage_event ORDER BY ts")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1, 85);
+        assert_eq!(rows[1].1, 115); // only in the newer file version, kept anyway
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+    }
 }
