@@ -278,6 +278,18 @@ mod tests {
     }
 
     #[test]
+    fn gpt_6_astra_prices() {
+        // GPT-6 Astra lists at $10/$50, well above the generic gpt catch-all.
+        assert_eq!(rates_for("gpt-6-astra").map(|r| r.input), Some(10.0));
+        assert_eq!(rates_for("gpt-6-astra").map(|r| r.output), Some(50.0));
+        assert_eq!(rates_for("gpt-6-astra").map(|r| r.cache_read), Some(1.0));
+        assert_eq!(rates_for("gpt-6-astra").map(|r| r.cache_write), Some(12.5));
+        // Dated snapshots and provider-prefixed spellings resolve through the family.
+        assert_eq!(rates_for("gpt-6-astra-2026-09-04").map(|r| r.output), Some(50.0));
+        assert_eq!(rates_for("openai/gpt-6-astra").map(|r| r.input), Some(10.0));
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
