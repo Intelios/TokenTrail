@@ -11,11 +11,12 @@ use crate::store::Store;
 const TOKENS: &str = "(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)";
 
 /// Rows whose model is user-hidden are excluded from every aggregate. A row is
-/// hidden when its raw model name is hidden, or when it aliases to a hidden
-/// canonical name (hiding the display name hides all merged variants).
-/// COALESCE keeps NULL-model rows visible — `NULL NOT IN (...)` is NULL, which
-/// would drop them.
-const NOT_HIDDEN: &str = "COALESCE(u.model,'') NOT IN (
+/// hidden when its model name is hidden, or when it aliases to a hidden
+/// canonical name (hiding the display name hides all merged variants). The
+/// name compared here is the one the UI displays: NULL-model rows render as
+/// 'unknown' everywhere, so they hide when the user hides 'unknown' — a
+/// fragment over the raw name (COALESCE(u.model,'')) can never match it.
+const NOT_HIDDEN: &str = "COALESCE(u.model, 'unknown') NOT IN (
     SELECT name FROM hidden_model
     UNION
     SELECT alias FROM model_alias WHERE canonical IN (SELECT name FROM hidden_model)
@@ -1373,6 +1374,39 @@ mod tests {
         let stats = model_stats(&store, 3650).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].tokens, 300);
+    }
+
+    /// NULL-model rows display as 'unknown'; hiding that display name must
+    /// hide them. Compared against the raw name they can never match, which
+    /// left an unhideable "unknown" model on every page.
+    #[test]
+    fn hiding_unknown_hides_null_model_rows() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                test_event("gpt-5", now, 200),
+                UsageEvent {
+                    model: None,
+                    input_tokens: 50,
+                    ..test_event("no-model", now - 1000, 0)
+                },
+            ])
+            .unwrap();
+        store.hide_models(&["unknown".into()]).unwrap();
+
+        let rows = by_model(&store, 3650).unwrap();
+        assert!(rows.iter().all(|r| r.model != "unknown"));
+        let ov = overview(&store).unwrap();
+        assert_eq!(ov.total_tokens, 200);
+        assert_eq!(ov.events, 1);
+
+        // The leaderboard never announces a "first sighting" for it.
+        let lb = leaderboard_events(&store, 3650).unwrap();
+        assert!(lb.iter().all(|e| e.model != "unknown"));
+
+        store.unhide_model("unknown").unwrap();
+        assert!(by_model(&store, 3650).unwrap().iter().any(|r| r.model == "unknown"));
     }
 
     #[test]

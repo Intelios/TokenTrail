@@ -1,0 +1,5 @@
+{"timestamp":"2026-09-04T12:23:15.999Z","type":"session_meta","payload":{"session_id":"11111111-2222-3333-4444-555555555555","id":"99999999-8888-7777-6666-000000000000","parent_thread_id":"11111111-2222-3333-4444-555555555555","cwd":"/Users/jack/guard","thread_source":"guardian_review","model_provider":"openai"}}
+{"timestamp":"2026-09-04T12:23:17.613Z","type":"event_msg","payload":{"type":"task_started","turn_id":"g1"}}
+{"timestamp":"2026-09-04T12:23:17.613Z","type":"turn_context","payload":{"turn_id":"g1","cwd":"/Users/jack/guard","model":"codex-auto-review"}}
+{"timestamp":"2026-09-04T12:23:21.700Z","type":"event_msg","payload":{"type":"agent_message","message":"{\"risk_level\":\"low\"}"}}
+{"timestamp":"2026-09-04T12:23:21.745Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":14060,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":161,"reasoning_output_tokens":9,"total_tokens":14221},"total_token_usage":{"input_tokens":14060,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":161,"reasoning_output_tokens":9,"total_tokens":14221},"model_context_window":258400}}}

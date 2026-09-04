@@ -1,7 +1,7 @@
 use crate::collectors::{parse_ts_ms, read_tail, sorted_glob};
 use crate::models::{Source, UsageEvent};
 use crate::store::Store;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 struct SessionMeta {
@@ -35,6 +35,12 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
         let meta = read_meta(&path);
         let mut current_model: Option<String> = None;
         let mut current_ns: Option<String> = None;
+        // Lazily scanned once per file: the last model named before this tail
+        // begins. A token_count can arrive in a tail whose turn_context line
+        // (the only place Codex names the model) was consumed by an earlier
+        // sync — e.g. guardian-review threads, which state their model once at
+        // the top and then only emit usage.
+        let mut head_model: Option<Option<(String, Option<String>)>> = None;
         let mut events = Vec::new();
         for line in tail.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
@@ -62,16 +68,26 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 continue;
             };
             let sid = meta.session_id.clone().unwrap_or_default();
-            let model = current_model
-                .clone()
-                .or_else(|| store.latest_session_model("codex", &sid));
+            // Prefer this file's own head over the session's last stored model:
+            // the head names the model of the turn being reported, while the
+            // store lookup would attribute a side-thread's usage (guardian
+            // reviews) to the parent session's model.
+            let (model, ns) = if let Some(m) = current_model.clone() {
+                (Some(m), current_ns.clone())
+            } else {
+                let scanned = head_model.get_or_insert_with(|| scan_head_model(&path, offset));
+                match scanned {
+                    Some((m, ns)) => (Some(m.clone()), ns.clone()),
+                    None => (store.latest_session_model("codex", &sid), None),
+                }
+            };
             events.push(UsageEvent {
                 source: Source::Codex,
                 source_event_id: format!("{sid}:{ts}:{input}:{out}"),
                 ts,
                 session_id: (!sid.is_empty()).then_some(sid),
                 project: meta.cwd.clone(),
-                provider: current_ns.clone().or_else(|| Some("openai".into())),
+                provider: ns.or_else(|| Some("openai".into())),
                 model,
                 input_tokens: input,
                 output_tokens: out,
@@ -114,6 +130,37 @@ fn split_namespaced(m: &str) -> (String, Option<String>) {
         Some((provider, model)) if !model.is_empty() => (model.to_string(), Some(provider.to_string())),
         _ => (m.to_string(), None),
     }
+}
+
+/// The last `payload.model` named before byte `offset` of a rollout file, as
+/// (model, provider-namespace). Sync tails restart model state from scratch,
+/// so a token_count whose turn_context line was consumed by an earlier sync
+/// has no model in the tail; the head carries the turn's model instead. Only
+/// the final HEAD_SCAN_CAP bytes are read to bound the cost on large files.
+const HEAD_SCAN_CAP: u64 = 4 * 1024 * 1024;
+fn scan_head_model(path: &Path, offset: u64) -> Option<(String, Option<String>)> {
+    if offset == 0 {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let start = offset.saturating_sub(HEAD_SCAN_CAP);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    (&mut file).take(offset - start).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut last = None;
+    // When the window starts mid-file the first line is partial; skip it.
+    let mut lines = text.lines();
+    if start > 0 {
+        lines.next();
+    }
+    for line in lines {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if let Some(m) = v.get("payload").and_then(|p| p.get("model")).and_then(|x| x.as_str()) {
+            last = Some(split_namespaced(m));
+        }
+    }
+    last
 }
 
 fn read_meta(path: &Path) -> SessionMeta {
@@ -191,6 +238,42 @@ mod tests {
             .query_row("SELECT input_tokens + cache_read_tokens + cache_write_tokens + output_tokens FROM usage_event WHERE model = 'qwen3.8-max'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(tokens, 70 + 30 + 0 + 15);
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+    }
+
+    /// A guardian-review rollout states its model once near the top of the
+    /// file. A sync that consumes the head before any token_count exists
+    /// leaves the next tail with usage but no model line — the event must
+    /// still be attributed to the file's own model, not stored with a NULL
+    /// model that shows up as "unknown" (and cannot be hidden).
+    #[test]
+    fn tail_without_model_line_uses_head_model() {
+        let home = test_home("codex-guardian");
+        let store = test_store("codex-guardian");
+        let dir = home.join(".codex/sessions/2026/09/04");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-2026-09-04T13-23-15-99999999-8888-7777-6666-000000000000.jsonl");
+        let src = std::fs::read_to_string(fixture("codex_guardian.jsonl")).unwrap();
+        let lines: Vec<&str> = src.lines().collect();
+
+        // First sync sees the head only: no token_count yet, offset advances.
+        std::fs::write(&path, lines[..3].join("\n") + "\n").unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+
+        // Second sync's tail starts after the turn_context that names the
+        // model; it holds just a message and the usage event.
+        std::fs::write(&path, src).unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 1);
+        let (model, provider): (Option<String>, String) = store
+            .conn()
+            .query_row(
+                "SELECT model, COALESCE(provider,'') FROM usage_event WHERE source = 'codex'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(model.as_deref(), Some("codex-auto-review"));
+        assert_eq!(provider, "openai");
         assert_eq!(collect(&store, &home).unwrap(), 0);
     }
 }
