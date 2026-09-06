@@ -1117,11 +1117,11 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
         }
 
-        // 5. Overtakes (top 10 adjacent rank swaps)
+        // 5. Overtakes (top 20 adjacent rank swaps)
         if !prev_rankings.is_empty() && in_window {
             for (model, _) in day_models {
                 if let Some(&curr_rank) = curr_rankings.get(model) {
-                    if curr_rank <= 10 {
+                    if curr_rank <= 20 {
                         if let Some(&prev_rank) = prev_rankings.get(model) {
                             for (other_model, &other_prev_rank) in &prev_rankings {
                                 if other_model != model && other_prev_rank < prev_rank {
@@ -1154,7 +1154,7 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
     }
 
     events.sort_by(|a, b| b.date.cmp(&a.date));
-    events.truncate(40);
+    events.truncate(60);
     Ok(events)
 }
 
@@ -1737,6 +1737,45 @@ mod tests {
         assert_eq!(overtakes[1].other_model, Some("model-a".into()));
         assert_eq!(overtakes[1].rank, Some(1));
         assert_eq!(overtakes[1].tokens, 100);
+    }
+
+    #[test]
+    fn leaderboard_overtake_top_20_boundary() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day1 = now - 2 * day_ms;
+        let day2 = now - 1 * day_ms;
+
+        // Seed 25 models on day 1 with descending token counts
+        // m01: 25000, m02: 24000, ... m15: 11000, m16: 10000, ... m21: 5000, m22: 4000, ... m25: 1000
+        let mut events_day1 = Vec::new();
+        for i in 1..=25 {
+            let name = format!("m{:02}", i);
+            let tokens = (26 - i) as i64 * 1000;
+            events_day1.push(test_event(&name, day1, tokens));
+        }
+        store.insert_events(&events_day1).unwrap();
+
+        // On day 2:
+        // - m16 gets 1500 tokens -> total 11500, passing m15 (11000) for rank 15 (within top 20)
+        // - m22 gets 1500 tokens -> total 5500, passing m21 (5000) for rank 21 (outside top 20)
+        store
+            .insert_events(&[
+                test_event("m16", day2, 1500),
+                test_event("m22", day2, 1500),
+            ])
+            .unwrap();
+
+        let events = leaderboard_events(&store, 30).unwrap();
+        let overtakes: Vec<_> = events.iter().filter(|e| e.kind == "overtake").collect();
+
+        // Only m16's overtake into rank 15 should be captured; m22 at rank 21 is excluded
+        assert_eq!(overtakes.len(), 1);
+        assert_eq!(overtakes[0].model, "m16");
+        assert_eq!(overtakes[0].other_model, Some("m15".into()));
+        assert_eq!(overtakes[0].rank, Some(15));
+        assert_eq!(overtakes[0].tokens, 500);
     }
 
     #[test]
