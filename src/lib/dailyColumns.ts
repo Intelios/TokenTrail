@@ -7,9 +7,19 @@
 /// "quiet" band — short gaps stay as real empty slots, because a day or two off
 /// is the rhythm of the data rather than dead space worth compressing.
 import type { EChartsOption } from 'echarts';
-import type { DailyRow } from './api';
+import type { DailyRow, HeatmapCell } from './api';
 import { fmtTokens, sourceColor, sourceLabel } from './format';
-import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, DIM, MONO, stackedColumn } from './chartTheme';
+import {
+  TOOLTIP,
+  ANIM,
+  AXIS_LABEL,
+  AXIS_LINE,
+  SPLIT_LINE,
+  DIM,
+  MONO,
+  stackedColumn,
+  type ChartColor,
+} from './chartTheme';
 
 const DAY = 86_400_000;
 
@@ -207,3 +217,162 @@ export function dailyOption(cols: Column[], sources: string[]): EChartsOption | 
     ],
   } satisfies EChartsOption;
 }
+
+export type SingleDailyColumn =
+  | { kind: 'day'; start: number; date: string; tokens: number }
+  | { kind: 'quiet'; start: number; days: number };
+
+/**
+ * Lay single-series daily usage (HeatmapCell[]) on a gapless calendar spine
+ * from the first active day to the last, folding every idle run of MIN_QUIET_RUN
+ * days or more into one quiet column.
+ */
+export function singleDailyColumns(daily: HeatmapCell[]): SingleDailyColumn[] {
+  const buckets = new Map<number, number>();
+  let first = Infinity;
+  let last = -Infinity;
+
+  for (const r of daily) {
+    if (r.tokens <= 0) continue;
+    const t = utc(r.date);
+    buckets.set(t, (buckets.get(t) ?? 0) + r.tokens);
+    if (t < first) first = t;
+    if (t > last) last = t;
+  }
+  if (!buckets.size) return [];
+
+  const cols: SingleDailyColumn[] = [];
+  let idle = 0;
+
+  const flush = (until: number) => {
+    if (!idle) return;
+    const start = until - idle * DAY;
+    if (idle >= MIN_QUIET_RUN) {
+      cols.push({ kind: 'quiet', start, days: idle });
+    } else {
+      for (let k = 0; k < idle; k++) {
+        const d = start + k * DAY;
+        cols.push({ kind: 'day', start: d, date: iso(d), tokens: 0 });
+      }
+    }
+    idle = 0;
+  };
+
+  for (let t = first; t <= last; t += DAY) {
+    const tokens = buckets.get(t);
+    if (tokens === undefined) {
+      idle++;
+      continue;
+    }
+    flush(t);
+    cols.push({ kind: 'day', start: t, date: iso(t), tokens });
+  }
+  return cols;
+}
+
+export function singleDailyOption(
+  cols: SingleDailyColumn[],
+  color: ChartColor,
+): EChartsOption | undefined {
+  if (!cols.length) return undefined;
+
+  const cats = cols.map((c, i) => (c.kind === 'day' ? c.date : `quiet-${i}`));
+  const labels = new Map(cols.map((c, i) => [cats[i], c.kind === 'day' ? tick(c.start) : '']));
+
+  const quietText = cols.map((c) => (c.kind === 'quiet' ? quietLabel(c.days) : ''));
+  const hasQuiet = cols.some((c) => c.kind === 'quiet');
+
+  return {
+    backgroundColor: 'transparent',
+    ...ANIM,
+    animationDelay: (idx: number) => idx * 8,
+    tooltip: {
+      trigger: 'axis',
+      ...TOOLTIP,
+      confine: true,
+      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(13,13,11,0.06)' } },
+      formatter: (params: unknown) => {
+        type TipParam = { dataIndex: number; marker: string; seriesIndex: number; value?: number };
+        const all = params as TipParam[];
+        const col = cols[all[0]?.dataIndex ?? -1];
+        if (!col) return '';
+        if (col.kind === 'quiet') {
+          return (
+            `<b>${col.days} quiet ${col.days === 1 ? 'day' : 'days'}</b><br/>` +
+            `<span style="opacity:0.65;">${span(col.start, col.start + (col.days - 1) * DAY)}</span><br/>no usage`
+          );
+        }
+        if (col.tokens > 0) {
+          const marker = all.find((p) => p.seriesIndex === 0)?.marker ?? all[0]?.marker ?? '';
+          return (
+            `<div style="margin:0;line-height:1;">` +
+            `<div style="font-size:11px;color:#e8e4d9;font-weight:400;line-height:1;">${col.date}</div>` +
+            `<div style="margin:10px 0 0;line-height:1;">` +
+            `<div style="margin:0;line-height:1;">` +
+            `${marker}<span style="float:right;margin-left:10px;font-size:11px;color:#e8e4d9;font-weight:900;">${fmtTokens(col.tokens)}</span>` +
+            `<div style="clear:both"></div>` +
+            `</div><div style="clear:both"></div>` +
+            `</div><div style="clear:both"></div>` +
+            `</div>`
+          );
+        }
+        return (
+          `<div style="margin:0;line-height:1;">` +
+          `<div style="font-size:11px;color:#e8e4d9;font-weight:400;line-height:1;">${col.date}</div>` +
+          `<div style="margin:10px 0 0;line-height:1;color:rgba(232,228,217,0.65);">no usage</div>` +
+          `</div>`
+        );
+      },
+    },
+    grid: { left: 8, right: 8, top: 20, bottom: 0, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: cats,
+      axisLine: AXIS_LINE,
+      axisTick: { show: false },
+      axisLabel: { ...AXIS_LABEL, hideOverlap: true, formatter: (v: string) => labels.get(v) ?? '' },
+    },
+    yAxis: [
+      {
+        type: 'value',
+        min: 0,
+        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtTokens(v) },
+        splitLine: SPLIT_LINE,
+      },
+      { type: 'value', min: 0, max: 1, show: false },
+    ],
+    series: [
+      {
+        type: 'bar' as const,
+        barMaxWidth: 40,
+        data: cols.map((c) => (c.kind === 'day' ? (c.tokens > 0 ? c.tokens : null) : null)),
+        itemStyle: { color },
+        animationDelay: (idx: number) => idx * 8,
+      },
+      ...(hasQuiet
+        ? [
+            {
+              name: 'quiet',
+              type: 'bar' as const,
+              yAxisIndex: 1,
+              barGap: '-100%',
+              z: 0,
+              silent: true,
+              itemStyle: { color: 'rgba(13,13,11,0.05)' },
+              label: {
+                show: true,
+                position: 'inside' as const,
+                rotate: 90,
+                color: DIM,
+                fontFamily: MONO,
+                fontSize: 9,
+                formatter: (p: { dataIndex: number }) => quietText[p.dataIndex],
+              },
+              data: cols.map((c) => (c.kind === 'quiet' ? 1 : null)),
+            },
+          ]
+        : []),
+    ],
+  } satisfies EChartsOption;
+}
+

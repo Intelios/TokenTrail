@@ -17,7 +17,8 @@
     sourceLabel,
     basename,
   } from '$lib/format';
-  import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, donutSeries, dateTick } from '$lib/chartTheme';
+  import { TOOLTIP, ANIM, donutSeries } from '$lib/chartTheme';
+  import { singleDailyColumns, singleDailyOption } from '$lib/dailyColumns';
   import { readPref, writePref } from '$lib/prefs';
 
   const RANGES: [number, string][] = [
@@ -106,40 +107,10 @@
     } satisfies EChartsOption;
   });
 
-  const dailyOption = $derived.by(() => {
-    if (!detail || !detail.daily.length) return undefined;
-    return {
-      backgroundColor: 'transparent',
-      ...ANIM,
-      animationDelay: (idx: number) => idx * 8,
-      tooltip: {
-        trigger: 'axis',
-        ...TOOLTIP,
-        valueFormatter: (v: unknown) => fmtTokens(Number(v)),
-      },
-      grid: { left: 8, right: 8, top: 20, bottom: 0, containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: detail.daily.map((d) => d.date),
-        axisLabel: { ...AXIS_LABEL, hideOverlap: true, formatter: dateTick },
-        axisLine: AXIS_LINE,
-        axisTick: { show: false },
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtTokens(v) },
-        splitLine: SPLIT_LINE,
-      },
-      series: [
-        {
-          type: 'bar',
-          data: detail.daily.map((d) => d.tokens),
-          itemStyle: { color: modelColor(detail.model, 0) },
-          animationDelay: (idx: number) => idx * 8,
-        },
-      ],
-    } satisfies EChartsOption;
-  });
+  const dayCols = $derived(singleDailyColumns(detail?.daily ?? []));
+  const dailyOption = $derived(
+    detail ? singleDailyOption(dayCols, modelColor(detail.model, 0)) : undefined,
+  );
 </script>
 
 <div class="mcframe">
