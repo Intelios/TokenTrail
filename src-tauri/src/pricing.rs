@@ -65,7 +65,12 @@ fn rates_for(model: &str) -> Option<Rates> {
             return Some(*r);
         }
     }
-    for c in &candidates {
+    // Families prefer the provider-stripped base: it is the model name, while
+    // a match on the full "provider/model" string can only come from a
+    // catch-all prefix swallowing the provider ("deepseek/deepseek-flash"
+    // must hit the deepseek-flash family, not the deepseek catch-all).
+    let by_base: Vec<&str> = candidates.iter().rev().cloned().collect();
+    for c in &by_base {
         if let Some(r) = t.families.iter().find(|f| c.starts_with(&f.prefix)) {
             return Some(r.rates);
         }
@@ -287,6 +292,27 @@ mod tests {
         // Dated snapshots and provider-prefixed spellings resolve through the family.
         assert_eq!(rates_for("gpt-6-astra-2026-09-04").map(|r| r.output), Some(50.0));
         assert_eq!(rates_for("openai/gpt-6-astra").map(|r| r.input), Some(10.0));
+    }
+
+    #[test]
+    fn deepseek_v41_flash_prices() {
+        // V4.1 Flash lists at $0.15/$0.60 off-peak and 2x at peak; the table
+        // carries peak rates like the other deepseek entries. "deepseek-flash"
+        // is the official model ID, "deepseek-v4.1-flash" the version-style
+        // spelling, and the retired deepseek-v4-flash / -vision-exp names now
+        // route to V4.1 Flash at the same price.
+        assert_eq!(rates_for("deepseek-flash").map(|r| r.input), Some(0.3));
+        assert_eq!(rates_for("deepseek-flash").map(|r| r.output), Some(1.2));
+        assert_eq!(rates_for("deepseek-flash").map(|r| r.cache_read), Some(0.006));
+        assert_eq!(rates_for("deepseek-flash").map(|r| r.cache_write), Some(0.3));
+        assert_eq!(rates_for("deepseek-v4.1-flash:0908-cloud").map(|r| r.input), Some(0.3));
+        assert_eq!(rates_for("deepseek/deepseek-flash").map(|r| r.output), Some(1.2));
+        assert_eq!(rates_for("deepseek-v4-flash:0731-cloud").map(|r| r.input), Some(0.3));
+        assert_eq!(rates_for("deepseek-v4-flash-vision-exp").map(|r| r.output), Some(1.2));
+        // The $0 free variant keeps its exact-model override over the family.
+        assert_eq!(rates_for("deepseek-v4-flash-free").map(|r| r.input), Some(0.0));
+        // Unrelated deepseek spellings keep the catch-all rate.
+        assert_eq!(rates_for("deepseek-chat").map(|r| r.input), Some(0.44));
     }
 
     #[test]
