@@ -7,12 +7,16 @@
   import { api, type HeatmapCell, type HourRow, type Overview, type PeakDayRow } from '$lib/api';
   import { fmtTokens, fmtCost, modelColor } from '$lib/format';
   import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, MONO, DIM, INK, dateTick } from '$lib/chartTheme';
+  import { readPref, writePref } from '$lib/prefs';
+
+  const PREF_PEAK_DAYS = 'tt.activity.peakDays';
+  const PEAK_RANGES = [30, 90, 365, 0];
 
   let heatmap = $state<HeatmapCell[]>([]);
   let hourly = $state<HourRow[]>([]);
   let overview = $state<Overview | null>(null);
   let peakRows = $state<PeakDayRow[]>([]);
-  let peakWindow = $state(0);
+  let peakWindow = $state(readPref(PREF_PEAK_DAYS, 0, (v) => PEAK_RANGES.includes(v as number)));
   let error = $state('');
 
   async function load() {
@@ -35,6 +39,7 @@
 
   async function setPeakWindow(w: number) {
     peakWindow = w;
+    writePref(PREF_PEAK_DAYS, w);
     try {
       peakRows = await api.peakDays(w);
     } catch (e) {
