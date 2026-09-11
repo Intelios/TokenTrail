@@ -5,7 +5,12 @@
   let {
     option,
     height = 320,
-  }: { option?: echarts.EChartsOption; height?: number | 'fill' } = $props();
+    onclick,
+  }: {
+    option?: echarts.EChartsOption;
+    height?: number | 'fill';
+    onclick?: (params: any) => void;
+  } = $props();
 
   let el: HTMLDivElement | undefined = $state();
   let chart = $state<echarts.ECharts | null>(null);
@@ -28,6 +33,15 @@
     if (chart && option) {
       chart.setOption(option, true);
       chart.resize();
+    }
+  });
+
+  $effect(() => {
+    if (chart) {
+      chart.off('click');
+      if (onclick) {
+        chart.on('click', (params) => onclick(params));
+      }
     }
   });
 </script>

@@ -191,6 +191,16 @@
                 return Array.from({ length: args.days ?? 365 }, (_, i) => ({ date: iso((args.days ?? 365) - 1 - i), tokens: i % 7 < 5 && rng() > 0.25 ? Math.round(200000 + rng() * 2400000) : 0 }));
               case 'get_hourly':
                 return Array.from({ length: 24 }, (_, h) => ({ hour: h, tokens: Math.round(120000 * (h < 6 ? 1.4 - h * 0.15 : h >= 10 && h <= 18 ? 1.8 : 0.7) * (0.6 + rng() * 0.8)) }));
+              case 'get_peak_days': {
+                const maxDays = args.days && args.days > 0 ? args.days : 365;
+                return [
+                  { model: 'claude-sonnet-4.5', date: iso(Math.min(12, maxDays - 1)), tokens: 48200000, cost_usd: 144.60 },
+                  { model: 'gemini-2.5-pro', date: iso(Math.min(25, maxDays - 1)), tokens: 32100000, cost_usd: 40.12 },
+                  { model: 'claude-sonnet-4.5', date: iso(Math.min(5, maxDays - 1)), tokens: 28900000, cost_usd: 86.70 },
+                  { model: 'gpt-5', date: iso(Math.min(18, maxDays - 1)), tokens: 24500000, cost_usd: 73.50 },
+                  { model: 'deepseek-v4-pro', date: iso(Math.min(30, maxDays - 1)), tokens: 19800000, cost_usd: 15.84 },
+                ].filter((_, i) => args.days === 30 ? i < 4 : true);
+              }
               case 'get_source_status':
                 return SOURCES.map((s, i) => ({ source: s, display: s.replace('_', ' '), path: '/home/dev/.config/' + s, found: i !== 5 }));
               // Only WackChatter ever reports estimates; the harnesses are all measured.

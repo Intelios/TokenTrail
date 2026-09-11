@@ -1,26 +1,51 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
-  import { api, type HeatmapCell, type HourRow, type Overview } from '$lib/api';
-  import { fmtTokens } from '$lib/format';
-  import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, MONO, DIM } from '$lib/chartTheme';
+  import { api, type HeatmapCell, type HourRow, type Overview, type PeakDayRow } from '$lib/api';
+  import { fmtTokens, fmtCost, modelColor } from '$lib/format';
+  import { TOOLTIP, ANIM, AXIS_LABEL, AXIS_LINE, SPLIT_LINE, MONO, DIM, INK, dateTick } from '$lib/chartTheme';
 
   let heatmap = $state<HeatmapCell[]>([]);
   let hourly = $state<HourRow[]>([]);
   let overview = $state<Overview | null>(null);
+  let peakRows = $state<PeakDayRow[]>([]);
+  let peakWindow = $state(0);
   let error = $state('');
 
   async function load() {
     try {
-      const [h, o, ov] = await Promise.all([api.heatmap(365), api.hourly(), api.overview()]);
+      const [h, o, ov, pk] = await Promise.all([
+        api.heatmap(365),
+        api.hourly(),
+        api.overview(),
+        api.peakDays(peakWindow),
+      ]);
       heatmap = h;
       hourly = o;
       overview = ov;
+      peakRows = pk;
       error = '';
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  async function setPeakWindow(w: number) {
+    peakWindow = w;
+    try {
+      peakRows = await api.peakDays(w);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function onPeakClick(params: any) {
+    const model = params.data?.model ?? (params.dataIndex != null ? peakRows[params.dataIndex]?.model : undefined);
+    if (model) {
+      goto('/models/' + encodeURIComponent(model));
     }
   }
 
@@ -111,6 +136,65 @@
     } satisfies EChartsOption;
   });
 
+  const peakOption = $derived.by(() => {
+    if (!peakRows.length) return undefined;
+    return {
+      backgroundColor: 'transparent',
+      ...ANIM,
+      tooltip: {
+        ...TOOLTIP,
+        formatter: (params: any) => {
+          const d = params.data;
+          if (!d) return '';
+          return `<b>#${d.rank}  ${d.model}</b><br/>${dateTick(d.date)} (${d.date})<br/><b>${fmtTokens(d.value)}</b> tokens<br/>Est. cost: <b>${fmtCost(d.cost_usd)}</b>`;
+        },
+      },
+      grid: { left: 12, right: 64, top: 12, bottom: 8, containLabel: true },
+      xAxis: {
+        type: 'value',
+        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtTokens(v) },
+        splitLine: SPLIT_LINE,
+      },
+      yAxis: {
+        type: 'category',
+        inverse: true,
+        data: peakRows.map((r, i) => `#${i + 1}  ${r.model} · ${dateTick(r.date)}`),
+        axisLine: AXIS_LINE,
+        axisTick: { show: false },
+        axisLabel: {
+          color: INK,
+          fontFamily: MONO,
+          fontSize: 10.5,
+          fontWeight: 600,
+        },
+      },
+      series: [
+        {
+          type: 'bar',
+          cursor: 'pointer',
+          barMaxWidth: 20,
+          data: peakRows.map((r, i) => ({
+            value: r.tokens,
+            itemStyle: { color: modelColor(r.model, i) },
+            model: r.model,
+            date: r.date,
+            cost_usd: r.cost_usd,
+            rank: i + 1,
+          })),
+          label: {
+            show: true,
+            position: 'right',
+            fontFamily: MONO,
+            fontSize: 10,
+            color: DIM,
+            formatter: (p: any) => fmtTokens(p.value),
+          },
+          animationDelay: (idx: number) => idx * 35,
+        },
+      ],
+    } satisfies EChartsOption;
+  });
+
   const nightShare = $derived.by(() => {
     const night = hourly.filter((h) => h.hour < 6 || h.hour >= 22).reduce((a, h) => a + h.tokens, 0);
     const total = hourly.reduce((a, h) => a + h.tokens, 0);
@@ -163,7 +247,23 @@
       {/if}
     </div>
 
-    <div class="apanel up" style="animation-delay:100ms">
+    <div class="apanel up" style="animation-delay:80ms">
+      <h2>
+        Peak days
+        <span class="pills">
+          {#each [{ l: '30D', v: 30 }, { l: '90D', v: 90 }, { l: '1 YEAR', v: 365 }, { l: 'ALL', v: 0 }] as t}
+            <button class="pill" class:on={peakWindow === t.v} onclick={() => setPeakWindow(t.v)}>{t.l}</button>
+          {/each}
+        </span>
+      </h2>
+      {#if peakOption}
+        <Chart option={peakOption} height={220} onclick={onPeakClick} />
+      {:else}
+        <div class="loading">no usage recorded in this window</div>
+      {/if}
+    </div>
+
+    <div class="apanel up" style="animation-delay:160ms">
       <h2>
         Hour of day — all time
         <span class="legend-row">
@@ -219,7 +319,7 @@
   .apanel h2 {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
     font: 600 11px/1 var(--font-ui);
     letter-spacing: 1.6px;
     text-transform: uppercase;

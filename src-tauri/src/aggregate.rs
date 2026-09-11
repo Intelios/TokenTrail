@@ -30,7 +30,11 @@ fn now_ms() -> i64 {
 }
 
 fn cutoff(days: i64) -> i64 {
-    now_ms() - days * 86_400_000
+    if days <= 0 {
+        0
+    } else {
+        now_ms() - days * 86_400_000
+    }
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -113,6 +117,14 @@ pub struct HeatmapCell {
 pub struct HourRow {
     pub hour: i64,
     pub tokens: i64,
+}
+
+#[derive(Debug, Serialize, PartialEq, Clone)]
+pub struct PeakDayRow {
+    pub model: String,
+    pub date: String,
+    pub tokens: i64,
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -950,6 +962,36 @@ pub fn hourly(store: &Store) -> DbResult<Vec<HourRow>> {
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<HourRow> = stmt
         .query_map([], |r| Ok(HourRow { hour: r.get(0)?, tokens: r.get(1)? }))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn peak_days(store: &Store, days: i64) -> DbResult<Vec<PeakDayRow>> {
+    let sql = format!(
+        "SELECT COALESCE(a.canonical, u.model, 'unknown') AS model,
+                date(u.ts/1000, 'unixepoch') AS d,
+                COALESCE(SUM({T}), 0) AS tokens,
+                COALESCE(SUM(u.cost_usd), 0.0) AS cost
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE u.ts >= ?1 AND {H}
+         GROUP BY 1, 2
+         HAVING SUM({T}) > 0
+         ORDER BY tokens DESC, d DESC
+         LIMIT 5",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt = store.conn().prepare(&sql)?;
+    let rows: Vec<PeakDayRow> = stmt
+        .query_map([cutoff(days)], |r| {
+            Ok(PeakDayRow {
+                model: r.get(0)?,
+                date: r.get(1)?,
+                tokens: r.get(2)?,
+                cost_usd: r.get(3)?,
+            })
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -2033,5 +2075,55 @@ mod tests {
         assert_eq!(detail.by_model[0].tokens, 300);
         assert_eq!(detail.sessions_list.len(), 1);
         assert_eq!(detail.sessions_list[0].models, vec!["raw-mod-1"]);
+    }
+
+    #[test]
+    fn peak_days_ranking_and_filters() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000_i64;
+
+        let events = vec![
+            test_event("model-a", now, 1000),
+            test_event("model-a", now - day_ms, 5000),
+            test_event("model-b", now, 3000),
+            test_event("model-b", now - day_ms, 2000),
+            test_event("model-c", now - 2 * day_ms, 4000),
+            test_event("model-d", now - 2 * day_ms, 1500),
+            test_event("model-e", now - 40 * day_ms, 9000),
+            test_event("secret-model", now, 99999),
+            test_event("model-a-variant", now, 600),
+        ];
+        store.insert_events(&events).unwrap();
+        store
+            .merge_models(&["model-a".into(), "model-a-variant".into()], "model-a")
+            .unwrap();
+        store.hide_models(&["secret-model".into()]).unwrap();
+
+        let all_time = peak_days(&store, 0).unwrap();
+        assert_eq!(all_time.len(), 5);
+        assert_eq!(all_time[0].model, "model-e");
+        assert_eq!(all_time[0].tokens, 9000);
+        assert_eq!(all_time[1].model, "model-a");
+        assert_eq!(all_time[1].tokens, 5000);
+        assert_eq!(all_time[2].model, "model-c");
+        assert_eq!(all_time[2].tokens, 4000);
+        assert_eq!(all_time[3].model, "model-b");
+        assert_eq!(all_time[3].tokens, 3000);
+        assert_eq!(all_time[4].model, "model-b");
+        assert_eq!(all_time[4].tokens, 2000);
+
+        let last_30 = peak_days(&store, 30).unwrap();
+        assert_eq!(last_30.len(), 5);
+        assert_eq!(last_30[0].model, "model-a");
+        assert_eq!(last_30[0].tokens, 5000);
+        assert_eq!(last_30[1].model, "model-c");
+        assert_eq!(last_30[1].tokens, 4000);
+        assert_eq!(last_30[2].model, "model-b");
+        assert_eq!(last_30[2].tokens, 3000);
+        assert_eq!(last_30[3].model, "model-b");
+        assert_eq!(last_30[3].tokens, 2000);
+        assert_eq!(last_30[4].model, "model-a");
+        assert_eq!(last_30[4].tokens, 1600);
     }
 }

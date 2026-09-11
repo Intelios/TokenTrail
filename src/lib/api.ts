@@ -213,6 +213,13 @@ export interface LeaderboardEvent {
   tokens: number;
 }
 
+export interface PeakDayRow {
+  model: string;
+  date: string;
+  tokens: number;
+  cost_usd: number;
+}
+
 export const api = {
   overview: () => invoke<Overview>('get_overview'),
   daily: (days: number) => invoke<DailyRow[]>('get_daily', { days }),
@@ -221,7 +228,7 @@ export const api = {
   byModel: (days: number) => invoke<ModelRow[]>('get_by_model', { days }),
   modelStats: (days: number) => invoke<ModelStatsRow[]>('get_model_stats', { days }),
   modelDetail: (model: string, days: number) =>
-    invoke<ModelDetail | null>('get_model_detail', { model, days }),
+  invoke<ModelDetail | null>('get_model_detail', { model, days }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
   projectDetail: (project: string, days: number) =>
     invoke<ProjectDetail | null>('get_project_detail', { project, days }),
@@ -245,4 +252,5 @@ export const api = {
   removeModelAlias: (alias: string) => invoke<void>('remove_model_alias', { alias }),
   familyStats: (days: number) => invoke<FamilyStatsRow[]>('get_family_stats', { days }),
   leaderboardEvents: (days: number) => invoke<LeaderboardEvent[]>('get_leaderboard_events', { days }),
+  peakDays: (days: number) => invoke<PeakDayRow[]>('get_peak_days', { days }),
 };
