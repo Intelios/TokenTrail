@@ -156,6 +156,14 @@ export interface ModelDetail {
   total_window_tokens: number;
 }
 
+export interface Achievement {
+  kind: string;
+  tier: string | null;
+  title: string;
+  value: string;
+  earned_ts: number | null;
+}
+
 export interface ProjectModelRow {
   model: string;
   tokens: number;
@@ -228,7 +236,9 @@ export const api = {
   byModel: (days: number) => invoke<ModelRow[]>('get_by_model', { days }),
   modelStats: (days: number) => invoke<ModelStatsRow[]>('get_model_stats', { days }),
   modelDetail: (model: string, days: number) =>
-  invoke<ModelDetail | null>('get_model_detail', { model, days }),
+    invoke<ModelDetail | null>('get_model_detail', { model, days }),
+  modelAchievements: (model: string) =>
+    invoke<Achievement[]>('get_model_achievements', { model }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
   projectDetail: (project: string, days: number) =>
     invoke<ProjectDetail | null>('get_project_detail', { project, days }),

@@ -168,6 +168,15 @@ pub struct ModelDetail {
     pub total_window_tokens: i64,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct Achievement {
+    pub kind: String,
+    pub tier: Option<String>,
+    pub title: String,
+    pub value: String,
+    pub earned_ts: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProjectModelRow {
     pub model: String,
@@ -599,6 +608,276 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         daily,
         total_window_tokens,
     }))
+}
+
+fn format_tokens(n: i64) -> String {
+    if n >= 1_000_000_000 {
+        if n % 1_000_000_000 == 0 || n >= 10_000_000_000 {
+            format!("{}B", n / 1_000_000_000)
+        } else {
+            format!("{:.1}B", n as f64 / 1e9)
+        }
+    } else if n >= 1_000_000 {
+        if n % 1_000_000 == 0 || n >= 10_000_000 {
+            format!("{}M", n / 1_000_000)
+        } else {
+            format!("{:.1}M", n as f64 / 1e6)
+        }
+    } else if n >= 1_000 {
+        if n % 1_000 == 0 || n >= 10_000 {
+            format!("{}K", n / 1_000)
+        } else {
+            format!("{:.1}K", n as f64 / 1e3)
+        }
+    } else {
+        n.to_string()
+    }
+}
+
+pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievement>> {
+    let exists_sql = format!(
+        "SELECT COALESCE(a.canonical, u.model, 'unknown')
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         LIMIT 1",
+        H = NOT_HIDDEN
+    );
+    let mut exists_stmt = store.conn().prepare(&exists_sql)?;
+    let canonical_name = match exists_stmt.query_row(rusqlite::params![model], |r| r.get::<_, String>(0)) {
+        Ok(name) => name,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+
+    let mut achievements = Vec::new();
+
+    // 1. Daily usage for Peak Day and Longest Streak
+    let sql_daily = format!(
+        "SELECT date(ts/1000, 'unixepoch') AS d, COALESCE(SUM({T}), 0), MIN(ts)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         GROUP BY d ORDER BY d",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_daily = store.conn().prepare(&sql_daily)?;
+    let daily_rows: Vec<(String, i64, i64)> = stmt_daily
+        .query_map(rusqlite::params![&canonical_name], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Peak Day
+    if let Some((_d, tokens, min_ts)) = daily_rows.iter().max_by_key(|r| r.1) {
+        if *tokens > 0 {
+            achievements.push(Achievement {
+                kind: "peak_day".to_string(),
+                tier: None,
+                title: "Peak Day".to_string(),
+                value: format!("{} tokens", format_tokens(*tokens)),
+                earned_ts: Some(*min_ts),
+            });
+        }
+    }
+
+    // Longest Streak
+    let day_fmt = format_description!("[year]-[month]-[day]");
+    let mut longest = 0i64;
+    let mut longest_end_ts: Option<i64> = None;
+    let mut run = 0i64;
+    let mut prev: Option<time::Date> = None;
+
+    for (d_str, _tokens, min_ts) in &daily_rows {
+        let Ok(parsed) = time::Date::parse(d_str, &day_fmt) else { continue };
+        if let Some(p) = prev {
+            if next_day(p) == parsed {
+                run += 1;
+            } else {
+                run = 1;
+            }
+        } else {
+            run = 1;
+        }
+        if run > longest {
+            longest = run;
+            longest_end_ts = Some(*min_ts);
+        }
+        prev = Some(parsed);
+    }
+
+    if longest >= 2 {
+        achievements.push(Achievement {
+            kind: "longest_streak".to_string(),
+            tier: None,
+            title: "Longest Streak".to_string(),
+            value: format!("{} days in a row", longest),
+            earned_ts: longest_end_ts,
+        });
+    }
+
+    // 2. Multi-Harness
+    let sql_sources = format!(
+        "SELECT u.source, MIN(u.ts) as first_ts
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         GROUP BY u.source
+         ORDER BY first_ts ASC",
+        H = NOT_HIDDEN
+    );
+    let mut stmt_sources = store.conn().prepare(&sql_sources)?;
+    let sources: Vec<(String, i64)> = stmt_sources
+        .query_map(rusqlite::params![&canonical_name], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if sources.len() >= 2 {
+        achievements.push(Achievement {
+            kind: "multi_harness".to_string(),
+            tier: None,
+            title: "Multi-Harness".to_string(),
+            value: format!("Used in {} harnesses", sources.len()),
+            earned_ts: Some(sources[1].1),
+        });
+    }
+
+    // 3. Family Champion
+    let fam = families::family_for(&canonical_name);
+    if fam != "Other" {
+        let sql_models = format!(
+            "SELECT COALESCE(a.canonical, u.model, 'unknown') as m, COALESCE(SUM({T}), 0) as tok
+             FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+             WHERE {H}
+             GROUP BY m
+             ORDER BY tok DESC",
+            T = TOKENS,
+            H = NOT_HIDDEN
+        );
+        let mut stmt_models = store.conn().prepare(&sql_models)?;
+        let model_totals: Vec<(String, i64)> = stmt_models
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let top_in_fam = model_totals
+            .into_iter()
+            .find(|(m, _tok)| families::family_for(m) == fam);
+
+        if let Some((top_model, top_tokens)) = top_in_fam {
+            if top_model == canonical_name && top_tokens > 0 {
+                achievements.push(Achievement {
+                    kind: "family_champion".to_string(),
+                    tier: None,
+                    title: "Family Champion".to_string(),
+                    value: format!("Top model in {}", fam),
+                    earned_ts: None,
+                });
+            }
+        }
+    }
+
+    // 4. Token Milestones & Big Spender (scanned in chronological order)
+    let sql_events = format!(
+        "SELECT u.ts, {T}, COALESCE(u.cost_usd, 0.0)
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+         ORDER BY u.ts ASC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt_events = store.conn().prepare(&sql_events)?;
+    let mut event_rows = stmt_events.query(rusqlite::params![&canonical_name])?;
+
+    let token_tiers: &[(i64, &str, &str, &str)] = &[
+        (100_000, "100k", "100K Tokens", "100K tokens"),
+        (1_000_000, "1m", "1M Tokens", "1M tokens"),
+        (10_000_000, "10m", "10M Tokens", "10M tokens"),
+        (100_000_000, "100m", "100M Tokens", "100M tokens"),
+        (1_000_000_000, "1b", "1B Tokens", "1B tokens"),
+    ];
+    let mut next_token_tier = 0;
+    let mut earned_token_milestones = Vec::new();
+
+    let cost_tiers: &[(f64, &str, &str, &str)] = &[
+        (10.0, "10", "$10 Spent", "$10 spent"),
+        (100.0, "100", "$100 Spent", "$100 spent"),
+        (1000.0, "1k", "$1K Spent", "$1,000 spent"),
+    ];
+    let mut next_cost_tier = 0;
+    let mut earned_cost_milestones = Vec::new();
+
+    let mut running_tokens: i64 = 0;
+    let mut running_cost: f64 = 0.0;
+
+    while let Some(row) = event_rows.next()? {
+        let ts: i64 = row.get(0)?;
+        let tokens: i64 = row.get(1)?;
+        let cost: f64 = row.get(2)?;
+
+        running_tokens += tokens;
+        running_cost += cost;
+
+        while next_token_tier < token_tiers.len() && running_tokens >= token_tiers[next_token_tier].0 {
+            let (_, tier, title, val) = token_tiers[next_token_tier];
+            earned_token_milestones.push(Achievement {
+                kind: "token_milestone".to_string(),
+                tier: Some(tier.to_string()),
+                title: title.to_string(),
+                value: val.to_string(),
+                earned_ts: Some(ts),
+            });
+            next_token_tier += 1;
+        }
+
+        while next_cost_tier < cost_tiers.len() && running_cost >= cost_tiers[next_cost_tier].0 {
+            let (_, tier, title, val) = cost_tiers[next_cost_tier];
+            earned_cost_milestones.push(Achievement {
+                kind: "big_spender".to_string(),
+                tier: Some(tier.to_string()),
+                title: title.to_string(),
+                value: val.to_string(),
+                earned_ts: Some(ts),
+            });
+            next_cost_tier += 1;
+        }
+
+        if next_token_tier >= token_tiers.len() && next_cost_tier >= cost_tiers.len() {
+            break;
+        }
+    }
+
+    achievements.extend(earned_token_milestones);
+    achievements.extend(earned_cost_milestones);
+
+    // 5. Project Explorer
+    let sql_projects = format!(
+        "SELECT COALESCE(u.project, 'unknown') as p, MIN(u.ts) as first_ts
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
+           AND u.project IS NOT NULL AND u.project != '' AND u.project != 'unknown'
+         GROUP BY p
+         ORDER BY first_ts ASC",
+        H = NOT_HIDDEN
+    );
+    let mut stmt_projects = store.conn().prepare(&sql_projects)?;
+    let projects: Vec<(String, i64)> = stmt_projects
+        .query_map(rusqlite::params![&canonical_name], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if projects.len() >= 3 {
+        achievements.push(Achievement {
+            kind: "project_explorer".to_string(),
+            tier: None,
+            title: "Project Explorer".to_string(),
+            value: format!("Used in {} projects", projects.len()),
+            earned_ts: Some(projects[2].1),
+        });
+    }
+
+    Ok(achievements)
 }
 
 /// Group model stats into families.  Runs `model_stats` under the hood and
@@ -2125,5 +2404,82 @@ mod tests {
         assert_eq!(last_30[3].tokens, 2000);
         assert_eq!(last_30[4].model, "model-a");
         assert_eq!(last_30[4].tokens, 1600);
+    }
+
+    #[test]
+    fn model_achievements_unknown_or_hidden_returns_empty() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                test_event("secret-model", now, 5000),
+            ])
+            .unwrap();
+        store.hide_models(&["secret-model".into()]).unwrap();
+
+        assert!(model_achievements(&store, "nonexistent-model").unwrap().is_empty());
+        assert!(model_achievements(&store, "secret-model").unwrap().is_empty());
+    }
+
+    #[test]
+    fn model_achievements_computes_all_kinds() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let day_ms = 86_400_000i64;
+        let day1 = 1700000000000i64; // arbitrary fixed epoch ms
+        let day2 = day1 + day_ms;
+        let day3 = day2 + day_ms;
+
+        let mut ev1 = test_event("claude-sonnet-4.5", day1, 80_000);
+        ev1.source = Source::Zcode;
+        ev1.project = Some("proj-alpha".into());
+
+        let mut ev2 = test_event("claude-sonnet-4.5", day2, 50_000);
+        ev2.source = Source::ClaudeCode;
+        ev2.project = Some("proj-beta".into());
+
+        let mut ev3 = test_event("claude-sonnet-4.5", day3, 900_000);
+        ev3.source = Source::Zcode;
+        ev3.project = Some("proj-gamma".into());
+
+        let ev_haiku = test_event("claude-haiku-4", day1, 10_000);
+
+        store
+            .insert_events(&[ev1, ev2, ev3, ev_haiku])
+            .unwrap();
+
+        let achs = model_achievements(&store, "claude-sonnet-4.5").unwrap();
+
+        // 1. Peak day
+        let peak = achs.iter().find(|a| a.kind == "peak_day").expect("peak_day present");
+        assert_eq!(peak.title, "Peak Day");
+        assert_eq!(peak.earned_ts, Some(day3));
+        assert!(peak.value.contains("900K") || peak.value.contains("tokens"));
+
+        // 2. Longest streak (3 days: day1, day2, day3)
+        let streak = achs.iter().find(|a| a.kind == "longest_streak").expect("longest_streak present");
+        assert_eq!(streak.value, "3 days in a row");
+        assert_eq!(streak.earned_ts, Some(day3));
+
+        // 3. Multi-harness (ZCode on day1, ClaudeCode on day2)
+        let multi = achs.iter().find(|a| a.kind == "multi_harness").expect("multi_harness present");
+        assert_eq!(multi.value, "Used in 2 harnesses");
+        assert_eq!(multi.earned_ts, Some(day2));
+
+        // 4. Family champion
+        let champ = achs.iter().find(|a| a.kind == "family_champion").expect("family_champion present");
+        assert_eq!(champ.value, "Top model in Claude");
+        assert_eq!(champ.earned_ts, None);
+
+        // 5. Token milestones: 100k on day2 (80k + 50k = 130k), 1m on day3 (130k + 900k = 1.03M)
+        let m100k = achs.iter().find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("100k")).expect("100k milestone");
+        assert_eq!(m100k.earned_ts, Some(day2));
+
+        let m1m = achs.iter().find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("1m")).expect("1m milestone");
+        assert_eq!(m1m.earned_ts, Some(day3));
+
+        // 6. Project explorer (3 projects, 3rd used on day3)
+        let proj = achs.iter().find(|a| a.kind == "project_explorer").expect("project_explorer present");
+        assert_eq!(proj.value, "Used in 3 projects");
+        assert_eq!(proj.earned_ts, Some(day3));
     }
 }

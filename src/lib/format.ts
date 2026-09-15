@@ -188,3 +188,31 @@ export function modelSwatch(model: string, rank: number): string {
 export function modelFlat(model: string, rank: number): string {
   return flatColor(modelColor(model, rank));
 }
+
+/** Left border accent color for achievement cards. */
+export function achColor(ach: { kind: string; tier: string | null }): string {
+  if (ach.kind === 'token_milestone') {
+    if (ach.tier === '100k') return 'var(--dim)';
+    if (ach.tier === '1m') return 'var(--cyn)';
+    return 'var(--org)';
+  }
+  if (ach.kind === 'big_spender') {
+    if (ach.tier === '10') return 'var(--dim)';
+    if (ach.tier === '100') return 'var(--cyn)';
+    return 'var(--org)';
+  }
+  switch (ach.kind) {
+    case 'peak_day':
+      return 'var(--org)';
+    case 'longest_streak':
+      return 'var(--acd)';
+    case 'multi_harness':
+      return 'var(--blu)';
+    case 'family_champion':
+      return 'var(--mag)';
+    case 'project_explorer':
+      return 'var(--vio)';
+    default:
+      return 'var(--dim)';
+  }
+}

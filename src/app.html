@@ -119,6 +119,21 @@
                   total_window_tokens: totalTokens,
                 };
               }
+              case 'get_model_achievements': {
+                const m = MODELS.find((x) => x[0] === args.model);
+                if (!m) return [];
+                return [
+                  { kind: 'peak_day', tier: null, title: 'Peak Day', value: '4.2M tokens', earned_ts: Date.now() - 9 * 86400000 },
+                  { kind: 'longest_streak', tier: null, title: 'Longest Streak', value: '40 days in a row', earned_ts: Date.now() - 14 * 86400000 },
+                  { kind: 'multi_harness', tier: null, title: 'Multi-Harness', value: `Used in ${m[2].length} harnesses`, earned_ts: Date.now() - 60 * 86400000 },
+                  { kind: 'family_champion', tier: null, title: 'Family Champion', value: 'Top model in Claude', earned_ts: null },
+                  { kind: 'token_milestone', tier: '100k', title: '100K Tokens', value: '100K tokens', earned_ts: Date.now() - 120 * 86400000 },
+                  { kind: 'token_milestone', tier: '1m', title: '1M Tokens', value: '1M tokens', earned_ts: Date.now() - 90 * 86400000 },
+                  { kind: 'token_milestone', tier: '10m', title: '10M Tokens', value: '10M tokens', earned_ts: Date.now() - 30 * 86400000 },
+                  { kind: 'big_spender', tier: '10', title: '$10 Spent', value: '$10 spent', earned_ts: Date.now() - 75 * 86400000 },
+                  { kind: 'project_explorer', tier: null, title: 'Project Explorer', value: 'Used in 4 projects', earned_ts: Date.now() - 45 * 86400000 },
+                ];
+              }
               case 'get_by_project':
                 return PROJECTS.map((p, i) => ({ project: p[0], tokens: Math.round(totalTokens * p[1]), events: Math.round(totalEvents * p[1]), sessions: Math.round(totalSessions * p[1]), cost_usd: totalCost * p[1], first_ts: Date.now() - 400 * 86400000, last_ts: Date.now() - i * 172800000 }));
               case 'get_project_detail': {

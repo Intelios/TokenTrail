@@ -1,7 +1,7 @@
 use crate::aggregate::{
-    self, DailyCacheRow, DailyModelRow, DailyRow, EstimatedShare, FamilyStatsRow, HeatmapCell,
-    HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow, Overview, PeakDayRow,
-    ProjectDetail, ProjectRow,
+    self, Achievement, DailyCacheRow, DailyModelRow, DailyRow, EstimatedShare, FamilyStatsRow,
+    HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow, Overview,
+    PeakDayRow, ProjectDetail, ProjectRow,
 };
 use crate::collectors;
 use crate::models::{IngestStats, ModelAlias, SourceStatus};
@@ -67,6 +67,15 @@ pub fn get_model_detail(
 ) -> Result<Option<ModelDetail>, String> {
     let store = state.store.lock().map_err(|_| "store lock poisoned")?;
     aggregate::model_detail(&store, &model, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_model_achievements(
+    state: State<AppState>,
+    model: String,
+) -> Result<Vec<Achievement>, String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    aggregate::model_achievements(&store, &model).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -4,7 +4,8 @@
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
-  import { api, type ModelDetail } from '$lib/api';
+  import AchievementIcon from '$lib/AchievementIcon.svelte';
+  import { api, type ModelDetail, type Achievement } from '$lib/api';
   import {
     fmtCost,
     fmtDate,
@@ -16,6 +17,7 @@
     sourceSwatch,
     sourceLabel,
     basename,
+    achColor,
   } from '$lib/format';
   import { TOOLTIP, ANIM, donutSeries } from '$lib/chartTheme';
   import { singleDailyColumns, singleDailyOption } from '$lib/dailyColumns';
@@ -39,6 +41,7 @@
 
   let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
   let detail = $state<ModelDetail | null>(null);
+  let achievements = $state<Achievement[]>([]);
   let error = $state('');
   let loading = $state(true);
 
@@ -48,8 +51,12 @@
     if (!name) return;
     if (!detail) loading = true;
     try {
-      const d = await api.modelDetail(name, days);
+      const [d, achs] = await Promise.all([
+        api.modelDetail(name, days),
+        api.modelAchievements(name),
+      ]);
       detail = d;
+      achievements = achs;
       error = '';
     } catch (e) {
       error = String(e);
@@ -66,6 +73,7 @@
       // object every call, which would re-run this effect forever
       if (detail && detail.model !== name) {
         detail = null;
+        achievements = [];
       }
       load();
     });
@@ -298,6 +306,36 @@
         </div>
       </div>
     {/if}
+
+    <!-- Achievements -->
+    {#if achievements.length}
+      <div class="dtable-sec up">
+        <h2>Achievements</h2>
+        <div class="ach-grid">
+          {#each achievements as a, i}
+            <div
+              class="ach-card up"
+              style="border-left-color: {achColor(a)}; animation-delay: {Math.min(i * 40, 400)}ms"
+            >
+              <div class="ach-head">
+                <span class="ach-icon-wrap" style="color: {achColor(a)}">
+                  <AchievementIcon kind={a.kind} size={15} />
+                </span>
+                <span class="ach-title">{a.title}</span>
+              </div>
+              <div class="ach-val">{a.value}</div>
+              <div class="ach-date">
+                {#if a.earned_ts}
+                  Earned {fmtDate(a.earned_ts)}
+                {:else}
+                  Current standing
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -423,5 +461,52 @@
     .mc { border-bottom: 2px solid var(--ink); }
     .mcharts { grid-template-columns: 1fr; }
     .mplot { border-right: none; border-bottom: 2px solid var(--ink); }
+  }
+
+  .ach-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    padding: 0 clamp(22px, 1.8vw, 40px) 24px;
+  }
+  .ach-card {
+    background: rgba(13, 13, 11, 0.02);
+    border: 2px solid var(--ink);
+    border-left-width: 5px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .ach-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ach-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .ach-title {
+    font: 600 10px/1 var(--font-ui);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    opacity: 0.6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ach-val {
+    font: 600 15px/1.2 var(--font-ui);
+    letter-spacing: -0.2px;
+    word-break: break-word;
+  }
+  .ach-date {
+    font: 400 11px/1.2 var(--font-mono);
+    opacity: 0.5;
+    margin-top: 2px;
   }
 </style>
