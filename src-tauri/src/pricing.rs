@@ -316,6 +316,23 @@ mod tests {
     }
 
     #[test]
+    fn swe_2_prices() {
+        // Cognition's SWE-2 (all reasoning-effort variants: swe-2-high/max/
+        // medium) lists at $3/$15 with $0.30 cached input; Devin reports no
+        // cache-creation tokens, and Cognition lists no cache-write rate.
+        assert_eq!(rates_for("swe-2-high").map(|r| r.input), Some(3.0));
+        assert_eq!(rates_for("swe-2-max").map(|r| r.output), Some(15.0));
+        assert_eq!(rates_for("swe-2-medium").map(|r| r.cache_read), Some(0.3));
+        assert_eq!(rates_for("swe-2-medium").map(|r| r.cache_write), Some(0.0));
+        // Reasoning-effort suffixes and provider-prefixed spellings resolve.
+        assert_eq!(rates_for("swe-2-high-2026-09-16").map(|r| r.input), Some(3.0));
+        assert_eq!(rates_for("windsurf/swe-2-max").map(|r| r.output), Some(15.0));
+        // Older SWE-1.x generations don't adopt the SWE-2 rates.
+        assert!(rates_for("swe-1-6-slow").is_none());
+        assert!(rates_for("swe-1-7").is_none());
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
