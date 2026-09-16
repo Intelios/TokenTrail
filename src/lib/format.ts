@@ -14,6 +14,7 @@ export const SOURCE_COLORS: Record<string, ChartColor> = {
   antigravity: linearGrad(GEMINI_STOPS),
   opencode: '#ff1f6f',
   gemini: '#4796E3',
+  devin: '#5E6AD2',
   wackchatter: '#c2ee4a',
 };
 
@@ -24,6 +25,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   opencode: 'OpenCode',
   gemini: 'Gemini CLI',
   antigravity: 'Antigravity',
+  devin: 'Devin CLI',
   wackchatter: 'WackChatter',
 };
 

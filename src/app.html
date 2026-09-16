@@ -17,8 +17,8 @@
           const iso = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
           const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-          const SOURCES = ['claude_code', 'codex', 'zcode', 'antigravity', 'opencode', 'gemini', 'wackchatter'];
-          const WEIGHT = [0.55, 0.22, 0.1, 0.07, 0.04, 0.02];
+          const SOURCES = ['claude_code', 'codex', 'zcode', 'antigravity', 'devin', 'opencode', 'gemini', 'wackchatter'];
+          const WEIGHT = [0.5, 0.2, 0.09, 0.06, 0.05, 0.04, 0.02, 0.02];
           const MODELS = [
             ['claude-opus-5', 8.1e6, ['claude_code', 'zcode'], 118.4, 2910, 412],
             ['claude-sonnet-5', 5.4e6, ['claude_code', 'opencode'], 61.2, 2140, 318],
@@ -26,6 +26,7 @@
             ['gpt-5.6-sol', 1.6e6, ['codex'], 31.05, 812, 98],
             ['gpt-5.5', 1.3e6, ['codex', 'opencode'], 18.9, 660, 87],
             ['claude-haiku-4-5', 588e3, ['claude_code'], 2.1, 1240, 201],
+            ['swe-1-6-slow', 420e3, ['devin'], 0, 214, 37],
           ];
           const PROJECTS = [
             ['~/dev/TokenTrail', 0.31], ['~/dev/aurora-api', 0.24], ['~/work/billing-svc', 0.2],

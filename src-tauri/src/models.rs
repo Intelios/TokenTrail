@@ -9,6 +9,7 @@ pub enum Source {
     Opencode,
     Gemini,
     Antigravity,
+    Devin,
     WackChatter,
 }
 
@@ -21,6 +22,7 @@ impl Source {
             Source::Opencode => "opencode",
             Source::Gemini => "gemini",
             Source::Antigravity => "antigravity",
+            Source::Devin => "devin",
             Source::WackChatter => "wackchatter",
         }
     }
@@ -33,6 +35,7 @@ impl Source {
             Source::Opencode => "OpenCode",
             Source::Gemini => "Gemini CLI",
             Source::Antigravity => "Antigravity",
+            Source::Devin => "Devin CLI",
             Source::WackChatter => "WackChatter",
         }
     }
@@ -46,6 +49,7 @@ impl Source {
             "opencode" => Some(Source::Opencode),
             "gemini" => Some(Source::Gemini),
             "antigravity" => Some(Source::Antigravity),
+            "devin" => Some(Source::Devin),
             "wackchatter" => Some(Source::WackChatter),
             _ => None,
         }

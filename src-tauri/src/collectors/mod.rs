@@ -1,6 +1,7 @@
 pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
+pub mod devin;
 pub mod gemini;
 pub mod opencode;
 pub mod wackchatter;
@@ -22,6 +23,7 @@ pub fn sync_all(store: &Store, home: &Path) -> Vec<IngestStats> {
         ("opencode", opencode::collect),
         ("gemini", gemini::collect),
         ("antigravity", antigravity::collect),
+        ("devin", devin::collect),
         ("wackchatter", wackchatter::collect),
     ];
     runs.into_iter()
@@ -40,6 +42,7 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
         (Source::Opencode, home.join(".local/share/opencode")),
         (Source::Gemini, home.join(".gemini/tmp")),
         (Source::Antigravity, home.join(".gemini/antigravity/conversations")),
+        (Source::Devin, home.join(".local/share/devin/cli/sessions.db")),
         // The log, not the library: the library moves, and this path never does.
         (Source::WackChatter, home.join(".wackchatter/usage.jsonl")),
     ];

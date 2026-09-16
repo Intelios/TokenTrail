@@ -1,10 +1,12 @@
 # TokenTrail — Workspace Instructions
 
-TokenTrail is a Tauri desktop app that aggregates AI usage across local tools (ZCode, Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, WackChatter) and shows it in a SvelteKit + ECharts dashboard.
+TokenTrail is a Tauri desktop app that aggregates AI usage across local tools (ZCode, Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, Devin CLI, WackChatter) and shows it in a SvelteKit + ECharts dashboard.
 
 WackChatter note: its collector is the only one that reads two places for one source, and the only one that reads more than one origin. `~/.wackchatter/usage.jsonl` is a live log the app writes when the user opts in — the only record of generations that never become a stored message (Arena rounds, rolling summaries, memory extraction, persona derivation). `<library>/chats.db` holds the transcripts, which carry per-swipe counts going back years; `~/.wackchatter/library.json` is how it is found, because the library moves. The two overlap for ordinary replies and dedupe on the generation id WackChatter mints per request, so `wackchatter.rs` is also the worked example of why event identity has to be stable.
 
 Antigravity note: its collector reads `~/.gemini/antigravity/conversations/*.db` — per-conversation SQLite files whose `gen_metadata` rows are protobuf blobs (ChatModelMetadata wire layout, hand-parsed in `antigravity.rs`). The internal format is undocumented and may change between Antigravity releases; the wire reader is deliberately tolerant and skips unparseable rows.
+
+Devin CLI note: its collector reads `~/.local/share/devin/cli/sessions.db` — one SQLite store whose `message_nodes` rows are JSON chat messages; assistant rows carry provider token counts in `metadata.metrics`, and the node forest stores every assistant message **twice** (two nodes, one `message_id`), so event identity is `(session_id, message_id)` and the twin must never count as a second generation. While the CLI runs, essentially all data lives in the WAL (the main file can be near-empty): a readonly connection reads it fine while the CLI holds the database open, but after a crash the WAL is unrecoverable without write access and the collector quietly reports nothing until the CLI next opens and checkpoints. `transcripts/*.json` beside the database are exports of the same conversations and are deliberately not read.
 
 ## Repository layout
 
