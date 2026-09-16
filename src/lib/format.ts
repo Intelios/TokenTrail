@@ -194,8 +194,8 @@ export function modelFlat(model: string, rank: number): string {
 /** Left border accent color for achievement cards. */
 export function achColor(ach: { kind: string; tier: string | null }): string {
   if (ach.kind === 'token_milestone') {
-    if (ach.tier === '100k') return 'var(--dim)';
-    if (ach.tier === '1m') return 'var(--cyn)';
+    if (ach.tier === '100m') return 'var(--cyn)';
+    if (ach.tier === '500m') return 'var(--vio)';
     return 'var(--org)';
   }
   if (ach.kind === 'big_spender') {

@@ -790,10 +790,8 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     let mut event_rows = stmt_events.query(rusqlite::params![&canonical_name])?;
 
     let token_tiers: &[(i64, &str, &str, &str)] = &[
-        (100_000, "100k", "100K Tokens", "100K tokens"),
-        (1_000_000, "1m", "1M Tokens", "1M tokens"),
-        (10_000_000, "10m", "10M Tokens", "10M tokens"),
         (100_000_000, "100m", "100M Tokens", "100M tokens"),
+        (500_000_000, "500m", "500M Tokens", "500M tokens"),
         (1_000_000_000, "1b", "1B Tokens", "1B tokens"),
     ];
     let mut next_token_tier = 0;
@@ -2437,7 +2435,7 @@ mod tests {
         ev2.source = Source::ClaudeCode;
         ev2.project = Some("proj-beta".into());
 
-        let mut ev3 = test_event("claude-sonnet-4.5", day3, 900_000);
+        let mut ev3 = test_event("claude-sonnet-4.5", day3, 1_100_000_000);
         ev3.source = Source::Zcode;
         ev3.project = Some("proj-gamma".into());
 
@@ -2453,7 +2451,7 @@ mod tests {
         let peak = achs.iter().find(|a| a.kind == "peak_day").expect("peak_day present");
         assert_eq!(peak.title, "Peak Day");
         assert_eq!(peak.earned_ts, Some(day3));
-        assert!(peak.value.contains("900K") || peak.value.contains("tokens"));
+        assert!(peak.value.contains("1.1B") || peak.value.contains("tokens"));
 
         // 2. Longest streak (3 days: day1, day2, day3)
         let streak = achs.iter().find(|a| a.kind == "longest_streak").expect("longest_streak present");
@@ -2470,12 +2468,19 @@ mod tests {
         assert_eq!(champ.value, "Top model in Claude");
         assert_eq!(champ.earned_ts, None);
 
-        // 5. Token milestones: 100k on day2 (80k + 50k = 130k), 1m on day3 (130k + 900k = 1.03M)
-        let m100k = achs.iter().find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("100k")).expect("100k milestone");
-        assert_eq!(m100k.earned_ts, Some(day2));
+        // 5. Token milestones: 100m, 500m and 1b all on day3 (130k + 1.1B crosses every tier)
+        let m100m = achs.iter().find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("100m")).expect("100m milestone");
+        assert_eq!(m100m.earned_ts, Some(day3));
 
-        let m1m = achs.iter().find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("1m")).expect("1m milestone");
-        assert_eq!(m1m.earned_ts, Some(day3));
+        let m500m = achs.iter().find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("500m")).expect("500m milestone");
+        assert_eq!(m500m.earned_ts, Some(day3));
+
+        let m1b = achs.iter().find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("1b")).expect("1b milestone");
+        assert_eq!(m1b.earned_ts, Some(day3));
+
+        // The retired easy tiers are gone.
+        assert!(!achs.iter().any(|a| a.kind == "token_milestone"
+            && matches!(a.tier.as_deref(), Some("100k" | "1m" | "10m"))));
 
         // 6. Project explorer (3 projects, 3rd used on day3)
         let proj = achs.iter().find(|a| a.kind == "project_explorer").expect("project_explorer present");
