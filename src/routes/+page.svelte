@@ -86,6 +86,7 @@
     if (!ov?.total_tokens) return [];
     return [...ov.by_source]
       .sort((a, b) => b.tokens - a.tokens)
+      .slice(0, 4)
       .map((s) => ({
         label: sourceLabel(s.source),
         pct: (s.tokens / ov.total_tokens) * 100,
