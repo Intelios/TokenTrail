@@ -7,6 +7,7 @@
   import {
     fmtCost,
     fmtTokens,
+    fmtTokensExact,
     fmtTokensSplit,
     sourceSwatch,
     sourceLabel,
@@ -182,7 +183,7 @@
           <div class="rankbar up" style="animation-delay:{180 + i * 60}ms">
             <span class="chip" style="background:{modelSwatch(m.model, i)}">{i + 1}</span>
             <span class="nm" title={m.model}>{m.model}</span>
-            <span class="tr">
+            <span class="tr" data-tip="{m.model} · {fmtTokensExact(m.tokens)} tokens">
               <div
                 class="gw"
                 style="width:{Math.max(2, Math.round((m.tokens / maxModelTokens) * 100))}%;background:{modelSwatch(m.model, i)};animation-delay:{240 + i * 60}ms"

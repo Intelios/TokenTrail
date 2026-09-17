@@ -6,7 +6,9 @@
   import { api, type DailyModelRow, type ModelStatsRow, type LeaderboardEvent } from '$lib/api';
   import {
     fmtCost,
+    fmtCostExact,
     fmtTokens,
+    fmtTokensExact,
     fmtTokensSplit,
     sourceSwatch,
     sourceLabel,
@@ -52,6 +54,12 @@
     if (metric === 'tokens') return fmtTokens(n);
     if (metric === 'cost') return fmtCost(n);
     return n.toLocaleString();
+  }
+
+  function fmtMetricExact(n: number): string {
+    if (metric === 'tokens') return `${fmtTokensExact(n)} tokens`;
+    if (metric === 'cost') return `${fmtCostExact(n)} est.`;
+    return `${n.toLocaleString()} calls`;
   }
 
   async function load() {
@@ -335,7 +343,7 @@
           <div class="rankbar up" style="animation-delay:{i * 50}ms">
             <span class="chip" style="background:{modelSwatch(r.model, i)}">{i + 1}</span>
             <span class="nm" title={r.model}>{r.model}</span>
-            <span class="tr">
+            <span class="tr" data-tip="{r.model} · {fmtMetricExact(metricVal(r))}">
               <div
                 class="gw"
                 style="width:{Math.max(2, Math.round((metricVal(r) / maxTop6) * 100))}%;background:{modelSwatch(r.model, i)};animation-delay:{100 + i * 50}ms"

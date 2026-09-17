@@ -8,7 +8,9 @@
   import { api, type DailyModelRow, type FamilyStatsRow } from '$lib/api';
   import {
     fmtCost,
+    fmtCostExact,
     fmtTokens,
+    fmtTokensExact,
     fmtTokensSplit,
     sourceSwatch,
     sourceLabel,
@@ -67,6 +69,12 @@
     if (metric === 'tokens') return fmtTokens(n);
     if (metric === 'cost') return fmtCost(n);
     return n.toLocaleString();
+  }
+
+  function fmtMetricExact(n: number): string {
+    if (metric === 'tokens') return `${fmtTokensExact(n)} tokens`;
+    if (metric === 'cost') return `${fmtCostExact(n)} est.`;
+    return `${n.toLocaleString()} calls`;
   }
 
   async function load() {
@@ -159,7 +167,7 @@
       tooltip: {
         ...TOOLTIP,
         formatter: (p: any) =>
-          `${p.name}<br/>${fmtMetric(Number(p.value ?? 0))} (${p.percent}%)`,
+          `${p.name}<br/>${fmtMetricExact(Number(p.value ?? 0))} (${p.percent}%)`,
       },
       series: [donutSeries(data)],
     } satisfies EChartsOption;
@@ -273,7 +281,7 @@
           <div class="rankbar up" style="animation-delay:{i * 50}ms">
             <span class="chip" style="background:{color}">{i + 1}</span>
             <span class="nm" title={f.family}>{f.family}</span>
-            <span class="tr">
+            <span class="tr" data-tip="{f.family} · {fmtMetricExact(metricVal(f))}">
               <div
                 class="gw"
                 style="width:{Math.max(2, Math.round((metricVal(f) / maxTop6) * 100))}%;background:{color};animation-delay:{100 + i * 50}ms"

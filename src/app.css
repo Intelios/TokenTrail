@@ -245,6 +245,41 @@ h1 {
 }
 .rankbar .tr { flex: 1; height: clamp(11px, 0.85vw, 17px); background: var(--hair); }
 .rankbar .tr > div { height: 100%; }
+/* exact value on hover when the row carries data-tip */
+.rankbar .tr[data-tip] { position: relative; cursor: default; }
+.rankbar .tr[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--bone);
+  border: 2px solid var(--ink);
+  padding: 5px 9px;
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+/* square notch under the tooltip */
+.rankbar .tr[data-tip]::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-bottom: none;
+  border-top-color: var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.rankbar .tr[data-tip]:hover::after,
+.rankbar .tr[data-tip]:hover::before { opacity: 1; }
 .rankbar b { width: clamp(56px, 4.4vw, 90px); text-align: right; font: 500 clamp(12px, 0.85vw, 15px)/1 var(--font-mono); flex: none; }
 .rankbar .pct { width: clamp(38px, 3vw, 58px); text-align: right; font: 500 clamp(10px, 0.75vw, 12px)/1 var(--font-mono); opacity: 0.5; flex: none; }
 

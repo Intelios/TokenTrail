@@ -81,6 +81,22 @@ export function fmtCost(n: number | null): string {
   return '$' + n.toFixed(4);
 }
 
+/// Hover/inspection variants that keep two significant decimals where the
+/// headline format rounds to one ("1.14B" beside "1B"), or show full cents
+/// for large costs.
+export function fmtTokensExact(n: number): string {
+  if (!isFinite(n)) return '—';
+  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 1 : 2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 1 : 2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 1 : 2) + 'K';
+  return String(Math.round(n));
+}
+
+export function fmtCostExact(n: number | null): string {
+  if (n == null || !isFinite(n)) return '—';
+  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export function fmtDate(ts: number | null): string {
   if (!ts) return '—';
   return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
