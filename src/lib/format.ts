@@ -215,8 +215,8 @@ export function achColor(ach: { kind: string; tier: string | null }): string {
     return 'var(--org)';
   }
   if (ach.kind === 'big_spender') {
-    if (ach.tier === '10') return 'var(--dim)';
-    if (ach.tier === '100') return 'var(--cyn)';
+    if (ach.tier === '100') return 'var(--dim)';
+    if (ach.tier === '500') return 'var(--cyn)';
     return 'var(--org)';
   }
   switch (ach.kind) {

@@ -798,8 +798,8 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     let mut earned_token_milestones = Vec::new();
 
     let cost_tiers: &[(f64, &str, &str, &str)] = &[
-        (10.0, "10", "$10 Spent", "$10 spent"),
         (100.0, "100", "$100 Spent", "$100 spent"),
+        (500.0, "500", "$500 Spent", "$500 spent"),
         (1000.0, "1k", "$1K Spent", "$1,000 spent"),
     ];
     let mut next_cost_tier = 0;
