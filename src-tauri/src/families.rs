@@ -30,6 +30,8 @@ const FAMILY_RULES: &[(&str, &str)] = &[
     ("qwen", "Qwen"),
     ("glm", "GLM"),
     ("mimo", "MiMo"),
+    // Cognition — the SWE line, usually arriving via the Devin CLI
+    ("swe", "SWE"),
     // Meta — Llama weights plus the Muse line; family groups by provider
     ("meta-llama", "Meta"),
     ("llama", "Meta"),
@@ -104,6 +106,14 @@ mod tests {
         assert_eq!(family_for("codestral-latest"), "Mistral");
         assert_eq!(family_for("grok-4"), "Grok");
         assert_eq!(family_for("grok-code-fast-1"), "Grok");
+    }
+
+    #[test]
+    fn cognition_swe() {
+        assert_eq!(family_for("swe-2-max"), "SWE");
+        assert_eq!(family_for("swe-2-high"), "SWE");
+        assert_eq!(family_for("swe-1-6-slow"), "SWE");
+        assert_eq!(family_for("cognition/swe-2"), "SWE");
     }
 
     #[test]

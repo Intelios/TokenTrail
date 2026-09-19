@@ -32,6 +32,13 @@ export interface DailyRow {
   cost_usd: number | null;
 }
 
+export interface DailyProjectRow {
+  date: string;
+  project: string;
+  tokens: number;
+  cost_usd: number | null;
+}
+
 export interface DailyModelRow {
   date: string;
   model: string;
@@ -240,6 +247,7 @@ export const api = {
   modelAchievements: (model: string) =>
     invoke<Achievement[]>('get_model_achievements', { model }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
+  dailyByProject: (days: number) => invoke<DailyProjectRow[]>('get_daily_by_project', { days }),
   projectDetail: (project: string, days: number) =>
     invoke<ProjectDetail | null>('get_project_detail', { project, days }),
   heatmap: (days: number) => invoke<HeatmapCell[]>('get_heatmap', { days }),

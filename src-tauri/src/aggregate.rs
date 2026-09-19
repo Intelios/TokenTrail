@@ -107,6 +107,14 @@ pub struct ProjectRow {
     pub last_ts: Option<i64>,
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+pub struct DailyProjectRow {
+    pub date: String,
+    pub project: String,
+    pub tokens: i64,
+    pub cost_usd: Option<f64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct HeatmapCell {
     pub date: String,
@@ -971,6 +979,34 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
                 cost_usd: r.get(4)?,
                 first_ts: r.get(5)?,
                 last_ts: r.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn daily_by_project(store: &Store, days: i64) -> DbResult<Vec<DailyProjectRow>> {
+    let sql = format!(
+        "SELECT date(ts/1000,'unixepoch') AS d,
+                project,
+                COALESCE(SUM({T}),0),
+                SUM(cost_usd)
+         FROM usage_event u
+         WHERE u.ts >= ?1 AND {H}
+           AND project IS NOT NULL AND project != '' AND project != 'unknown'
+         GROUP BY d, project
+         ORDER BY d, project",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut stmt = store.conn().prepare(&sql)?;
+    let rows: Vec<DailyProjectRow> = stmt
+        .query_map([cutoff(days)], |r| {
+            Ok(DailyProjectRow {
+                date: r.get(0)?,
+                project: r.get(1)?,
+                tokens: r.get(2)?,
+                cost_usd: r.get(3)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -2487,4 +2523,54 @@ mod tests {
         assert_eq!(proj.value, "Used in 3 projects");
         assert_eq!(proj.earned_ts, Some(day3));
     }
+
+    #[test]
+    fn daily_by_project_excludes_unknown_and_aggregates_properly() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let day_ms = 86_400_000i64;
+        let day1 = 1700000000000i64; // arbitrary fixed epoch ms: 2023-11-14
+        let day2 = day1 + day_ms;
+
+        let mut ev1 = test_event("gpt-4", day1, 100);
+        ev1.project = Some("project-a".into());
+
+        let mut ev2 = test_event("gpt-4", day1 + 1000, 200);
+        ev2.project = Some("project-a".into());
+
+        let mut ev3 = test_event("gpt-4", day1 + 2000, 300);
+        ev3.project = Some("project-b".into());
+
+        let mut ev_unknown1 = test_event("gpt-4", day1 + 3000, 400);
+        ev_unknown1.project = None;
+
+        let mut ev_unknown2 = test_event("gpt-4", day1 + 4000, 500);
+        ev_unknown2.project = Some("unknown".into());
+
+        let mut ev_unknown3 = test_event("gpt-4", day1 + 5000, 600);
+        ev_unknown3.project = Some("".into());
+
+        let mut ev_day2 = test_event("gpt-4", day2, 700);
+        ev_day2.project = Some("project-b".into());
+
+        store
+            .insert_events(&[
+                ev1, ev2, ev3, ev_unknown1, ev_unknown2, ev_unknown3, ev_day2,
+            ])
+            .unwrap();
+
+        let rows = daily_by_project(&store, 0).unwrap();
+        // Day 1 has project-a (100 + 200 = 300) and project-b (300). Unknowns are excluded.
+        // Day 2 has project-b (700).
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].project, "project-a");
+        assert_eq!(rows[0].tokens, 300);
+
+        assert_eq!(rows[1].project, "project-b");
+        assert_eq!(rows[1].tokens, 300);
+
+        assert_eq!(rows[2].project, "project-b");
+        assert_eq!(rows[2].tokens, 700);
+        assert_ne!(rows[0].date, rows[2].date);
+    }
 }
+

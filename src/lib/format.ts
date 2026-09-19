@@ -42,6 +42,27 @@ export const MIX_COLORS = ['#3d8eff', '#00c2c2', '#c8e600', '#ff1f6f'];
 /** Marathon violet accent for thinking / reasoning tokens. */
 export const REASONING_COLOR = '#7c5cff';
 
+/// Rotating palette for project series — uses Marathon accents cycling by rank.
+export const PROJECT_PALETTE: ChartColor[] = [
+  '#D97757', // org
+  '#00c2c2', // cyn
+  '#c8e600', // acd
+  '#ff1f6f', // mag
+  '#7c5cff', // vio
+  '#4796E3', // blu
+  '#10A37F', // grn
+  '#8a8578', // dim
+  '#4a473e', // deep dim
+];
+
+export function projectColor(rank: number): ChartColor {
+  return PROJECT_PALETTE[rank % PROJECT_PALETTE.length];
+}
+
+export function projectSwatch(rank: number): string {
+  return cssColor(projectColor(rank));
+}
+
 export function sourceColor(s: string): ChartColor {
   return SOURCE_COLORS[s] ?? '#8a8578';
 }
@@ -129,8 +150,9 @@ export function fmtDuration(ms: number): string {
 /// Provider brand colors per model family — keys must stay in sync with the
 /// FAMILY_RULES prefixes in src-tauri/src/families.rs. Gemini wears its
 /// sparkle gradient; GLM/Grok keep monochrome ink tones (their brand is ink).
-/// "Other" is deliberately absent: unbranded models cycle MODEL_PALETTE by
-/// rank in familyColor() instead of sharing one flat gray.
+/// SWE wears Cognition's purple, shared with the devin source color since
+/// Cognition makes both. "Other" is deliberately absent: unbranded models
+/// cycle MODEL_PALETTE by rank in familyColor() instead of sharing one flat gray.
 export const FAMILY_COLORS: Record<string, ChartColor> = {
   Claude: '#D97757',
   GPT: '#10A37F',
@@ -143,6 +165,7 @@ export const FAMILY_COLORS: Record<string, ChartColor> = {
   GLM: '#6e6a5e',
   Grok: '#0d0d0b',
   MiMo: '#FF6900',
+  SWE: '#5E6AD2',
 };
 
 export function familyColor(family: string, rank: number): ChartColor {
@@ -178,7 +201,7 @@ const FAMILY_RULES: ReadonlyArray<readonly [string, string]> = [
   ['claude-sonnet', 'Claude'], ['claude-haiku', 'Claude'], ['claude', 'Claude'],
   ['gemini-3.7-flash', 'Gemini'], ['gemini-2.5-pro', 'Gemini'], ['gemini', 'Gemini'],
   ['deepseek-v4-pro', 'DeepSeek'], ['deepseek', 'DeepSeek'],
-  ['kimi', 'Kimi'], ['qwen', 'Qwen'], ['glm', 'GLM'], ['mimo', 'MiMo'],
+  ['kimi', 'Kimi'], ['qwen', 'Qwen'], ['glm', 'GLM'], ['mimo', 'MiMo'], ['swe', 'SWE'],
   ['meta-llama', 'Meta'], ['llama', 'Meta'], ['muse', 'Meta'], ['codestral', 'Mistral'], ['mistral', 'Mistral'], ['grok', 'Grok'],
 ];
 

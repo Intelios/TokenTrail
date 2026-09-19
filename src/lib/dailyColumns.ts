@@ -7,8 +7,8 @@
 /// "quiet" band — short gaps stay as real empty slots, because a day or two off
 /// is the rhythm of the data rather than dead space worth compressing.
 import type { EChartsOption } from 'echarts';
-import type { DailyRow, HeatmapCell } from './api';
-import { fmtTokens, sourceColor, sourceLabel } from './format';
+import type { DailyProjectRow, DailyRow, HeatmapCell } from './api';
+import { basename, fmtTokens, projectColor, sourceColor, sourceLabel } from './format';
 import {
   TOOLTIP,
   ANIM,
@@ -375,4 +375,168 @@ export function singleDailyOption(
     ],
   } satisfies EChartsOption;
 }
+
+export function disambiguateProjectNames(paths: string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const p of paths) {
+    const b = basename(p);
+    counts.set(b, (counts.get(b) ?? 0) + 1);
+  }
+  return paths.map((p) => {
+    const b = basename(p);
+    if ((counts.get(b) ?? 0) > 1) {
+      const parts = p.split(/[/\\]/).filter(Boolean);
+      if (parts.length >= 2) {
+        return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+      }
+    }
+    return b;
+  });
+}
+
+/**
+ * Lay project daily usage on a gapless calendar spine from the first active day to the last,
+ * folding idle stretches into a quiet column.
+ */
+export function projectDailyColumns(daily: DailyProjectRow[], projects: string[]): Column[] {
+  const buckets = new Map<number, number[]>();
+  let first = Infinity;
+  let last = -Infinity;
+
+  for (const r of daily) {
+    if (r.tokens <= 0) continue;
+    const i = projects.indexOf(r.project);
+    if (i < 0) continue;
+    const t = utc(r.date);
+    const values = buckets.get(t) ?? projects.map(() => 0);
+    values[i] += r.tokens;
+    buckets.set(t, values);
+    if (t < first) first = t;
+    if (t > last) last = t;
+  }
+  if (!buckets.size) return [];
+
+  const cols: Column[] = [];
+  let idle = 0;
+
+  const flush = (until: number) => {
+    if (!idle) return;
+    const start = until - idle * DAY;
+    if (idle >= MIN_QUIET_RUN) {
+      cols.push({ kind: 'quiet', start, days: idle });
+    } else {
+      for (let k = 0; k < idle; k++) {
+        cols.push({ kind: 'day', start: start + k * DAY, values: projects.map(() => 0), total: 0 });
+      }
+    }
+    idle = 0;
+  };
+
+  for (let t = first; t <= last; t += DAY) {
+    const values = buckets.get(t);
+    if (!values) {
+      idle++;
+      continue;
+    }
+    flush(t);
+    cols.push({ kind: 'day', start: t, values, total: values.reduce((a, b) => a + b, 0) });
+  }
+  return cols;
+}
+
+export function projectDailyOption(cols: Column[], projects: string[]): EChartsOption | undefined {
+  if (!cols.length) return undefined;
+
+  const cats = cols.map((c, i) => (c.kind === 'day' ? iso(c.start) : `quiet-${i}`));
+  const labels = new Map(cols.map((c, i) => [cats[i], c.kind === 'day' ? tick(c.start) : '']));
+  const quietText = cols.map((c) => (c.kind === 'quiet' ? quietLabel(c.days) : ''));
+  const hasQuiet = cols.some((c) => c.kind === 'quiet');
+  const displayNames = disambiguateProjectNames(projects);
+
+  return {
+    backgroundColor: 'transparent',
+    ...ANIM,
+    tooltip: {
+      trigger: 'axis',
+      ...TOOLTIP,
+      confine: true,
+      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(13,13,11,0.06)' } },
+      formatter: (params: unknown) => {
+        type TipParam = { dataIndex: number; marker: string; seriesName: string; value?: number };
+        const all = params as TipParam[];
+        const col = cols[all[0]?.dataIndex ?? -1];
+        if (!col) return '';
+        if (col.kind === 'quiet') {
+          return (
+            `<b>${col.days} quiet ${col.days === 1 ? 'day' : 'days'}</b><br/>` +
+            `<span style="opacity:0.65;">${span(col.start, col.start + (col.days - 1) * DAY)}</span><br/>no usage`
+          );
+        }
+        const title = `<b>${longTick(col.start)}</b>`;
+        const rows = all.filter((p) => Number(p.value ?? 0) > 0);
+        if (!rows.length) return `${title}<br/>no usage`;
+        return (
+          title +
+          '<br/>' +
+          rows
+            .map((p) => `${p.marker}${p.seriesName}&nbsp;&nbsp;<b>${fmtTokens(Number(p.value))}</b>`)
+            .join('<br/>') +
+          `<div style="border-top:1px solid rgba(232,228,217,0.3);margin-top:6px;padding-top:5px;display:flex;justify-content:space-between;gap:24px;">` +
+          `<span style="opacity:0.65;letter-spacing:1px;">TOTAL</span><b>${fmtTokens(col.total)}</b></div>`
+        );
+      },
+    },
+    grid: { left: 4, right: 8, top: 12, bottom: 0, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: cats,
+      axisLine: AXIS_LINE,
+      axisTick: { show: false },
+      axisLabel: { ...AXIS_LABEL, hideOverlap: true, formatter: (v: string) => labels.get(v) ?? '' },
+    },
+    yAxis: [
+      {
+        type: 'value',
+        min: 0,
+        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtTokens(v) },
+        splitLine: SPLIT_LINE,
+      },
+      { type: 'value', min: 0, max: 1, show: false },
+    ],
+    series: [
+      ...projects.map((_p, i) =>
+        stackedColumn(
+          displayNames[i],
+          cols.map((c) => (c.kind === 'day' ? c.values[i] || null : null)),
+          projectColor(i),
+          { delay: i * 40 },
+        ),
+      ),
+      ...(hasQuiet
+        ? [
+            {
+              name: 'quiet',
+              type: 'bar' as const,
+              yAxisIndex: 1,
+              barGap: '-100%',
+              z: 0,
+              silent: true,
+              itemStyle: { color: 'rgba(13,13,11,0.05)' },
+              label: {
+                show: true,
+                position: 'inside' as const,
+                rotate: 90,
+                color: DIM,
+                fontFamily: MONO,
+                fontSize: 9,
+                formatter: (p: { dataIndex: number }) => quietText[p.dataIndex],
+              },
+              data: cols.map((c) => (c.kind === 'quiet' ? 1 : null)),
+            },
+          ]
+        : []),
+    ],
+  } satisfies EChartsOption;
+}
+
 

@@ -328,8 +328,29 @@ mod tests {
         assert_eq!(rates_for("swe-2-high-2026-09-16").map(|r| r.input), Some(3.0));
         assert_eq!(rates_for("windsurf/swe-2-max").map(|r| r.output), Some(15.0));
         // Older SWE-1.x generations don't adopt the SWE-2 rates.
-        assert!(rates_for("swe-1-6-slow").is_none());
-        assert!(rates_for("swe-1-7").is_none());
+        assert_eq!(rates_for("swe-1-6-slow").map(|r| r.input), Some(0.5));
+        assert_eq!(rates_for("swe-1-7").map(|r| r.input), Some(0.5));
+    }
+
+    #[test]
+    fn swe_1_x_prices() {
+        // SWE-1.6 (base / fast / slow effort variants) lists at $0.50/$2.50
+        // with $0.20 cached input and no cache-write rate.
+        assert_eq!(rates_for("swe-1-6").map(|r| r.input), Some(0.5));
+        assert_eq!(rates_for("swe-1-6-fast").map(|r| r.output), Some(2.5));
+        assert_eq!(rates_for("swe-1-6-slow").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("swe-1-6-slow").map(|r| r.cache_write), Some(0.0));
+        assert_eq!(rates_for("windsurf/swe-1-6-fast").map(|r| r.input), Some(0.5));
+        // SWE-1.7 base carries the same rates as 1.6.
+        assert_eq!(rates_for("swe-1-7").map(|r| r.input), Some(0.5));
+        assert_eq!(rates_for("swe-1-7-medium").map(|r| r.output), Some(2.5));
+        // SWE-1.7 Lightning (Cerebras-served) is far pricier: $2.50/$12.50
+        // with $1.00 cached input; its prefix must outrank plain swe-1-7.
+        assert_eq!(rates_for("swe-1-7-lightning").map(|r| r.input), Some(2.5));
+        assert_eq!(rates_for("swe-1-7-lightning").map(|r| r.output), Some(12.5));
+        assert_eq!(rates_for("swe-1-7-lightning-medium").map(|r| r.cache_read), Some(1.0));
+        assert_eq!(rates_for("swe-1-7-lightning-2026-08-01").map(|r| r.output), Some(12.5));
+        assert_eq!(rates_for("windsurf/swe-1-7-lightning").map(|r| r.input), Some(2.5));
     }
 
     #[test]
