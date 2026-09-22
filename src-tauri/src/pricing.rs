@@ -354,6 +354,25 @@ mod tests {
     }
 
     #[test]
+    fn opus_55_prices() {
+        // Opus 5.5 (launched 2026-09-22) dropped to $4/$20 with a 5% cache hit
+        // ($0.20) and Anthropic's standard 1.25x cache write ($5). Both the
+        // hyphenated API id and the dot spelling resolve.
+        assert_eq!(rates_for("claude-opus-5-5").map(|r| r.input), Some(4.0));
+        assert_eq!(rates_for("claude-opus-5-5").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("claude-opus-5-5").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("claude-opus-5-5").map(|r| r.cache_write), Some(5.0));
+        assert_eq!(rates_for("claude-opus-5.5").map(|r| r.input), Some(4.0));
+        assert_eq!(rates_for("claude-opus-5.5[ffe]").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("claude-opus-5-5-20260922").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("anthropic/claude-opus-5.5").map(|r| r.input), Some(4.0));
+        // Plain Opus 5 keeps the $5/$25 catch-all; Opus 4.x keeps $15/$75.
+        assert_eq!(rates_for("claude-opus-5").map(|r| r.input), Some(5.0));
+        assert_eq!(rates_for("claude-opus-5").map(|r| r.output), Some(25.0));
+        assert_eq!(rates_for("claude-opus-4-8").map(|r| r.input), Some(15.0));
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
