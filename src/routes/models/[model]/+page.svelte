@@ -18,6 +18,7 @@
     sourceLabel,
     basename,
     achColor,
+    markedColors,
   } from '$lib/format';
   import { TOOLTIP, ANIM, donutSeries } from '$lib/chartTheme';
   import { singleDailyColumns, singleDailyOption } from '$lib/dailyColumns';
@@ -42,6 +43,7 @@
   let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
   let detail = $state<ModelDetail | null>(null);
   let achievements = $state<Achievement[]>([]);
+  let projectColors = $state<Record<string, string>>({});
   let error = $state('');
   let loading = $state(true);
 
@@ -51,12 +53,14 @@
     if (!name) return;
     if (!detail) loading = true;
     try {
-      const [d, achs] = await Promise.all([
+      const [d, achs, colors] = await Promise.all([
         api.modelDetail(name, days),
         api.modelAchievements(name),
+        api.projectColors(),
       ]);
       detail = d;
       achievements = achs;
+      projectColors = markedColors(colors);
       error = '';
     } catch (e) {
       error = String(e);
@@ -288,7 +292,12 @@
               {#each detail.by_project as p}
                 <tr>
                   <td>
-                    <div class="pname">{basename(p.project)}</div>
+                    <div class="pname">
+                      {#if projectColors[p.project]}
+                        <span class="pchip" style="background:{projectColors[p.project]}"></span>
+                      {/if}
+                      {basename(p.project)}
+                    </div>
                     {#if p.project !== basename(p.project)}
                       <div class="path ell">{p.project}</div>
                     {/if}
@@ -451,6 +460,16 @@
   .pname {
     font-weight: 600;
     font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pchip {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border: 1px solid var(--ink);
   }
   .path {
     font: 400 10.5px/1.3 var(--font-mono);

@@ -105,3 +105,11 @@ pub struct ModelAlias {
     pub alias: String,
     pub canonical: String,
 }
+
+/// A user-chosen chart color for a project, keyed by the project path exactly as
+/// `usage_event.project` stores it. `color` is always lowercase `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectColor {
+    pub project: String,
+    pub color: String,
+}

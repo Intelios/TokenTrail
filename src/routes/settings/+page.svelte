@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type EstimatedShare, type IngestStats, type ModelAlias, type SourceStatus } from '$lib/api';
-  import { normalizeModelName, sourceSwatch } from '$lib/format';
+  import { api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectColor, type SourceStatus } from '$lib/api';
+  import { basename, normalizeModelName, sourceSwatch } from '$lib/format';
+  import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
 
-  type Tab = 'sources' | 'merges' | 'hidden' | 'export';
+  type Tab = 'sources' | 'merges' | 'hidden' | 'projects' | 'export';
   let activeTab = $state<Tab>('sources');
 
   let sources = $state<SourceStatus[]>([]);
@@ -29,6 +30,9 @@
   let hideFilter = $state('');
   let hideSelected = $state<string[]>([]);
 
+  // project colors
+  let projectColorRows = $state<ProjectColor[]>([]);
+
   async function load() {
     try {
       [sources, estimated] = await Promise.all([api.sourceStatus(), api.estimatedShare()]);
@@ -52,16 +56,18 @@
 
   async function loadMerges() {
     try {
-      const [byModel, aliasRows, hiddenRows, rawModelRows] = await Promise.all([
+      const [byModel, aliasRows, hiddenRows, rawModelRows, colorRows] = await Promise.all([
         api.byModel(3650),
         api.modelAliases(),
         api.hiddenModels(),
         api.rawModels(),
+        api.projectColors(),
       ]);
       modelNames = byModel.map((r) => r.model);
       aliases = aliasRows;
       hidden = hiddenRows;
       rawModels = rawModelRows;
+      projectColorRows = colorRows;
       selected = selected.filter((n) => modelNames.includes(n));
       hideSelected = hideSelected.filter((n) => modelNames.includes(n));
       if (!selected.includes(canonical)) canonical = selected[0] ?? '';
@@ -253,6 +259,30 @@
       error = String(e);
     }
   }
+
+  // The picker already persisted the change; just reflect it in the local list.
+  function onProjectColorChange(project: string, color: string | null) {
+    if (color) {
+      const row = projectColorRows.find((r) => r.project === project);
+      if (row) row.color = color;
+      else projectColorRows = [...projectColorRows, { project, color }].sort((a, b) => a.project.localeCompare(b.project));
+      projectColorRows = [...projectColorRows];
+    } else {
+      projectColorRows = projectColorRows.filter((r) => r.project !== project);
+    }
+    window.dispatchEvent(new CustomEvent('tt-sync'));
+  }
+
+  // The standalone Clear button isn't a picker, so it persists the clear itself.
+  async function clearProjectColor(project: string) {
+    try {
+      await api.setProjectColor(project, null);
+      onProjectColorChange(project, null);
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
 </script>
 
 <div class="sframe">
@@ -272,6 +302,9 @@
         </button>
         <button class="pill" class:on={activeTab === 'hidden'} onclick={() => (activeTab = 'hidden')}>
           Hidden Models {#if hidden.length}<span class="badge">{hidden.length}</span>{/if}
+        </button>
+        <button class="pill" class:on={activeTab === 'projects'} onclick={() => (activeTab = 'projects')}>
+          Project Colors {#if projectColorRows.length}<span class="badge">{projectColorRows.length}</span>{/if}
         </button>
         <button class="pill" class:on={activeTab === 'export'} onclick={() => (activeTab = 'export')}>
           Export & Info
@@ -599,7 +632,46 @@
       </div>
     </div>
 
-  <!-- TAB 4: Export & Info -->
+  <!-- TAB 4: Project Colors -->
+  {:else if activeTab === 'projects'}
+    <div class="grid2">
+      <div class="col wide">
+        <div class="col-hd">
+          <h2>Project Colors ({projectColorRows.length})</h2>
+        </div>
+        <p class="note">
+          Pinned colors follow a project across the <b>Projects</b> chart and tables. Assign or change a color from the swatch here or on any project. Colors are display only and never touch your usage data.
+        </p>
+        <div class="hidden-list">
+          {#each projectColorRows as row (row.project)}
+            <div class="hidden-item">
+              <div class="meta">
+                <div class="nm">
+                  <span class="pchip" style="background:{row.color}"></span>
+                  {basename(row.project)}
+                </div>
+                <div class="p">{row.project}</div>
+              </div>
+              <div class="pc-actions">
+                <ProjectColorPicker
+                  project={row.project}
+                  color={row.color}
+                  onchange={(c) => onProjectColorChange(row.project, c)}
+                />
+                <button class="unhide-btn" onclick={() => clearProjectColor(row.project)}>Clear</button>
+              </div>
+            </div>
+          {/each}
+          {#if !projectColorRows.length}
+            <div class="empty-state">
+              No project colors yet — pin one from the swatch beside any project on the Projects page.
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+  <!-- TAB 5: Export & Info -->
   {:else if activeTab === 'export'}
     <div class="grid2">
       <div class="col">
@@ -703,6 +775,10 @@
     overflow-y: auto;
   }
   .col:last-child {
+    border-right: none;
+  }
+  .col.wide {
+    grid-column: 1 / -1;
     border-right: none;
   }
 
@@ -1139,6 +1215,15 @@
     background: var(--ink);
     color: #fff;
   }
+  .hidden-item .nm { display: flex; align-items: center; gap: 8px; }
+  .pchip {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    flex: none;
+    border: 1px solid var(--ink);
+  }
+  .pc-actions { display: flex; align-items: center; gap: 10px; flex: none; }
 
   /* Export Tab */
   .export-actions {

@@ -1,4 +1,5 @@
 import { linearGrad, cssColor, flatColor, type ChartColor } from './chartTheme';
+import type { ProjectColor } from './api';
 
 /// Brand-locked palettes — each harness and model family wears its maker's
 /// actual brand color. Flat values are hex strings; gradients (Gemini) are
@@ -55,12 +56,63 @@ export const PROJECT_PALETTE: ChartColor[] = [
   '#4a473e', // deep dim
 ];
 
-export function projectColor(rank: number): ChartColor {
-  return PROJECT_PALETTE[rank % PROJECT_PALETTE.length];
+/// Presets offered when pinning a project's color — the Marathon accents from
+/// app.css plus a green and ink, so a pinned project can wear any zone color.
+export const MARK_PALETTE: ReadonlyArray<readonly [string, string]> = [
+  ['#ff4d00', 'Orange'],
+  ['#00c2c2', 'Cyan'],
+  ['#c8e600', 'Acid'],
+  ['#ff1f6f', 'Magenta'],
+  ['#7c5cff', 'Violet'],
+  ['#3d8eff', 'Blue'],
+  ['#10a37f', 'Green'],
+  ['#0d0d0b', 'Ink'],
+];
+
+/** Unpinned projects while the chart is in highlight mode. */
+export const MUTED_PROJECT = 'rgba(13,13,11,0.14)';
+
+/** Pinned colors as a project → `#rrggbb` lookup. */
+export function markedColors(rows: ProjectColor[]): Record<string, string> {
+  return Object.fromEntries(rows.map((r) => [r.project, r.color]));
 }
 
-export function projectSwatch(rank: number): string {
-  return cssColor(projectColor(rank));
+const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+/** "Redmean" weighted RGB distance — cheap, and far closer to what the eye sees than plain RGB. */
+function colorDistance(a: string, b: string): number {
+  const [r1, g1, b1] = rgb(a);
+  const [r2, g2, b2] = rgb(b);
+  const rm = (r1 + r2) / 2;
+  const dr = r1 - r2;
+  const dg = g1 - g2;
+  const db = b1 - b2;
+  return Math.sqrt((2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db);
+}
+
+/// Auto colors this close to a pinned one read as the same series in a stack
+/// (the orange preset vs the palette's Claude orange sits at ~164), so they
+/// are skipped rather than handed to a second project.
+const CLASH = 175;
+
+/**
+ * Color every project in `ranked`: pinned projects wear their own color, the
+ * rest cycle PROJECT_PALETTE in rank order, skipping any entry that clashes
+ * with a pinned color so nothing unpinned can pass for a pinned project.
+ */
+export function resolveProjectColors(
+  ranked: string[],
+  marked: Record<string, string>,
+): Map<string, ChartColor> {
+  const claimed = Object.values(marked);
+  const free = PROJECT_PALETTE.filter(
+    (c) => typeof c !== 'string' || claimed.every((m) => colorDistance(c, m) > CLASH),
+  );
+  const pool = free.length ? free : PROJECT_PALETTE;
+  const out = new Map<string, ChartColor>();
+  let n = 0;
+  for (const p of ranked) out.set(p, marked[p] ?? pool[n++ % pool.length]);
+  return out;
 }
 
 export function sourceColor(s: string): ChartColor {

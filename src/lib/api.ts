@@ -123,6 +123,12 @@ export interface ModelAlias {
   canonical: string;
 }
 
+/** A user-pinned chart color; `color` is lowercase `#rrggbb`. */
+export interface ProjectColor {
+  project: string;
+  color: string;
+}
+
 export interface FamilyStatsRow {
   family: string;
   tokens: number;
@@ -268,6 +274,10 @@ export const api = {
   hideModels: (names: string[]) => invoke<void>('hide_models', { names }),
   unhideModel: (name: string) => invoke<void>('unhide_model', { name }),
   removeModelAlias: (alias: string) => invoke<void>('remove_model_alias', { alias }),
+  projectColors: () => invoke<ProjectColor[]>('get_project_colors'),
+  /** `null` clears the color and hands the project back to the auto palette. */
+  setProjectColor: (project: string, color: string | null) =>
+    invoke<void>('set_project_color', { project, color }),
   familyStats: (days: number) => invoke<FamilyStatsRow[]>('get_family_stats', { days }),
   leaderboardEvents: (days: number) => invoke<LeaderboardEvent[]>('get_leaderboard_events', { days }),
   peakDays: (days: number) => invoke<PeakDayRow[]>('get_peak_days', { days }),

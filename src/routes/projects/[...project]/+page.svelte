@@ -5,6 +5,7 @@
   import type { EChartsOption } from 'echarts';
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
+  import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
   import { api, type ProjectDetail } from '$lib/api';
   import {
     fmtCost,
@@ -40,6 +41,7 @@
 
   let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
   let detail = $state<ProjectDetail | null>(null);
+  let color = $state<string | null>(null);
   let error = $state('');
   let loading = $state(true);
   let showAllSessions = $state(false);
@@ -60,11 +62,18 @@
     if (!projectName) return;
     if (!detail) loading = true;
     try {
-      let d = await api.projectDetail(projectName, days);
+      const [dInit, colors] = await Promise.all([
+        api.projectDetail(projectName, days),
+        api.projectColors(),
+      ]);
+      let d = dInit;
       if (!d && !projectName.startsWith('/') && projectName !== 'unknown') {
         d = await api.projectDetail('/' + projectName, days);
       }
       detail = d;
+      // key the color off the path the detail actually resolved to, so the
+      // '/'-prefixed fallback and the picker agree on one project string
+      color = d ? (colors.find((c) => c.project === d.project)?.color ?? null) : null;
       error = '';
     } catch (e) {
       error = String(e);
@@ -143,7 +152,7 @@
   });
 
   const dayCols = $derived(singleDailyColumns(detail?.daily ?? []));
-  const dailyOption = $derived(singleDailyOption(dayCols, '#ff6b35'));
+  const dailyOption = $derived(singleDailyOption(dayCols, color ?? '#ff6b35'));
 
   const modelMixOption = $derived.by(() => {
     if (!detail || !detail.by_model.length) return undefined;
@@ -190,7 +199,17 @@
     <div class="thd">
       <div class="up">
         <a class="backlink" href="/projects">← All projects</a>
-        <h1>{detail.project === 'unknown' ? 'Unknown project' : basename(detail.project)}</h1>
+        <div class="titlerow">
+          {#if detail.project !== 'unknown'}
+            <ProjectColorPicker
+              project={detail.project}
+              {color}
+              size={18}
+              onchange={(c) => (color = c)}
+            />
+          {/if}
+          <h1>{detail.project === 'unknown' ? 'Unknown project' : basename(detail.project)}</h1>
+        </div>
 
         {#if detail.project !== 'unknown'}
           <div class="path-bar">
@@ -491,6 +510,11 @@
     line-height: 1.15;
     letter-spacing: -0.5px;
     word-break: break-all;
+  }
+  .titlerow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
   .path-bar {

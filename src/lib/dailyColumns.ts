@@ -8,7 +8,7 @@
 /// is the rhythm of the data rather than dead space worth compressing.
 import type { EChartsOption } from 'echarts';
 import type { DailyProjectRow, DailyRow, HeatmapCell } from './api';
-import { basename, fmtTokens, projectColor, sourceColor, sourceLabel } from './format';
+import { basename, fmtTokens, sourceColor, sourceLabel } from './format';
 import {
   TOOLTIP,
   ANIM,
@@ -444,7 +444,12 @@ export function projectDailyColumns(daily: DailyProjectRow[], projects: string[]
   return cols;
 }
 
-export function projectDailyOption(cols: Column[], projects: string[]): EChartsOption | undefined {
+/** `colors[i]` paints `projects[i]` — callers resolve pinned, auto and muted colors. */
+export function projectDailyOption(
+  cols: Column[],
+  projects: string[],
+  colors: ChartColor[],
+): EChartsOption | undefined {
   if (!cols.length) return undefined;
 
   const cats = cols.map((c, i) => (c.kind === 'day' ? iso(c.start) : `quiet-${i}`));
@@ -508,7 +513,7 @@ export function projectDailyOption(cols: Column[], projects: string[]): EChartsO
         stackedColumn(
           displayNames[i],
           cols.map((c) => (c.kind === 'day' ? c.values[i] || null : null)),
-          projectColor(i),
+          colors[i],
           { delay: i * 40 },
         ),
       ),

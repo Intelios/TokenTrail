@@ -4,7 +4,7 @@ use crate::aggregate::{
     Overview, PeakDayRow, ProjectDetail, ProjectRow,
 };
 use crate::collectors;
-use crate::models::{IngestStats, ModelAlias, SourceStatus};
+use crate::models::{IngestStats, ModelAlias, ProjectColor, SourceStatus};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, State};
 
@@ -211,6 +211,32 @@ pub fn unhide_model(state: State<AppState>, name: String) -> Result<(), String> 
         .unhide_model(&name)
         .map(|_| ())
         .map_err(|e| format!("unhide model: {e}"))
+}
+
+#[tauri::command]
+pub fn get_project_colors(state: State<AppState>) -> Vec<ProjectColor> {
+    state
+        .store
+        .lock()
+        .map(|store| store.get_project_colors().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// `color: None` clears the project's color and returns it to the auto palette.
+#[tauri::command]
+pub fn set_project_color(
+    state: State<AppState>,
+    project: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    match color {
+        Some(c) => store.set_project_color(&project, &c),
+        None => store
+            .clear_project_color(&project)
+            .map(|_| ())
+            .map_err(|e| format!("clear project color: {e}")),
+    }
 }
 
 #[tauri::command]

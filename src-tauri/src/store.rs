@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
 
-use crate::models::{ModelAlias, Source, UsageEvent};
+use crate::models::{ModelAlias, ProjectColor, Source, UsageEvent};
 use crate::pricing;
 
 /// TokenTrail's own long-term store. Append-mostly: rows are keyed by
@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS model_alias (
 );
 CREATE TABLE IF NOT EXISTS hidden_model (
     name TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS project_color (
+    project TEXT PRIMARY KEY,
+    color TEXT NOT NULL
 );
 "#;
 
@@ -409,9 +413,55 @@ impl Store {
             .execute("DELETE FROM hidden_model WHERE name = ?1", params![name])
     }
 
+    pub fn get_project_colors(&self) -> rusqlite::Result<Vec<ProjectColor>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT project, color FROM project_color ORDER BY project")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ProjectColor {
+                    project: r.get(0)?,
+                    color: r.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Pin `project` to `color` (a `#rrggbb` hex, stored lowercase). Purely a display
+    /// annotation: no aggregate reads this table. "unknown" is the bucket for events
+    /// with no project, not a project, so it can't be colored.
+    pub fn set_project_color(&self, project: &str, color: &str) -> Result<(), String> {
+        let project = project.trim();
+        if project.is_empty() || project == "unknown" {
+            return Err(format!("cannot color project {project:?}"));
+        }
+        let color = normalize_hex(color).ok_or_else(|| format!("invalid color {color:?}"))?;
+        self.conn
+            .execute(
+                "INSERT INTO project_color(project, color) VALUES(?1, ?2)
+                 ON CONFLICT(project) DO UPDATE SET color = excluded.color",
+                params![project, color],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("set project color: {e}"))
+    }
+
+    pub fn clear_project_color(&self, project: &str) -> rusqlite::Result<usize> {
+        self.conn
+            .execute("DELETE FROM project_color WHERE project = ?1", params![project.trim()])
+    }
+
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+/// `#RRGGBB` → `#rrggbb`; anything else (short hex, names, rgba) → None.
+fn normalize_hex(color: &str) -> Option<String> {
+    let hex = color.trim().strip_prefix('#')?;
+    (hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| format!("#{}", hex.to_ascii_lowercase()))
 }
 
 /// Open a harness-owned SQLite database strictly read-only.
@@ -512,6 +562,46 @@ mod tests {
 
         store.unhide_model("codex-auto-review").unwrap();
         assert_eq!(store.get_hidden_models().unwrap(), vec!["gpt-5"]);
+    }
+
+    #[test]
+    fn project_color_round_trip() {
+        let store = test_store();
+        assert!(store.get_project_colors().unwrap().is_empty());
+
+        store.set_project_color("/code/beta", "#FF4D00").unwrap();
+        store.set_project_color("/code/alpha", "#00c2c2").unwrap();
+        // stored lowercase, listed by project
+        assert_eq!(
+            store.get_project_colors().unwrap(),
+            vec![
+                ProjectColor { project: "/code/alpha".into(), color: "#00c2c2".into() },
+                ProjectColor { project: "/code/beta".into(), color: "#ff4d00".into() },
+            ]
+        );
+
+        // setting again overwrites rather than adding a second row
+        store.set_project_color("/code/beta", "#7c5cff").unwrap();
+        let colors = store.get_project_colors().unwrap();
+        assert_eq!(colors.len(), 2);
+        assert_eq!(colors[1].color, "#7c5cff");
+
+        store.clear_project_color("/code/alpha").unwrap();
+        assert_eq!(
+            store.get_project_colors().unwrap(),
+            vec![ProjectColor { project: "/code/beta".into(), color: "#7c5cff".into() }]
+        );
+    }
+
+    #[test]
+    fn project_color_validates_input() {
+        let store = test_store();
+        for bad in ["", "ff4d00", "#f40", "#ff4d0", "#ff4d00aa", "#gg4d00", "red", "rgba(0,0,0,1)"] {
+            assert!(store.set_project_color("/code/a", bad).is_err(), "accepted {bad:?}");
+        }
+        assert!(store.set_project_color("unknown", "#ff4d00").is_err());
+        assert!(store.set_project_color("  ", "#ff4d00").is_err());
+        assert!(store.get_project_colors().unwrap().is_empty());
     }
 
     #[test]

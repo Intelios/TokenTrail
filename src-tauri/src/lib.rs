@@ -102,6 +102,8 @@ pub fn run() {
             commands::get_hidden_models,
             commands::hide_models,
             commands::unhide_model,
+            commands::get_project_colors,
+            commands::set_project_color,
             commands::export_data,
             commands::get_family_stats,
             commands::get_leaderboard_events,

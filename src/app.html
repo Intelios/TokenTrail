@@ -55,6 +55,9 @@
             return rows;
           };
 
+          // in-memory project colors so the picker round-trips in ?mock mode
+          const PROJECT_COLORS = {};
+
           const totalTokens = MODELS.reduce((s, m) => s + m[1], 0);
           const totalCost = MODELS.reduce((s, m) => s + m[3], 0);
           const totalEvents = MODELS.reduce((s, m) => s + m[4], 0);
@@ -138,6 +141,23 @@
               }
               case 'get_by_project':
                 return PROJECTS.map((p, i) => ({ project: p[0], tokens: Math.round(totalTokens * p[1]), events: Math.round(totalEvents * p[1]), sessions: Math.round(totalSessions * p[1]), cost_usd: totalCost * p[1], first_ts: Date.now() - 400 * 86400000, last_ts: Date.now() - i * 172800000 }));
+              case 'get_daily_by_project': {
+                const n = Math.min(args.days ?? 90, 150);
+                const rows = [];
+                PROJECTS.forEach((p, pi) => {
+                  walk(totalTokens * p[1] / 90, n).forEach((tok, i) => {
+                    rows.push({ date: iso(n - 1 - i), project: p[0], tokens: Math.round(tok), cost_usd: tok * 0.000019 });
+                  });
+                });
+                return rows;
+              }
+              case 'get_project_colors':
+                return Object.entries(PROJECT_COLORS).map(([project, color]) => ({ project, color })).sort((a, b) => a.project.localeCompare(b.project));
+              case 'set_project_color': {
+                if (args.color == null) delete PROJECT_COLORS[args.project];
+                else PROJECT_COLORS[args.project] = String(args.color).toLowerCase();
+                return null;
+              }
               case 'get_project_detail': {
                 const proj = PROJECTS.find((x) => x[0] === args.project);
                 if (!proj && args.project !== 'unknown') return null;

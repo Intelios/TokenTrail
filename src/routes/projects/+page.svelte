@@ -2,8 +2,18 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import Chart from '$lib/Chart.svelte';
+  import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
   import { api, type DailyProjectRow, type ProjectRow } from '$lib/api';
-  import { basename, fmtCost, fmtDate, fmtTokens } from '$lib/format';
+  import {
+    basename,
+    fmtCost,
+    fmtDate,
+    fmtTokens,
+    markedColors,
+    resolveProjectColors,
+    MUTED_PROJECT,
+  } from '$lib/format';
+  import { cssColor } from '$lib/chartTheme';
   import {
     projectDailyColumns,
     projectDailyOption,
@@ -19,10 +29,13 @@
     [3650, 'ALL'],
   ];
   const PREF_DAYS = 'tt.projects.days';
+  const PREF_HIGHLIGHT = 'tt.projects.highlight';
 
   let days = $state(readPref(PREF_DAYS, 3650, (v) => RANGES.some(([d]) => d === v)));
+  let highlight = $state(readPref(PREF_HIGHLIGHT, false, (v) => typeof v === 'boolean'));
   let projects = $state<ProjectRow[]>([]);
   let dailyProjectRows = $state<DailyProjectRow[]>([]);
+  let marked = $state<Record<string, string>>({});
   let error = $state('');
 
   function projectUrl(p: string): string {
@@ -31,9 +44,14 @@
 
   async function load() {
     try {
-      const [p, d] = await Promise.all([api.byProject(days), api.dailyByProject(days)]);
+      const [p, d, c] = await Promise.all([
+        api.byProject(days),
+        api.dailyByProject(days),
+        api.projectColors(),
+      ]);
       projects = p;
       dailyProjectRows = d;
+      marked = markedColors(c);
       error = '';
     } catch (e) {
       error = String(e);
@@ -49,6 +67,10 @@
     writePref(PREF_DAYS, days);
   });
 
+  $effect(() => {
+    writePref(PREF_HIGHLIGHT, highlight);
+  });
+
   onMount(() => {
     const h = () => load();
     window.addEventListener('tt-sync', h);
@@ -56,19 +78,37 @@
   });
 
   // ── daily stacked columns ──
+  // Pinned projects sort to the front so they sit on the chart's baseline,
+  // where their band is a clean silhouette rather than riding an offset.
   const dailyProjects = $derived.by(() => {
     const totals = new Map<string, number>();
     for (const r of dailyProjectRows) {
       totals.set(r.project, (totals.get(r.project) ?? 0) + r.tokens);
     }
-    return [...totals.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([p]) => p);
+    const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+    // marked first (baseline), then the rest — each group stays in total order
+    return [...ranked.filter((p) => marked[p]), ...ranked.filter((p) => !marked[p])];
   });
 
+  const colorMap = $derived(resolveProjectColors(dailyProjects, marked));
+  const anyMarkedCharted = $derived(dailyProjects.some((p) => marked[p]));
+
+  const dayColors = $derived(
+    dailyProjects.map((p) =>
+      highlight && !marked[p] ? MUTED_PROJECT : colorMap.get(p) ?? MUTED_PROJECT,
+    ),
+  );
+
   const dayCols = $derived(projectDailyColumns(dailyProjectRows, dailyProjects));
-  const dayOption = $derived(projectDailyOption(dayCols, dailyProjects));
+  const dayOption = $derived(projectDailyOption(dayCols, dailyProjects, dayColors));
   const dayRangeStr = $derived(dailyRange(dayCols));
+
+  function onColorChange(project: string, color: string | null) {
+    const next = { ...marked };
+    if (color) next[project] = color;
+    else delete next[project];
+    marked = next;
+  }
 
   // second half of the charted calendar vs the first half
   const deltaPct = $derived.by(() => {
@@ -106,6 +146,16 @@
         <div class="hd">
           <h3>Daily tokens by project{dayRangeStr ? ` — ${dayRangeStr}` : ''}</h3>
           <div class="rt">
+            {#if anyMarkedCharted}
+              <button
+                class="hlpill pill"
+                class:on={highlight}
+                onclick={() => (highlight = !highlight)}
+                title="Grey out unpinned projects"
+              >
+                Highlight
+              </button>
+            {/if}
             {#if deltaPct !== null}
               <b>{deltaPct >= 0 ? '▲' : '▼'} {Math.abs(deltaPct).toFixed(0)}% VS PREV</b>
             {/if}
@@ -137,16 +187,30 @@
               onclick={() => goto(projectUrl(p.project))}
             >
               <td>
-                <a
-                  class="projectlink"
-                  href={projectUrl(p.project)}
-                  onclick={(e) => e.stopPropagation()}
-                >
-                  {p.project === 'unknown' ? 'Unknown' : basename(p.project)}
-                </a>
-                {#if p.project !== 'unknown'}
-                  <div class="path">{p.project}</div>
-                {/if}
+                <div class="pcell">
+                  {#if p.project !== 'unknown'}
+                    <ProjectColorPicker
+                      project={p.project}
+                      color={marked[p.project] ?? null}
+                      auto={colorMap.has(p.project) ? cssColor(colorMap.get(p.project)!) : undefined}
+                      onchange={(c) => onColorChange(p.project, c)}
+                    />
+                  {:else}
+                    <span class="pcell-gap"></span>
+                  {/if}
+                  <div class="pcell-txt">
+                    <a
+                      class="projectlink"
+                      href={projectUrl(p.project)}
+                      onclick={(e) => e.stopPropagation()}
+                    >
+                      {p.project === 'unknown' ? 'Unknown' : basename(p.project)}
+                    </a>
+                    {#if p.project !== 'unknown'}
+                      <div class="path">{p.project}</div>
+                    {/if}
+                  </div>
+                </div>
               </td>
               <td class="num">{p.sessions.toLocaleString()}</td>
               <td class="num">{p.events.toLocaleString()}</td>
@@ -190,8 +254,9 @@
   }
   .daily .hd { display: flex; justify-content: space-between; align-items: baseline; flex: none; }
   .daily .hd h3 { font: 600 clamp(11px, 0.85vw, 15px)/1 var(--font-ui); letter-spacing: 1.6px; text-transform: uppercase; margin: 0; }
-  .daily .hd .rt { display: flex; gap: 14px; align-items: baseline; }
+  .daily .hd .rt { display: flex; gap: 14px; align-items: center; }
   .daily .hd .rt b { font: 500 clamp(10px, 0.75vw, 13px)/1 var(--font-mono); letter-spacing: 1px; color: var(--org); }
+  .hlpill { padding: 5px 11px; }
   .daily .plot {
     flex: 1;
     min-height: 0;
@@ -216,6 +281,9 @@
   .projrow:hover {
     background: rgba(13, 13, 11, 0.03);
   }
+  .pcell { display: flex; align-items: flex-start; gap: 11px; }
+  .pcell-gap { width: 14px; flex: none; }
+  .pcell-txt { min-width: 0; }
   .projectlink {
     font-weight: 600;
     font-size: 13.5px;
