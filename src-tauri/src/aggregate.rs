@@ -261,6 +261,7 @@ pub struct LeaderboardEvent {
     pub rank: Option<i64>,
     pub date: String,
     pub tokens: i64,
+    pub tenure_days: Option<i64>,
 }
 
 type DbResult<T> = Result<T, rusqlite::Error>;
@@ -1353,6 +1354,7 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
         [cutoff_ts],
         |r| r.get(0),
     )?;
+    let is_all_time = days >= 3650 || days <= 0;
 
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d,
@@ -1391,6 +1393,8 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
     let mut pre_window_daily_max: HashMap<String, i64> = HashMap::new();
     let mut in_window_daily_max: HashMap<String, i64> = HashMap::new();
     let mut prev_rankings: HashMap<String, usize> = HashMap::new();
+    let mut prev_top6: Vec<String> = Vec::new();
+    let mut rank_since: HashMap<String, (usize, String)> = HashMap::new();
 
     let mut events: Vec<LeaderboardEvent> = Vec::new();
 
@@ -1410,6 +1414,7 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
                         rank: None,
                         date: d.clone(),
                         tokens: *daily_tokens,
+                        tenure_days: None,
                     });
                 }
             }
@@ -1433,6 +1438,7 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
                         rank: None,
                         date: d.clone(),
                         tokens: *daily_tokens,
+                        tenure_days: None,
                     });
                 }
             }
@@ -1455,21 +1461,24 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             curr_rankings.insert(model.clone(), idx + 1);
         }
 
-        // 4. Debut (entered top 5 for the first time with prior history)
-        for (model, _) in day_models {
-            if let Some(&rank) = curr_rankings.get(model) {
-                if rank <= 5 && !ever_top5.contains(model) {
-                    let first_d = first_seen_date.get(model);
-                    let has_prior_history = first_d.map(|fd| fd < d).unwrap_or(false);
-                    if has_prior_history && in_window {
-                        events.push(LeaderboardEvent {
-                            kind: "debut".into(),
-                            model: model.clone(),
-                            other_model: None,
-                            rank: Some(rank as i64),
-                            date: d.clone(),
-                            tokens: *cumulative_tokens.get(model).unwrap_or(&0),
-                        });
+        // 4. Debut (entered top 5 for the first time with prior history, suppressed on ALL filter)
+        if !is_all_time {
+            for (model, _) in day_models {
+                if let Some(&rank) = curr_rankings.get(model) {
+                    if rank <= 5 && !ever_top5.contains(model) {
+                        let first_d = first_seen_date.get(model);
+                        let has_prior_history = first_d.map(|fd| fd < d).unwrap_or(false);
+                        if has_prior_history && in_window {
+                            events.push(LeaderboardEvent {
+                                kind: "debut".into(),
+                                model: model.clone(),
+                                other_model: None,
+                                rank: Some(rank as i64),
+                                date: d.clone(),
+                                tokens: *cumulative_tokens.get(model).unwrap_or(&0),
+                                tenure_days: None,
+                            });
+                        }
                     }
                 }
             }
@@ -1482,7 +1491,84 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
         }
 
-        // 5. Overtakes (adjacent rank swaps)
+        // 5. Big 6 movements (promotion / demotion on ALL filter)
+        let curr_top6: Vec<String> = standings.iter().take(6).map(|(m, _)| m.clone()).collect();
+        let mut promoted_models: Vec<String> = Vec::new();
+        let mut demoted_models: Vec<String> = Vec::new();
+
+        if prev_top6.len() == 6 && curr_top6.len() == 6 {
+            for m in &curr_top6 {
+                if !prev_top6.contains(m) {
+                    promoted_models.push(m.clone());
+                }
+            }
+            for m in &prev_top6 {
+                if !curr_top6.contains(m) {
+                    demoted_models.push(m.clone());
+                }
+            }
+        }
+
+        if is_all_time && in_window && !promoted_models.is_empty() {
+            let mut sorted_promoted = promoted_models.clone();
+            sorted_promoted.sort_by_key(|m| curr_rankings.get(m).copied().unwrap_or(99));
+            let mut sorted_demoted = demoted_models.clone();
+            sorted_demoted.sort_by_key(|m| prev_top6.iter().position(|x| x == m).unwrap_or(99));
+
+            for (i, promoted) in sorted_promoted.iter().enumerate() {
+                let demoted = sorted_demoted.get(i);
+                let promo_rank = curr_rankings.get(promoted).copied().unwrap_or(6);
+
+                events.push(LeaderboardEvent {
+                    kind: "promotion".into(),
+                    model: promoted.clone(),
+                    other_model: demoted.cloned(),
+                    rank: Some(promo_rank as i64),
+                    date: d.clone(),
+                    tokens: *cumulative_tokens.get(promoted).unwrap_or(&0),
+                    tenure_days: None,
+                });
+
+                if let Some(demoted_name) = demoted {
+                    let (demoted_rank, entry_date) = rank_since
+                        .get(demoted_name)
+                        .cloned()
+                        .unwrap_or((6, d.clone()));
+                    let tenure = days_between(&entry_date, d).unwrap_or(0);
+
+                    events.push(LeaderboardEvent {
+                        kind: "demotion".into(),
+                        model: demoted_name.clone(),
+                        other_model: Some(promoted.clone()),
+                        rank: Some(demoted_rank as i64),
+                        date: d.clone(),
+                        tokens: *cumulative_tokens.get(demoted_name).unwrap_or(&0),
+                        tenure_days: Some(tenure),
+                    });
+                }
+            }
+
+            if sorted_demoted.len() > sorted_promoted.len() {
+                for demoted_name in &sorted_demoted[sorted_promoted.len()..] {
+                    let (demoted_rank, entry_date) = rank_since
+                        .get(demoted_name)
+                        .cloned()
+                        .unwrap_or((6, d.clone()));
+                    let tenure = days_between(&entry_date, d).unwrap_or(0);
+                    events.push(LeaderboardEvent {
+                        kind: "demotion".into(),
+                        model: demoted_name.clone(),
+                        other_model: None,
+                        rank: Some(demoted_rank as i64),
+                        date: d.clone(),
+                        tokens: *cumulative_tokens.get(demoted_name).unwrap_or(&0),
+                        tenure_days: Some(tenure),
+                    });
+                }
+            }
+        }
+
+        // 6. Overtakes (adjacent rank swaps)
         if !prev_rankings.is_empty() && in_window {
             for (model, _) in day_models {
                 if let Some(&curr_rank) = curr_rankings.get(model) {
@@ -1491,6 +1577,13 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
                             if other_model != model && other_prev_rank < prev_rank {
                                 if let Some(&other_curr_rank) = curr_rankings.get(other_model) {
                                     if curr_rank < other_curr_rank {
+                                        if is_all_time
+                                            && promoted_models.contains(model)
+                                            && demoted_models.contains(other_model)
+                                        {
+                                            continue;
+                                        }
+
                                         let my_tokens = *cumulative_tokens.get(model).unwrap_or(&0);
                                         let other_tokens = *cumulative_tokens.get(other_model).unwrap_or(&0);
                                         let gap = my_tokens - other_tokens;
@@ -1502,6 +1595,7 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
                                                 rank: Some(curr_rank as i64),
                                                 date: d.clone(),
                                                 tokens: gap,
+                                                tenure_days: None,
                                             });
                                         }
                                     }
@@ -1513,6 +1607,22 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
         }
 
+        for demoted in &demoted_models {
+            rank_since.remove(demoted);
+        }
+
+        for (idx, model) in curr_top6.iter().enumerate() {
+            let rank = idx + 1;
+            if let Some((r, _)) = rank_since.get(model) {
+                if *r != rank {
+                    rank_since.insert(model.clone(), (rank, d.clone()));
+                }
+            } else {
+                rank_since.insert(model.clone(), (rank, d.clone()));
+            }
+        }
+
+        prev_top6 = curr_top6;
         prev_rankings = curr_rankings;
     }
 
@@ -1575,6 +1685,13 @@ fn shift_day(s: &str, delta: i64) -> Option<String> {
         d = if delta < 0 { d.previous_day()? } else { d.next_day()? };
     }
     d.format(&day).ok()
+}
+
+fn days_between(from_str: &str, to_str: &str) -> Option<i64> {
+    let day = format_description!("[year]-[month]-[day]");
+    let d1 = time::Date::parse(from_str, &day).ok()?;
+    let d2 = time::Date::parse(to_str, &day).ok()?;
+    Some((d2 - d1).whole_days())
 }
 
 /// RFC3339 -> epoch ms, shared by the collectors.
@@ -2244,6 +2361,64 @@ mod tests {
         assert!(!events.iter().any(|e| e.kind == "first_seen" && e.model == "raw-a1"));
         // unmerged model DOES emit first_seen
         assert!(events.iter().any(|e| e.kind == "first_seen" && e.model == "unmerged-model"));
+    }
+
+    #[test]
+    fn leaderboard_big6_promotion_and_demotion_with_tenure() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day1 = now - 60 * day_ms;
+        let day51 = now - 10 * day_ms;
+
+        // Day 1: 6 models in top 6, plus m7 outside at rank 7
+        store
+            .insert_events(&[
+                test_event("m1", day1, 60_000),
+                test_event("m2", day1, 50_000),
+                test_event("m3", day1, 40_000),
+                test_event("m4", day1, 30_000),
+                test_event("m5", day1, 20_000),
+                test_event("m6", day1, 10_000),
+                test_event("m7", day1, 5_000),
+            ])
+            .unwrap();
+
+        // Day 51 (50 days later): m7 earns 10_000 more (total 15_000 > m6's 10_000)
+        // m7 enters Big 6 at #6; m6 is demoted out of Big 6 after 50 days at #6.
+        store
+            .insert_events(&[test_event("m7", day51, 10_000)])
+            .unwrap();
+
+        // 1. On ALL filter (3650 days): Big 6 promotion & demotion should fire
+        let all_events = leaderboard_events(&store, 3650).unwrap();
+
+        let promotions: Vec<_> = all_events.iter().filter(|e| e.kind == "promotion").collect();
+        assert_eq!(promotions.len(), 1);
+        assert_eq!(promotions[0].model, "m7");
+        assert_eq!(promotions[0].other_model, Some("m6".into()));
+        assert_eq!(promotions[0].rank, Some(6));
+        assert_eq!(promotions[0].tokens, 15_000);
+        assert_eq!(promotions[0].tenure_days, None);
+
+        let demotions: Vec<_> = all_events.iter().filter(|e| e.kind == "demotion").collect();
+        assert_eq!(demotions.len(), 1);
+        assert_eq!(demotions[0].model, "m6");
+        assert_eq!(demotions[0].other_model, Some("m7".into()));
+        assert_eq!(demotions[0].rank, Some(6));
+        assert_eq!(demotions[0].tokens, 10_000);
+        assert_eq!(demotions[0].tenure_days, Some(50));
+
+        // Redundant overtake between m7 and m6 should be suppressed
+        assert!(!all_events.iter().any(|e| e.kind == "overtake" && e.model == "m7" && e.other_model.as_deref() == Some("m6")));
+
+        // Debut should be suppressed on ALL filter
+        assert!(!all_events.iter().any(|e| e.kind == "debut"));
+
+        // 2. On 30D filter: Big 6 promotion/demotion should NOT fire
+        let win_events = leaderboard_events(&store, 30).unwrap();
+        assert!(!win_events.iter().any(|e| e.kind == "promotion"));
+        assert!(!win_events.iter().any(|e| e.kind == "demotion"));
     }
 
     #[test]

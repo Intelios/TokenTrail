@@ -159,6 +159,10 @@
         return 'DEBUT';
       case 'first_seen':
         return 'SIGHTED';
+      case 'promotion':
+        return 'BIG 6';
+      case 'demotion':
+        return 'EXIT';
     }
   }
 
@@ -172,6 +176,10 @@
         return `entered top 5`;
       case 'first_seen':
         return 'first sighting';
+      case 'promotion':
+        return `enters Big 6 at #${ev.rank ?? '?'}${ev.other_model ? `, displacing ${ev.other_model}` : ''}`;
+      case 'demotion':
+        return `exits Big 6${ev.other_model ? ` (displaced by ${ev.other_model})` : ''}`;
     }
   }
 
@@ -185,6 +193,10 @@
         return fmtTokens(ev.tokens);
       case 'first_seen':
         return fmtTokens(ev.tokens);
+      case 'promotion':
+        return fmtTokens(ev.tokens);
+      case 'demotion':
+        return ev.tenure_days != null ? `${ev.tenure_days}d at #${ev.rank ?? '?'}` : fmtTokens(ev.tokens);
     }
   }
 
@@ -375,6 +387,20 @@
                       <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
                       <span class="fverb">passed</span>
                       {#if ev.other_model}
+                        <a class="fother" style="color:{modelFlat(ev.other_model, 1)}" href={modelUrl(ev.other_model)} title={ev.other_model}>{ev.other_model}</a>
+                      {/if}
+                    {:else if ev.kind === 'promotion'}
+                      <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
+                      <span class="fact">enters Big 6 at #{ev.rank ?? '?'}</span>
+                      {#if ev.other_model}
+                        <span class="fverb">displacing</span>
+                        <a class="fother" style="color:{modelFlat(ev.other_model, 1)}" href={modelUrl(ev.other_model)} title={ev.other_model}>{ev.other_model}</a>
+                      {/if}
+                    {:else if ev.kind === 'demotion'}
+                      <a class="fmodel" style="color:{modelFlat(ev.model, 0)}" href={modelUrl(ev.model)} title={ev.model}>{ev.model}</a>
+                      <span class="fact">exits Big 6</span>
+                      {#if ev.other_model}
+                        <span class="fverb">displaced by</span>
                         <a class="fother" style="color:{modelFlat(ev.other_model, 1)}" href={modelUrl(ev.other_model)} title={ev.other_model}>{ev.other_model}</a>
                       {/if}
                     {:else}
@@ -638,6 +664,8 @@
   .fchip.record { background: var(--acd); color: var(--ink); }
   .fchip.debut { background: var(--vio); color: #fff; }
   .fchip.first_seen { background: var(--cyn); color: var(--ink); }
+  .fchip.promotion { background: var(--blu); color: #fff; }
+  .fchip.demotion { background: #6b7280; color: #fff; }
 
   .fbody {
     flex: 1;

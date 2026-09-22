@@ -226,12 +226,13 @@ export interface ProjectDetail {
 }
 
 export interface LeaderboardEvent {
-  kind: 'overtake' | 'record' | 'debut' | 'first_seen';
+  kind: 'overtake' | 'record' | 'debut' | 'first_seen' | 'promotion' | 'demotion';
   model: string;
   other_model: string | null;
   rank: number | null;
   date: string;
   tokens: number;
+  tenure_days: number | null;
 }
 
 export interface PeakDayRow {
