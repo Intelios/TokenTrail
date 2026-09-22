@@ -22,6 +22,14 @@ const NOT_HIDDEN: &str = "COALESCE(u.model, 'unknown') NOT IN (
     SELECT alias FROM model_alias WHERE canonical IN (SELECT name FROM hidden_model)
 )";
 
+/// The project a row counts under: its folder resolved through `project_alias`
+/// (folded to its project root at ingest, or folded/kept separate by hand), with
+/// NULL landing in the shared 'unknown' bucket. Every query using this needs
+/// `LEFT JOIN project_alias pj ON pj.alias = u.project` in its FROM clause, and
+/// must group by the evaluated expression — grouping on `u.project` instead would
+/// split 'unknown' from NULL all over again.
+const PROJECT: &str = "COALESCE(pj.canonical, u.project, 'unknown')";
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -542,13 +550,16 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
 
     // by project
     let sql_proj = format!(
-        "SELECT COALESCE(u.project, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
+        "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
                 COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        P = PROJECT
     );
     let mut stmt_proj = store.conn().prepare(&sql_proj)?;
     let by_project: Vec<ProjectRow> = stmt_proj
@@ -859,13 +870,16 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
 
     // 5. First Project & Project Explorer
     let sql_projects = format!(
-        "SELECT COALESCE(u.project, 'unknown') as p, MIN(u.ts) as first_ts
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+        "SELECT {P} as p, MIN(u.ts) as first_ts
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
            AND u.project IS NOT NULL AND u.project != '' AND u.project != 'unknown'
          GROUP BY p
          ORDER BY first_ts ASC, p ASC",
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        P = PROJECT
     );
     let mut stmt_projects = store.conn().prepare(&sql_projects)?;
     let projects: Vec<(String, i64)> = stmt_projects
@@ -973,11 +987,14 @@ pub fn family_stats(store: &Store, days: i64) -> DbResult<Vec<FamilyStatsRow>> {
 
 pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
     let sql = format!(
-        "SELECT COALESCE(project, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
+        "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
                 COUNT(DISTINCT session_id), SUM(cost_usd), MIN(ts), MAX(ts)
-         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 2 DESC",
+         FROM usage_event u
+         LEFT JOIN project_alias pj ON pj.alias = u.project
+         WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        P = PROJECT
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<ProjectRow> = stmt
@@ -999,16 +1016,18 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
 pub fn daily_by_project(store: &Store, days: i64) -> DbResult<Vec<DailyProjectRow>> {
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d,
-                project,
+                {P},
                 COALESCE(SUM({T}),0),
                 SUM(cost_usd)
          FROM usage_event u
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {H}
-           AND project IS NOT NULL AND project != '' AND project != 'unknown'
-         GROUP BY d, project
-         ORDER BY d, project",
+           AND {P} != '' AND {P} != 'unknown'
+         GROUP BY d, {P}
+         ORDER BY d, {P}",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        P = PROJECT
     );
     let mut stmt = store.conn().prepare(&sql)?;
     let rows: Vec<DailyProjectRow> = stmt
@@ -1027,6 +1046,10 @@ pub fn daily_by_project(store: &Store, days: i64) -> DbResult<Vec<DailyProjectRo
 /// Full detail card for a single project, keyed by project path (or 'unknown'),
 /// filtered by range in days. Returns `None` when the project has no recorded events.
 pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Option<ProjectDetail>> {
+    // Old links can name a folder that now counts under its project (folded into a
+    // root or merged by hand); resolve first so the whole card answers for the
+    // project the folder belongs to.
+    let project = store.project_canonical(project);
     let is_unknown = project == "unknown";
     let exists_sql = if is_unknown {
         format!(
@@ -1035,8 +1058,11 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
         )
     } else {
         format!(
-            "SELECT 1 FROM usage_event u WHERE u.project = ?1 AND {H} LIMIT 1",
-            H = NOT_HIDDEN
+            "SELECT 1 FROM usage_event u
+             LEFT JOIN project_alias pj ON pj.alias = u.project
+             WHERE {P} = ?1 AND {H} LIMIT 1",
+            H = NOT_HIDDEN,
+            P = PROJECT
         )
     };
     let mut exists_stmt = store.conn().prepare(&exists_sql)?;
@@ -1053,9 +1079,9 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
 
     let cutoff_ts = cutoff(days);
     let proj_filter = if is_unknown {
-        "(u.project IS NULL OR u.project = 'unknown')"
+        "(u.project IS NULL OR u.project = 'unknown')".to_string()
     } else {
-        "u.project = ?2"
+        format!("{P} = ?2", P = PROJECT)
     };
 
     let sql = format!(
@@ -1066,6 +1092,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
                 COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
                 SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
          FROM usage_event u
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {proj_filter} AND {H}",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -1109,7 +1136,9 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
                 SUM(u.cost_usd),
                 MIN(u.ts),
                 MAX(u.ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {proj_filter} AND {H}
          GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
@@ -1139,6 +1168,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
     let sql_src = format!(
         "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
          FROM usage_event u
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {proj_filter} AND {H}
          GROUP BY u.source ORDER BY 2 DESC",
         T = TOKENS,
@@ -1164,6 +1194,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
     let sql_daily = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
          FROM usage_event u
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {proj_filter} AND {H}
          GROUP BY d ORDER BY d",
         T = TOKENS,
@@ -1194,7 +1225,9 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
                 MIN(u.ts),
                 MAX(u.ts),
                 GROUP_CONCAT(DISTINCT COALESCE(a.canonical, u.model, 'unknown'))
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {proj_filter} AND {H}
          GROUP BY COALESCE(u.session_id, 'unknown'), u.source
          ORDER BY MAX(u.ts) DESC",
@@ -1783,6 +1816,82 @@ mod tests {
         store.remove_aliases_for("GLM-5.3").unwrap();
         let stats = model_stats(&store, 3650).unwrap();
         assert_eq!(stats.len(), 2);
+    }
+
+    fn project_event(id: &str, project: &str, ts: i64, input: i64) -> UsageEvent {
+        UsageEvent {
+            project: Some(project.to_string()),
+            session_id: Some(format!("s-{id}")),
+            source_event_id: id.to_string(),
+            ..test_event("gpt-5", ts, input)
+        }
+    }
+
+    #[test]
+    fn project_folders_fold_into_one_project() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let mk_repo = |name: &str| {
+            let dir = std::env::temp_dir().join(format!("tokentrail-test-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".git")).unwrap();
+            dir
+        };
+        let repo = mk_repo("agg-main");
+        std::fs::create_dir_all(repo.join("sub/a")).unwrap();
+        std::fs::create_dir_all(repo.join("sub/b")).unwrap();
+        let repo_s = repo.to_string_lossy().to_string();
+        let sub_a = repo.join("sub/a").to_string_lossy().to_string();
+        let sub_b = repo.join("sub/b").to_string_lossy().to_string();
+        let side = mk_repo("agg-side").to_string_lossy().to_string();
+        let third = mk_repo("agg-third").to_string_lossy().to_string();
+
+        store
+            .insert_events(&[
+                project_event("1", &sub_a, now - 5000, 100),
+                project_event("2", &sub_b, now - 4000, 200),
+                project_event("3", &repo_s, now - 3000, 50),
+                project_event("4", &side, now - 2000, 10),
+                project_event("5", &third, now - 1000, 5),
+            ])
+            .unwrap();
+
+        // ingest folds each subfolder into its repository on the way in
+        let rows = by_project(&store, 3650).unwrap();
+        assert_eq!(rows.len(), 3);
+        let repo_row = rows.iter().find(|r| r.project == repo_s).unwrap();
+        assert_eq!(repo_row.tokens, 350);
+        assert_eq!(repo_row.events, 3);
+        assert_eq!(repo_row.sessions, 3);
+
+        let daily = daily_by_project(&store, 3650).unwrap();
+        assert_eq!(
+            daily.iter().filter(|d| d.project == repo_s).map(|d| d.tokens).sum::<i64>(),
+            350
+        );
+
+        // the model card's projects table folds the same way
+        let md = model_detail(&store, "gpt-5", 3650).unwrap().unwrap();
+        assert_eq!(md.by_project.len(), 3);
+        assert_eq!(md.by_project[0].project, repo_s);
+        assert_eq!(md.by_project[0].events, 3);
+
+        // project detail covers every folded folder, and a link to a folded
+        // folder answers for its project
+        let pd = project_detail(&store, &repo_s, 3650).unwrap().unwrap();
+        assert_eq!(pd.events, 3);
+        assert_eq!(pd.tokens, 350);
+        let pd2 = project_detail(&store, &sub_b, 3650).unwrap().unwrap();
+        assert_eq!(pd2.project, repo_s);
+        assert_eq!(pd2.events, 3);
+
+        // achievements count projects, not folders — and the first project is the
+        // repository even though its earliest event ran in a subfolder
+        let achs = model_achievements(&store, "gpt-5").unwrap();
+        let first = achs.iter().find(|a| a.kind == "first_project").unwrap();
+        assert_eq!(first.value, repo_s);
+        let explorer = achs.iter().find(|a| a.kind == "project_explorer").unwrap();
+        assert_eq!(explorer.value, "Used in 3 projects");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
 
-use crate::models::{ModelAlias, ProjectColor, Source, UsageEvent};
+use crate::models::{ModelAlias, ProjectAlias, ProjectColor, Source, UsageEvent};
 use crate::pricing;
 
 /// TokenTrail's own long-term store. Append-mostly: rows are keyed by
@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS hidden_model (
 CREATE TABLE IF NOT EXISTS project_color (
     project TEXT PRIMARY KEY,
     color TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_alias (
+    alias TEXT PRIMARY KEY,
+    canonical TEXT NOT NULL
 );
 "#;
 
@@ -116,6 +120,19 @@ impl Store {
                 cost,
                 e.estimated as i64,
             ])?;
+        }
+        // Fold freshly seen folders into their project right away: a subdirectory
+        // recorded mid-sync must never render as its own project.
+        let mut projects = std::collections::HashSet::new();
+        for e in events {
+            if let Some(p) = &e.project {
+                if !p.is_empty() {
+                    projects.insert(p.clone());
+                }
+            }
+        }
+        for p in &projects {
+            self.alias_project(p)?;
         }
         Ok(n)
     }
@@ -452,6 +469,170 @@ impl Store {
             .execute("DELETE FROM project_color WHERE project = ?1", params![project.trim()])
     }
 
+    /// The project a recorded folder counts under: its mapped target if one exists,
+    /// else the folder itself. Flat by construction — writers never map a folder
+    /// onto another mapped folder, so one join is always enough.
+    pub fn project_canonical(&self, name: &str) -> String {
+        self.conn
+            .query_row(
+                "SELECT canonical FROM project_alias WHERE alias = ?1",
+                params![name],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| name.to_string())
+    }
+
+    /// Fold `folder` into its project root, unless a mapping already exists —
+    /// a decision once recorded (by hand or by an earlier pass) is never recomputed,
+    /// so history stays grouped the way it was seen and repos that moved stay whole.
+    fn alias_project(&self, folder: &str) -> rusqlite::Result<usize> {
+        let root = resolve_project_root(folder);
+        if root == folder {
+            return Ok(0);
+        }
+        // Follow the root's own mapping so the table can never form a chain.
+        let canonical = self.project_canonical(&root);
+        self.conn.execute(
+            "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?2) ON CONFLICT(alias) DO NOTHING",
+            params![folder, canonical],
+        )
+    }
+
+    /// Map every recorded folder to its project root. Idempotent and sticky.
+    pub fn ensure_project_aliases(&self) -> rusqlite::Result<usize> {
+        let projects: Vec<String> = {
+            let mut stmt = self.conn.prepare_cached(
+                "SELECT DISTINCT project FROM usage_event WHERE project IS NOT NULL AND project != ''",
+            )?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mut n = 0;
+        for p in &projects {
+            n += self.alias_project(p)?;
+        }
+        self.remap_project_colors()?;
+        Ok(n)
+    }
+
+    /// Re-key pinned colors through the mapping table, so a color pinned on a folder
+    /// follows it into the project it counts under. `OR IGNORE` keeps one pin when
+    /// two pinned folders land on the same project.
+    fn remap_project_colors(&self) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            "UPDATE OR IGNORE project_color
+             SET project = (SELECT canonical FROM project_alias WHERE alias = project_color.project)
+             WHERE project IN (SELECT alias FROM project_alias)",
+            [],
+        )
+    }
+
+    pub fn get_project_aliases(&self) -> rusqlite::Result<Vec<ProjectAlias>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT alias, canonical FROM project_alias ORDER BY canonical, alias")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ProjectAlias {
+                    alias: r.get(0)?,
+                    canonical: r.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Merge projects `names` into one project `canonical` (which must be one of the
+    /// names). Folders already folded into an absorbed name follow it, so the table
+    /// never forms alias -> alias chains. Idempotent.
+    pub fn merge_projects(&self, names: &[String], canonical: &str) -> Result<usize, String> {
+        if names.len() < 2 {
+            return Err("merge needs at least two projects".to_string());
+        }
+        if canonical.is_empty() || canonical == "unknown" {
+            return Err(format!("cannot merge into project {canonical:?}"));
+        }
+        if !names.iter().any(|n| n == canonical) {
+            return Err("canonical project must be one of the merged names".to_string());
+        }
+        if names.iter().any(|n| n.is_empty() || n == "unknown") {
+            return Err("the 'unknown' bucket cannot be merged".to_string());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin merge transaction: {e}"))?;
+        // A canonical kept separate from its own root must not keep that row.
+        tx.execute("DELETE FROM project_alias WHERE alias = ?1", params![canonical])
+            .map_err(|e| format!("clear canonical mapping: {e}"))?;
+        let mut n = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        for name in names.iter().filter(|n| *n != canonical) {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            // Folders already folded into an absorbed name follow it to the new canonical.
+            n += tx
+                .execute(
+                    "UPDATE project_alias SET canonical = ?1 WHERE canonical = ?2 AND alias <> ?1",
+                    params![canonical, name],
+                )
+                .map_err(|e| format!("repoint folders: {e}"))?;
+            n += tx
+                .execute(
+                    "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?2)
+                     ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
+                    params![name, canonical],
+                )
+                .map_err(|e| format!("set mapping: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("commit merge: {e}"))?;
+        self.remap_project_colors()
+            .map_err(|e| format!("remap project colors: {e}"))?;
+        Ok(n)
+    }
+
+    /// Pin each folder as its own project — "no, keep this one separate". The row
+    /// maps the folder to itself on purpose: a plain delete would hand it straight
+    /// back to automatic root-folding on the next pass.
+    pub fn unmerge_projects(&self, names: &[String]) -> Result<usize, String> {
+        let mut n = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        for name in names.iter().filter(|n| !n.is_empty() && **n != "unknown") {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            n += self
+                .conn
+                .execute(
+                    "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?1)
+                     ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
+                    params![name],
+                )
+                .map_err(|e| format!("keep project separate: {e}"))?;
+        }
+        Ok(n)
+    }
+
+    /// Hand each folder back to automatic root-folding: drop the recorded decision
+    /// and resolve it again from the filesystem.
+    pub fn regroup_projects(&self, names: &[String]) -> Result<usize, String> {
+        let mut n = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        for name in names.iter().filter(|n| !n.is_empty() && **n != "unknown") {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            self.conn
+                .execute("DELETE FROM project_alias WHERE alias = ?1", params![name])
+                .map_err(|e| format!("clear project mapping: {e}"))?;
+            n += self
+                .alias_project(name)
+                .map_err(|e| format!("resolve project root: {e}"))?;
+        }
+        Ok(n)
+    }
+
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
@@ -462,6 +643,33 @@ fn normalize_hex(color: &str) -> Option<String> {
     let hex = color.trim().strip_prefix('#')?;
     (hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
         .then(|| format!("#{}", hex.to_ascii_lowercase()))
+}
+
+/// Fold a recorded working directory into its project: the nearest enclosing
+/// directory that holds a `.git`. Subfolders of one repository — however deep,
+/// `node_modules/.pnpm/.../dist/core` included — are one project, while nested
+/// repositories (submodules, vendored checkouts) stay their own.
+///
+/// Strings that are not POSIX paths (WackChatter's synthetic "WackChatter ·
+/// <character>" names) and folders outside any repository come back unchanged.
+/// Missing directories are walked through rather than rejected, so a deleted deep
+/// folder still lands on the repository above it.
+pub fn resolve_project_root(path: &str) -> String {
+    if path.is_empty() || !path.starts_with('/') {
+        return path.to_string();
+    }
+    let base = path.trim_end_matches('/');
+    let start = if base.is_empty() { "/" } else { base };
+    let mut dir = Path::new(start);
+    loop {
+        if dir.join(".git").exists() {
+            return dir.to_string_lossy().into_owned();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return path.to_string(),
+        }
+    }
 }
 
 /// Open a harness-owned SQLite database strictly read-only.
@@ -495,6 +703,129 @@ mod tests {
 
         store.remove_aliases_for("GLM-5.3").unwrap();
         assert!(store.get_model_aliases().unwrap().is_empty());
+    }
+
+    fn tmp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("tokentrail-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn ev(id: &str, project: Option<&str>) -> UsageEvent {
+        UsageEvent {
+            source: Source::Zcode,
+            source_event_id: id.to_string(),
+            ts: 1_700_000_000_000,
+            session_id: None,
+            project: project.map(String::from),
+            provider: None,
+            model: Some("gpt-5".to_string()),
+            input_tokens: 1,
+            output_tokens: 1,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: None,
+            ttft_ms: None,
+            is_subagent: false,
+            estimated: false,
+        }
+    }
+
+    #[test]
+    fn resolve_project_root_folds_subfolders_to_nearest_git_root() {
+        let repo = tmp_dir("root");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let deep = repo.join("node_modules/pkg/dist/core");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(
+            resolve_project_root(&deep.to_string_lossy()),
+            repo.to_string_lossy()
+        );
+
+        // a nested repository stays its own project
+        let inner = repo.join("vendor/inner");
+        std::fs::create_dir_all(inner.join(".git")).unwrap();
+        std::fs::create_dir_all(inner.join("src")).unwrap();
+        assert_eq!(
+            resolve_project_root(&inner.join("src").to_string_lossy()),
+            inner.to_string_lossy()
+        );
+
+        // deleted deep folders still land on the repository above them
+        assert_eq!(
+            resolve_project_root(&repo.join("gone/long/ago").to_string_lossy()),
+            repo.to_string_lossy()
+        );
+
+        // outside any repository: unchanged
+        let loose = tmp_dir("loose");
+        let scripts = loose.join("notes/scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        assert_eq!(
+            resolve_project_root(&scripts.to_string_lossy()),
+            scripts.to_string_lossy()
+        );
+
+        // synthetic non-path names are never rewritten
+        assert_eq!(resolve_project_root("WackChatter · Lyra"), "WackChatter · Lyra");
+    }
+
+    #[test]
+    fn project_folders_fold_and_decisions_stay_sticky() {
+        let store = test_store();
+        let repo = tmp_dir("sticky");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let sub = repo.join("worker/src");
+        std::fs::create_dir_all(&sub).unwrap();
+        let sub_s = sub.to_string_lossy().to_string();
+        let repo_s = repo.to_string_lossy().to_string();
+
+        store.insert_events(&[ev("1", Some(&sub_s))]).unwrap();
+        // ingest folds the subfolder into its repository immediately
+        assert_eq!(store.project_canonical(&sub_s), repo_s);
+
+        // a decision made by hand is never recomputed away
+        store.unmerge_projects(&[sub_s.clone()]).unwrap();
+        store.ensure_project_aliases().unwrap();
+        store.insert_events(&[ev("2", Some(&sub_s))]).unwrap();
+        assert_eq!(store.project_canonical(&sub_s), sub_s);
+
+        // handing it back to automatic folding restores the repository grouping
+        store.regroup_projects(&[sub_s.clone()]).unwrap();
+        assert_eq!(store.project_canonical(&sub_s), repo_s);
+    }
+
+    #[test]
+    fn merged_projects_stay_flat() {
+        let store = test_store();
+        store.merge_projects(&["/a".into(), "/b".into()], "/a").unwrap();
+        assert_eq!(store.project_canonical("/b"), "/a");
+
+        // absorbing a project carries its folded folders along, no chains
+        store.merge_projects(&["/a".into(), "/c".into()], "/c").unwrap();
+        assert_eq!(store.project_canonical("/a"), "/c");
+        assert_eq!(store.project_canonical("/b"), "/c");
+
+        // the unknown bucket is not a project and cannot be merged
+        assert!(store.merge_projects(&["/c".into(), "unknown".into()], "/c").is_err());
+
+        store.unmerge_projects(&["/b".into()]).unwrap();
+        assert_eq!(store.project_canonical("/b"), "/b");
+    }
+
+    #[test]
+    fn project_colors_follow_merged_folders() {
+        let store = test_store();
+        store.set_project_color("/repo/sub", "#FF0000").unwrap();
+        store
+            .merge_projects(&["/repo/sub".into(), "/repo".into()], "/repo")
+            .unwrap();
+        assert_eq!(
+            store.get_project_colors().unwrap(),
+            vec![ProjectColor { project: "/repo".into(), color: "#ff0000".into() }]
+        );
     }
 
     #[test]

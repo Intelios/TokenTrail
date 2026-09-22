@@ -113,3 +113,11 @@ pub struct ProjectColor {
     pub project: String,
     pub color: String,
 }
+
+/// A folder → project mapping: events recorded under `alias` count as `canonical`.
+/// Filled automatically from the nearest enclosing git root, and adjustable by hand.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectAlias {
+    pub alias: String,
+    pub canonical: String,
+}

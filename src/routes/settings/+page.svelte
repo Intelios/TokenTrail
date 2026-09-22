@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectColor, type SourceStatus } from '$lib/api';
+  import { api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectAlias, type ProjectColor, type SourceStatus } from '$lib/api';
   import { basename, normalizeModelName, sourceSwatch } from '$lib/format';
   import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
 
-  type Tab = 'sources' | 'merges' | 'hidden' | 'projects' | 'export';
+  type Tab = 'sources' | 'merges' | 'hidden' | 'pmerges' | 'projects' | 'export';
   let activeTab = $state<Tab>('sources');
 
   let sources = $state<SourceStatus[]>([]);
@@ -29,6 +29,13 @@
   let hidden = $state<string[]>([]);
   let hideFilter = $state('');
   let hideSelected = $state<string[]>([]);
+
+  // project merges
+  let projNames = $state<string[]>([]);
+  let projAliases = $state<ProjectAlias[]>([]);
+  let projFilter = $state('');
+  let projSelected = $state<string[]>([]);
+  let projCanonical = $state('');
 
   // project colors
   let projectColorRows = $state<ProjectColor[]>([]);
@@ -56,21 +63,28 @@
 
   async function loadMerges() {
     try {
-      const [byModel, aliasRows, hiddenRows, rawModelRows, colorRows] = await Promise.all([
-        api.byModel(3650),
-        api.modelAliases(),
-        api.hiddenModels(),
-        api.rawModels(),
-        api.projectColors(),
-      ]);
+      const [byModel, aliasRows, hiddenRows, rawModelRows, colorRows, byProj, projAliasRows] =
+        await Promise.all([
+          api.byModel(3650),
+          api.modelAliases(),
+          api.hiddenModels(),
+          api.rawModels(),
+          api.projectColors(),
+          api.byProject(3650),
+          api.projectAliases(),
+        ]);
       modelNames = byModel.map((r) => r.model);
       aliases = aliasRows;
       hidden = hiddenRows;
       rawModels = rawModelRows;
       projectColorRows = colorRows;
+      projNames = byProj.map((r) => r.project).filter((p) => p !== 'unknown');
+      projAliases = projAliasRows;
       selected = selected.filter((n) => modelNames.includes(n));
       hideSelected = hideSelected.filter((n) => modelNames.includes(n));
       if (!selected.includes(canonical)) canonical = selected[0] ?? '';
+      projSelected = projSelected.filter((n) => projNames.includes(n));
+      if (!projSelected.includes(projCanonical)) projCanonical = projSelected[0] ?? '';
       error = '';
     } catch (e) {
       error = String(e);
@@ -158,6 +172,33 @@
       .filter(([canonicalName, list]) => list.length >= 2 || rawModelSet.has(canonicalName))
       .map(([canonicalName, aliasList]) => ({ canonical: canonicalName, aliases: aliasList }));
   });
+
+  const projFiltered = $derived.by(() => {
+    const q = projFilter.trim().toLowerCase();
+    return q ? projNames.filter((n) => n.toLowerCase().includes(q)) : projNames;
+  });
+
+  // Folders counted under a project that is not the folder itself.
+  const projGroups = $derived.by(() => {
+    const map = new Map<string, string[]>();
+    for (const a of projAliases) {
+      if (a.alias === a.canonical) continue;
+      const list = map.get(a.canonical);
+      if (list) list.push(a.alias);
+      else map.set(a.canonical, [a.alias]);
+    }
+    return [...map.entries()]
+      .map(([canonical, list]) => ({ canonical, aliases: [...list].sort() }))
+      .sort((a, b) => a.canonical.localeCompare(b.canonical));
+  });
+
+  // Folders pinned as their own project, overriding automatic folding.
+  const projDetached = $derived(
+    projAliases
+      .filter((a) => a.alias === a.canonical)
+      .map((a) => a.alias)
+      .sort()
+  );
 
   function toggleSelect(name: string) {
     selected = selected.includes(name)
@@ -260,6 +301,49 @@
     }
   }
 
+  function toggleProjSelect(name: string) {
+    projSelected = projSelected.includes(name)
+      ? projSelected.filter((n) => n !== name)
+      : [...projSelected, name];
+    if (!projSelected.includes(projCanonical)) projCanonical = projSelected[0] ?? '';
+  }
+
+  async function doProjMerge(names: string[], target: string) {
+    try {
+      await api.mergeProjects(names, target);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      projSelected = [];
+      projCanonical = '';
+      projFilter = '';
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function doProjUnmerge(names: string[]) {
+    try {
+      await api.unmergeProjects(names);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function doProjRegroup(names: string[]) {
+    try {
+      await api.regroupProjects(names);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
   // The picker already persisted the change; just reflect it in the local list.
   function onProjectColorChange(project: string, color: string | null) {
     if (color) {
@@ -290,7 +374,7 @@
   <div class="thd">
     <div class="up">
       <h1>Settings</h1>
-      <div class="sub">Sources, model alias merging, display renaming, hidden models & data export</div>
+      <div class="sub">Sources, model & project merging, display renaming, hidden models & data export</div>
     </div>
     <div class="pillsrow up">
       <div class="pills">
@@ -302,6 +386,9 @@
         </button>
         <button class="pill" class:on={activeTab === 'hidden'} onclick={() => (activeTab = 'hidden')}>
           Hidden Models {#if hidden.length}<span class="badge">{hidden.length}</span>{/if}
+        </button>
+        <button class="pill" class:on={activeTab === 'pmerges'} onclick={() => (activeTab = 'pmerges')}>
+          Project Merges {#if projGroups.length}<span class="badge">{projGroups.length}</span>{/if}
         </button>
         <button class="pill" class:on={activeTab === 'projects'} onclick={() => (activeTab = 'projects')}>
           Project Colors {#if projectColorRows.length}<span class="badge">{projectColorRows.length}</span>{/if}
@@ -632,7 +719,118 @@
       </div>
     </div>
 
-  <!-- TAB 4: Project Colors -->
+  <!-- TAB 4: Project Merges -->
+  {:else if activeTab === 'pmerges'}
+    <div class="grid2">
+      <div class="col">
+        <div class="col-hd">
+          <h2>Merge Projects</h2>
+          <span class="cnt">{projSelected.length} selected</span>
+        </div>
+        <p class="note">
+          Folders inside a git repository are already grouped under it automatically. Use this when
+          that guess is wrong: pick 2 or more projects that are really one, then choose the name to
+          display. Raw event data is never touched.
+        </p>
+        <div class="search-box">
+          <input type="text" placeholder="Search projects…" bind:value={projFilter} />
+        </div>
+        <div class="checklist">
+          {#each projFiltered as name}
+            <label class="check-row" class:checked={projSelected.includes(name)}>
+              <input type="checkbox" checked={projSelected.includes(name)} onchange={() => toggleProjSelect(name)} />
+              <span class="name">{name}</span>
+            </label>
+          {/each}
+          {#if !projFiltered.length}
+            <div class="empty-state">No projects match "{projFilter}"</div>
+          {/if}
+        </div>
+
+        {#if projSelected.length >= 2}
+          <div class="canon-box">
+            <div class="canon-title">Display all as:</div>
+            <div class="canon-radios">
+              {#each projSelected as name}
+                <label class="radio-row">
+                  <input type="radio" name="proj-canonical" value={name} checked={projCanonical === name} onchange={() => (projCanonical = name)} />
+                  <span class="name">{name}</span>
+                </label>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        <div class="btn-row">
+          <button class="primary" disabled={projSelected.length < 2} onclick={() => doProjMerge(projSelected, projCanonical)}>
+            Merge {projSelected.length >= 2 ? `${projSelected.length} projects` : '…'}
+          </button>
+          {#if projSelected.length >= 2}
+            <span class="note-inline">into “<b>{projCanonical}</b>”</span>
+          {/if}
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="col-hd">
+          <h2>Folders Grouped Into A Project ({projGroups.reduce((n, g) => n + g.aliases.length, 0)})</h2>
+        </div>
+        <p class="note">
+          Subfolders counted under their project. <b>Keep separate</b> pins a folder as its own
+          project; <b>Auto-group</b> hands it back to the nearest-git-root rule.
+        </p>
+        <div class="active-merges-list">
+          {#each projGroups as g}
+            <div class="merge-group-card">
+              <div class="grp-header">
+                <div class="grp-meta">
+                  <span class="grp-canon">{basename(g.canonical)}</span>
+                  <span class="grp-path">{g.canonical}</span>
+                </div>
+                <div class="grp-acts">
+                  <button class="unmerge-btn" onclick={() => doProjUnmerge(g.aliases)}>Keep separate</button>
+                  <button class="unmerge-btn" onclick={() => doProjRegroup(g.aliases)}>Auto-group</button>
+                </div>
+              </div>
+              <div class="grp-aliases">
+                {#each g.aliases as alias}
+                  <span class="path-chip">
+                    <span class="chip-text" title={alias}>{alias}</span>
+                    <button class="x-btn" aria-label="Keep {alias} separate" onclick={() => doProjUnmerge([alias])}>×</button>
+                  </span>
+                {/each}
+              </div>
+            </div>
+          {/each}
+          {#if !projGroups.length}
+            <div class="empty-state">No folders grouped yet</div>
+          {/if}
+        </div>
+
+        <div class="col-hd" style="margin-top:28px">
+          <h2>Kept Separate ({projDetached.length})</h2>
+        </div>
+        <p class="note">
+          Folders pinned as their own project. <b>Auto-group</b> folds each back under its repository.
+        </p>
+        <div class="active-list">
+          {#each projDetached as name}
+            <div class="rename-item">
+              <div class="meta">
+                <div class="nm">{basename(name)}</div>
+                <div class="p">{name}</div>
+              </div>
+              <button class="unmerge-btn" onclick={() => doProjRegroup([name])}>Auto-group</button>
+            </div>
+          {/each}
+          {#if !projDetached.length}
+            <div class="empty-state">No folders pinned as separate</div>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+  <!-- TAB 5: Project Colors -->
   {:else if activeTab === 'projects'}
     <div class="grid2">
       <div class="col wide">
@@ -671,7 +869,7 @@
       </div>
     </div>
 
-  <!-- TAB 5: Export & Info -->
+  <!-- TAB 6: Export & Info -->
   {:else if activeTab === 'export'}
     <div class="grid2">
       <div class="col">
@@ -1162,6 +1360,38 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+  }
+  .grp-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+  .grp-path {
+    font: 400 10px/1.3 var(--font-mono);
+    color: var(--dim);
+    word-break: break-all;
+  }
+  .grp-acts {
+    display: flex;
+    gap: 6px;
+    flex: none;
+  }
+  .path-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 2px 6px;
+    font: 400 10px/1 var(--font-mono);
+    border: 1px solid var(--hair);
+    background: rgba(13, 13, 11, 0.04);
+  }
+  .chip-text {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .alias-chip {
     display: inline-flex;

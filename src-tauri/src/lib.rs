@@ -55,6 +55,14 @@ pub fn run() {
                 }
             }
 
+            // Fold recorded folders into their projects (nearest git roots), so
+            // history is grouped correctly before the first sync lands.
+            match store.ensure_project_aliases() {
+                Ok(n) if n > 0 => println!("folded {n} project folders into their projects"),
+                Ok(_) => {}
+                Err(e) => println!("failed to fold project folders: {e}"),
+            }
+
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             app.manage(AppState {
                 store: Mutex::new(store),
@@ -104,6 +112,10 @@ pub fn run() {
             commands::unhide_model,
             commands::get_project_colors,
             commands::set_project_color,
+            commands::get_project_aliases,
+            commands::merge_projects,
+            commands::unmerge_projects,
+            commands::regroup_projects,
             commands::export_data,
             commands::get_family_stats,
             commands::get_leaderboard_events,

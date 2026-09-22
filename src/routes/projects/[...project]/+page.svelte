@@ -6,7 +6,7 @@
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
   import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
-  import { api, type ProjectDetail } from '$lib/api';
+  import { api, type ProjectAlias, type ProjectDetail } from '$lib/api';
   import {
     fmtCost,
     fmtDate,
@@ -41,6 +41,7 @@
 
   let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
   let detail = $state<ProjectDetail | null>(null);
+  let aliases = $state<ProjectAlias[]>([]);
   let color = $state<string | null>(null);
   let error = $state('');
   let loading = $state(true);
@@ -62,15 +63,17 @@
     if (!projectName) return;
     if (!detail) loading = true;
     try {
-      const [dInit, colors] = await Promise.all([
+      const [dInit, colors, aliasRows] = await Promise.all([
         api.projectDetail(projectName, days),
         api.projectColors(),
+        api.projectAliases(),
       ]);
       let d = dInit;
       if (!d && !projectName.startsWith('/') && projectName !== 'unknown') {
         d = await api.projectDetail('/' + projectName, days);
       }
       detail = d;
+      aliases = aliasRows;
       // key the color off the path the detail actually resolved to, so the
       // '/'-prefixed fallback and the picker agree on one project string
       color = d ? (colors.find((c) => c.project === d.project)?.color ?? null) : null;
@@ -151,6 +154,16 @@
     return ((detail.tokens / detail.total_window_tokens) * 100).toFixed(1);
   });
 
+  // Folders counted under this project — shown so a folded subfolder stays traceable.
+  const foldedFolders = $derived.by(() => {
+    const d = detail;
+    if (!d) return [];
+    return aliases
+      .filter((a) => a.canonical === d.project && a.alias !== a.canonical)
+      .map((a) => a.alias)
+      .sort();
+  });
+
   const dayCols = $derived(singleDailyColumns(detail?.daily ?? []));
   const dailyOption = $derived(singleDailyOption(dayCols, color ?? '#ff6b35'));
 
@@ -223,6 +236,16 @@
               </button>
             </div>
           </div>
+          {#if foldedFolders.length}
+            <div class="folded">
+              <span class="folded-lbl">
+                Includes {foldedFolders.length} folder{foldedFolders.length !== 1 ? 's' : ''}:
+              </span>
+              {#each foldedFolders as f}
+                <span class="folded-chip" title={f}>{f}</span>
+              {/each}
+            </div>
+          {/if}
         {:else}
           <div class="unknown-notice">
             Events with no detected directory or unassigned project context
@@ -555,6 +578,30 @@
     font: 400 11px/1.4 var(--font-mono);
     opacity: 0.6;
     margin-top: 6px;
+  }
+
+  .folded {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .folded-lbl {
+    font: 600 10px/1 var(--font-mono);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    opacity: 0.55;
+  }
+  .folded-chip {
+    font: 400 10px/1 var(--font-mono);
+    background: rgba(13, 13, 11, 0.05);
+    border: 1px solid rgba(13, 13, 11, 0.1);
+    padding: 2px 6px;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .thd .sub {

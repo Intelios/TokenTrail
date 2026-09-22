@@ -4,7 +4,7 @@ use crate::aggregate::{
     Overview, PeakDayRow, ProjectDetail, ProjectRow,
 };
 use crate::collectors;
-use crate::models::{IngestStats, ModelAlias, ProjectColor, SourceStatus};
+use crate::models::{IngestStats, ModelAlias, ProjectAlias, ProjectColor, SourceStatus};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, State};
 
@@ -237,6 +237,51 @@ pub fn set_project_color(
             .map(|_| ())
             .map_err(|e| format!("clear project color: {e}")),
     }
+}
+
+#[tauri::command]
+pub fn get_project_aliases(state: State<AppState>) -> Vec<ProjectAlias> {
+    state
+        .store
+        .lock()
+        .map(|store| store.get_project_aliases().unwrap_or_default())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn merge_projects(state: State<AppState>, names: Vec<String>, canonical: String) -> Result<(), String> {
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let canonical = canonical.trim().to_string();
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store.merge_projects(&names, &canonical).map(|_| ())
+}
+
+/// Folders kept as their own projects, overriding automatic root-folding.
+#[tauri::command]
+pub fn unmerge_projects(state: State<AppState>, names: Vec<String>) -> Result<(), String> {
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store.unmerge_projects(&names).map(|_| ())
+}
+
+/// Folders handed back to automatic root-folding.
+#[tauri::command]
+pub fn regroup_projects(state: State<AppState>, names: Vec<String>) -> Result<(), String> {
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    store.regroup_projects(&names).map(|_| ())
 }
 
 #[tauri::command]

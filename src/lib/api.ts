@@ -129,6 +129,15 @@ export interface ProjectColor {
   color: string;
 }
 
+/**
+ * A folder → project mapping: events recorded under `alias` count as `canonical`.
+ * Filled automatically from the nearest enclosing git root, and adjustable by hand.
+ */
+export interface ProjectAlias {
+  alias: string;
+  canonical: string;
+}
+
 export interface FamilyStatsRow {
   family: string;
   tokens: number;
@@ -279,6 +288,13 @@ export const api = {
   /** `null` clears the color and hands the project back to the auto palette. */
   setProjectColor: (project: string, color: string | null) =>
     invoke<void>('set_project_color', { project, color }),
+  projectAliases: () => invoke<ProjectAlias[]>('get_project_aliases'),
+  mergeProjects: (names: string[], canonical: string) =>
+    invoke<void>('merge_projects', { names, canonical }),
+  /** Keep these folders as their own projects, overriding automatic root-folding. */
+  unmergeProjects: (names: string[]) => invoke<void>('unmerge_projects', { names }),
+  /** Hand these folders back to automatic root-folding (nearest git root). */
+  regroupProjects: (names: string[]) => invoke<void>('regroup_projects', { names }),
   familyStats: (days: number) => invoke<FamilyStatsRow[]>('get_family_stats', { days }),
   leaderboardEvents: (days: number) => invoke<LeaderboardEvent[]>('get_leaderboard_events', { days }),
   peakDays: (days: number) => invoke<PeakDayRow[]>('get_peak_days', { days }),
