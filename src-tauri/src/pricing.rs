@@ -295,6 +295,27 @@ mod tests {
     }
 
     #[test]
+    fn gpt_6_sol_luna_prices() {
+        // GPT-6 Sol (launched 2026-09-22) lists at $2/$10 with $0.20 cached
+        // input and a 1.25x cache write ($2.50); GPT-6 Luna is the small
+        // sibling at $0.10/$0.50 with $0.01 cached input and a $0.125 write.
+        assert_eq!(rates_for("gpt-6-sol").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("gpt-6-sol").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("gpt-6-sol").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("gpt-6-sol").map(|r| r.cache_write), Some(2.5));
+        assert_eq!(rates_for("gpt-6-luna").map(|r| r.input), Some(0.1));
+        assert_eq!(rates_for("gpt-6-luna").map(|r| r.output), Some(0.5));
+        assert_eq!(rates_for("gpt-6-luna").map(|r| r.cache_read), Some(0.01));
+        assert_eq!(rates_for("gpt-6-luna").map(|r| r.cache_write), Some(0.125));
+        // Dated snapshots, provider prefixes and "model/variant" spellings
+        // resolve through the family; GPT-6 Astra keeps its own $10/$50 rates.
+        assert_eq!(rates_for("gpt-6-sol-2026-09-22").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("openai/gpt-6-luna").map(|r| r.input), Some(0.1));
+        assert_eq!(rates_for("gpt-6-sol/long-context").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("gpt-6-astra").map(|r| r.output), Some(50.0));
+    }
+
+    #[test]
     fn deepseek_v41_flash_prices() {
         // V4.1 Flash lists at $0.15/$0.60 off-peak and 2x at peak; the table
         // carries peak rates like the other deepseek entries. "deepseek-flash"
