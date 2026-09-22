@@ -856,14 +856,14 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     achievements.extend(earned_token_milestones);
     achievements.extend(earned_cost_milestones);
 
-    // 5. Project Explorer
+    // 5. First Project & Project Explorer
     let sql_projects = format!(
         "SELECT COALESCE(u.project, 'unknown') as p, MIN(u.ts) as first_ts
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
            AND u.project IS NOT NULL AND u.project != '' AND u.project != 'unknown'
          GROUP BY p
-         ORDER BY first_ts ASC",
+         ORDER BY first_ts ASC, p ASC",
         H = NOT_HIDDEN
     );
     let mut stmt_projects = store.conn().prepare(&sql_projects)?;
@@ -872,6 +872,16 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
+
+    if let Some((first_proj, first_ts)) = projects.first() {
+        achievements.push(Achievement {
+            kind: "first_project".to_string(),
+            tier: None,
+            title: "First Project".to_string(),
+            value: first_proj.clone(),
+            earned_ts: Some(*first_ts),
+        });
+    }
 
     if projects.len() >= 3 {
         achievements.push(Achievement {
@@ -2521,10 +2531,29 @@ mod tests {
         assert!(!achs.iter().any(|a| a.kind == "token_milestone"
             && matches!(a.tier.as_deref(), Some("100k" | "1m" | "10m"))));
 
-        // 6. Project explorer (3 projects, 3rd used on day3)
+        // 6. First project & Project explorer
+        let first_proj = achs.iter().find(|a| a.kind == "first_project").expect("first_project present");
+        assert_eq!(first_proj.title, "First Project");
+        assert_eq!(first_proj.value, "proj-alpha");
+        assert_eq!(first_proj.earned_ts, Some(day1));
+
         let proj = achs.iter().find(|a| a.kind == "project_explorer").expect("project_explorer present");
         assert_eq!(proj.value, "Used in 3 projects");
         assert_eq!(proj.earned_ts, Some(day3));
+    }
+
+    #[test]
+    fn model_achievements_without_project_has_no_first_project() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                test_event("gpt-5", now, 5000),
+            ])
+            .unwrap();
+
+        let achs = model_achievements(&store, "gpt-5").unwrap();
+        assert!(!achs.iter().any(|a| a.kind == "first_project"));
     }
 
     #[test]

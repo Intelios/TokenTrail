@@ -323,7 +323,9 @@
                 </span>
                 <span class="ach-title">{a.title}</span>
               </div>
-              <div class="ach-val">{a.value}</div>
+              <div class="ach-val" title={a.value}>
+                {a.kind === 'first_project' ? basename(a.value) : a.value}
+              </div>
               <div class="ach-date">
                 {#if a.earned_ts}
                   Earned {fmtDate(a.earned_ts)}

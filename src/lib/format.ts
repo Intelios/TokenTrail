@@ -253,6 +253,8 @@ export function achColor(ach: { kind: string; tier: string | null }): string {
       return 'var(--mag)';
     case 'project_explorer':
       return 'var(--vio)';
+    case 'first_project':
+      return 'var(--cyn)';
     default:
       return 'var(--dim)';
   }
