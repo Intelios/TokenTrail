@@ -1472,29 +1472,27 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
         }
 
-        // 5. Overtakes (top 20 adjacent rank swaps)
+        // 5. Overtakes (adjacent rank swaps)
         if !prev_rankings.is_empty() && in_window {
             for (model, _) in day_models {
                 if let Some(&curr_rank) = curr_rankings.get(model) {
-                    if curr_rank <= 20 {
-                        if let Some(&prev_rank) = prev_rankings.get(model) {
-                            for (other_model, &other_prev_rank) in &prev_rankings {
-                                if other_model != model && other_prev_rank < prev_rank {
-                                    if let Some(&other_curr_rank) = curr_rankings.get(other_model) {
-                                        if curr_rank < other_curr_rank {
-                                            let my_tokens = *cumulative_tokens.get(model).unwrap_or(&0);
-                                            let other_tokens = *cumulative_tokens.get(other_model).unwrap_or(&0);
-                                            let gap = my_tokens - other_tokens;
-                                            if gap > 0 {
-                                                events.push(LeaderboardEvent {
-                                                    kind: "overtake".into(),
-                                                    model: model.clone(),
-                                                    other_model: Some(other_model.clone()),
-                                                    rank: Some(curr_rank as i64),
-                                                    date: d.clone(),
-                                                    tokens: gap,
-                                                });
-                                            }
+                    if let Some(&prev_rank) = prev_rankings.get(model) {
+                        for (other_model, &other_prev_rank) in &prev_rankings {
+                            if other_model != model && other_prev_rank < prev_rank {
+                                if let Some(&other_curr_rank) = curr_rankings.get(other_model) {
+                                    if curr_rank < other_curr_rank {
+                                        let my_tokens = *cumulative_tokens.get(model).unwrap_or(&0);
+                                        let other_tokens = *cumulative_tokens.get(other_model).unwrap_or(&0);
+                                        let gap = my_tokens - other_tokens;
+                                        if gap > 0 {
+                                            events.push(LeaderboardEvent {
+                                                kind: "overtake".into(),
+                                                model: model.clone(),
+                                                other_model: Some(other_model.clone()),
+                                                rank: Some(curr_rank as i64),
+                                                date: d.clone(),
+                                                tokens: gap,
+                                            });
                                         }
                                     }
                                 }
@@ -2095,7 +2093,7 @@ mod tests {
     }
 
     #[test]
-    fn leaderboard_overtake_top_20_boundary() {
+    fn leaderboard_overtake_beyond_top_20() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let now = now_ms();
         let day_ms = 86_400_000i64;
@@ -2125,12 +2123,17 @@ mod tests {
         let events = leaderboard_events(&store, 30).unwrap();
         let overtakes: Vec<_> = events.iter().filter(|e| e.kind == "overtake").collect();
 
-        // Only m16's overtake into rank 15 should be captured; m22 at rank 21 is excluded
-        assert_eq!(overtakes.len(), 1);
-        assert_eq!(overtakes[0].model, "m16");
-        assert_eq!(overtakes[0].other_model, Some("m15".into()));
-        assert_eq!(overtakes[0].rank, Some(15));
-        assert_eq!(overtakes[0].tokens, 500);
+        // Both m16's overtake into rank 15 and m22's overtake into rank 21 should be captured
+        assert_eq!(overtakes.len(), 2);
+        let m16_ot = overtakes.iter().find(|e| e.model == "m16").unwrap();
+        assert_eq!(m16_ot.other_model, Some("m15".into()));
+        assert_eq!(m16_ot.rank, Some(15));
+        assert_eq!(m16_ot.tokens, 500);
+
+        let m22_ot = overtakes.iter().find(|e| e.model == "m22").unwrap();
+        assert_eq!(m22_ot.other_model, Some("m21".into()));
+        assert_eq!(m22_ot.rank, Some(21));
+        assert_eq!(m22_ot.tokens, 500);
     }
 
     #[test]
