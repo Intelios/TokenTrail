@@ -198,6 +198,26 @@ mod tests {
     }
 
     #[test]
+    fn mimo_v26_prices() {
+        // V2.6 keeps V2.5's list rates: Pro is $0.435/$0.87 with $0.0036
+        // cached input, Flash is $0.14/$0.28 with $0.0028 cached input;
+        // cache writes are limited-time free and bill at the input rate.
+        assert_eq!(rates_for("mimo-v2.6-pro").map(|r| r.input), Some(0.435));
+        assert_eq!(rates_for("mimo-v2.6-pro").map(|r| r.output), Some(0.87));
+        assert_eq!(rates_for("mimo-v2.6-pro").map(|r| r.cache_read), Some(0.0036));
+        assert_eq!(rates_for("mimo-v2.6-pro").map(|r| r.cache_write), Some(0.435));
+        assert_eq!(rates_for("mimo-v2.6-flash").map(|r| r.input), Some(0.14));
+        assert_eq!(rates_for("mimo-v2.6-flash").map(|r| r.output), Some(0.28));
+        assert_eq!(rates_for("mimo-v2.6-flash").map(|r| r.cache_read), Some(0.0028));
+        assert_eq!(rates_for("mimo-v2.6-flash").map(|r| r.cache_write), Some(0.14));
+        // Provider-prefixed spellings resolve through the family.
+        assert_eq!(rates_for("xiaomi/mimo-v2.6-pro").map(|r| r.input), Some(0.435));
+        // Older MiMo names keep their own entries and the catch-all.
+        assert_eq!(rates_for("mimo-v2.5-pro").map(|r| r.input), Some(0.435));
+        assert_eq!(rates_for("mimo-v2.5").map(|r| r.input), Some(0.112));
+    }
+
+    #[test]
     fn computes_cost() {
         // 1M input + 1M output on a $3/$15 model = $18
         let e = event(Some("claude-sonnet-4.5"), 1_000_000, 0, 0, 1_000_000);
