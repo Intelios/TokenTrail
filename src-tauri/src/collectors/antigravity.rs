@@ -44,19 +44,25 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
     let files = sorted_glob_db(&root)?;
     let mut processed = 0usize;
     for path in files {
+        let Some(uuid) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let mt_key = format!("antigravity:mtime:{uuid}");
+        let last_mtime = store.get_watermark(&mt_key);
+
+        let wal_path = {
+            let mut p = path.as_os_str().to_os_string();
+            p.push("-wal");
+            std::path::PathBuf::from(p)
+        };
+        let file_mtime_ns = mtime_ns(&path).max(mtime_ns(&wal_path));
+        if file_mtime_ns > 0 && file_mtime_ns <= last_mtime {
+            continue;
+        }
+
         // a crashed or mid-migration conversation DB must not stall the others
         let Ok(conn) = open_readonly(&path) else { continue };
-        let Some(uuid) = path.file_stem().and_then(|s| s.to_str()) else { continue };
         let wm_key = format!("antigravity:{uuid}");
         let from = store.get_watermark(&wm_key);
-        let project = read_project(&conn);
-        let step_times = read_step_times(&conn);
-        let mtime_ms = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+
         let rows = conn
             .prepare("SELECT idx, data FROM gen_metadata WHERE idx >= ?1 ORDER BY idx")
             .and_then(|mut s| {
@@ -67,8 +73,15 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
             });
         let Ok(rows) = rows else { continue };
         if rows.is_empty() {
+            if file_mtime_ns > 0 {
+                store.set_watermark(&mt_key, file_mtime_ns);
+            }
             continue;
         }
+
+        let project = read_project(&conn);
+        let step_times = read_step_times(&conn);
+        let mtime_ms = file_mtime_ns / 1_000_000;
         let mut events = Vec::new();
         let mut max_idx = from;
         for (idx, blob) in rows {
@@ -123,6 +136,9 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
             .insert_events(&events)
             .map_err(|e| format!("antigravity insert {uuid}: {e}"))?;
         store.set_watermark(&wm_key, max_idx + 1);
+        if file_mtime_ns > 0 {
+            store.set_watermark(&mt_key, file_mtime_ns);
+        }
     }
     Ok(processed)
 }
@@ -430,6 +446,15 @@ fn sorted_glob_db(root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
         .collect();
     files.sort();
     Ok(files)
+}
+
+fn mtime_ns(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -764,6 +789,82 @@ mod tests {
         let mut m = vec![];
         varint_field(&mut m, 1, u64::MAX);
         assert_eq!(timestamp_ms(&m), i64::MAX);
+    }
+
+    #[test]
+    fn skips_unchanged_files_and_records_mtime_watermark() {
+        let home = test_home("antigravity_mtime_skip");
+        let store = test_store("antigravity_mtime_skip");
+        seed(&home);
+        assert_eq!(collect(&store, &home).unwrap(), 2);
+
+        let uuid = "11111111-2222-3333-4444-555555555555";
+        let mt_key = format!("antigravity:mtime:{uuid}");
+        let mtime = store.get_watermark(&mt_key);
+        assert!(mtime > 0, "mtime watermark must be recorded after collect");
+
+        // Second run with unchanged files must be a no-op
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+    }
+
+    #[test]
+    fn touches_wal_file_triggers_rescan_and_updates_mtime() {
+        let home = test_home("antigravity_wal_rescan");
+        let store = test_store("antigravity_wal_rescan");
+        seed(&home);
+        assert_eq!(collect(&store, &home).unwrap(), 2);
+
+        let uuid = "11111111-2222-3333-4444-555555555555";
+        let mt_key = format!("antigravity:mtime:{uuid}");
+        let initial_mtime = store.get_watermark(&mt_key);
+
+        // Simulate an active session writing to the WAL file
+        let wal_path = home
+            .join(".gemini/antigravity/conversations")
+            .join(format!("{uuid}.db-wal"));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&wal_path, b"simulated wal write").unwrap();
+
+        // The next collect must detect the updated WAL mtime and advance the watermark
+        assert_eq!(collect(&store, &home).unwrap(), 0); // no new gen_metadata rows
+        let updated_mtime = store.get_watermark(&mt_key);
+        assert!(
+            updated_mtime > initial_mtime,
+            "mtime watermark should advance to match the WAL file modification"
+        );
+    }
+
+    #[test]
+    fn empty_new_rows_advances_mtime_watermark_so_next_cycle_skips() {
+        let home = test_home("antigravity_empty_rows_mtime");
+        let store = test_store("antigravity_empty_rows_mtime");
+        seed(&home);
+        assert_eq!(collect(&store, &home).unwrap(), 2);
+
+        let uuid = "11111111-2222-3333-4444-555555555555";
+        let mt_key = format!("antigravity:mtime:{uuid}");
+        let initial_mtime = store.get_watermark(&mt_key);
+
+        // Update an unrelated table (e.g. trajectory_metadata_blob) so DB mtime advances
+        let db = home
+            .join(".gemini/antigravity/conversations")
+            .join(format!("{uuid}.db"));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE trajectory_metadata_blob SET data = ?1 WHERE id = 'main'",
+            rusqlite::params![traj_blob("/Users/x/dev/updated_proj")],
+        )
+        .unwrap();
+        drop(conn);
+
+        // First collect after update finds 0 new gen_metadata rows, but updates mtime watermark
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+        let updated_mtime = store.get_watermark(&mt_key);
+        assert!(updated_mtime > initial_mtime, "mtime watermark should advance");
+
+        // Subsequent collect skips opening entirely because mtime is now up-to-date
+        assert_eq!(collect(&store, &home).unwrap(), 0);
     }
 
     /// Opt-in smoke test against the developer's real Antigravity data:
