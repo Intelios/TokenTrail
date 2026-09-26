@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS usage_event (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_event(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_source_ts ON usage_event(source, ts);
-CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_event(source, session_id);
+CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_event(source, session_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_event(model, ts);
+CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_event(project, ts);
 CREATE TABLE IF NOT EXISTS ingest_state (
     source TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -95,6 +97,30 @@ impl Store {
             "ALTER TABLE usage_event ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        // Ensure new indexes exist on databases created before they were added to SCHEMA.
+        let _ = conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_event(model, ts);
+             CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_event(project, ts);",
+        );
+        // Existing databases created before idx_usage_session included `ts DESC` need to be
+        // upgraded so latest_session_model can use an index seek instead of sorting in memory.
+        let needs_session_idx_rebuild = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_usage_session'",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .map(|sql| !sql.to_lowercase().contains("ts"))
+            .unwrap_or(false);
+
+        if needs_session_idx_rebuild {
+            let _ = conn.execute_batch(
+                "DROP INDEX IF EXISTS idx_usage_session;
+                 CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_event(source, session_id, ts DESC);",
+            );
+        }
         Ok(Self {
             writer: Mutex::new(conn),
             path: path.to_path_buf(),
@@ -1240,4 +1266,99 @@ mod tests {
         let raw = store.get_raw_models().unwrap();
         assert_eq!(raw, vec!["gpt-4o", "gpt-4o-2024-08-06"]);
     }
+
+    #[test]
+    fn schema_creates_expected_indexes() {
+        let store = test_store();
+        let conn = store.read_conn();
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='usage_event' ORDER BY name")
+            .unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(names.contains(&"idx_usage_ts".to_string()));
+        assert!(names.contains(&"idx_usage_source_ts".to_string()));
+        assert!(names.contains(&"idx_usage_session".to_string()));
+        assert!(names.contains(&"idx_usage_model".to_string()));
+        assert!(names.contains(&"idx_usage_project".to_string()));
+
+        let session_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_usage_session'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(session_sql.to_lowercase().contains("ts desc"));
+    }
+
+    #[test]
+    fn open_migrates_legacy_indexes() {
+        let dir = tmp_dir("legacy_idx");
+        let db_path = dir.join("usage.db");
+
+        // Manually create legacy schema with 2-column idx_usage_session and without model/project indexes
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE usage_event (
+                    id INTEGER PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    source_event_id TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    session_id TEXT,
+                    project TEXT,
+                    provider TEXT,
+                    model TEXT,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    reasoning_tokens INTEGER,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                    duration_ms INTEGER,
+                    ttft_ms INTEGER,
+                    is_subagent INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL,
+                    UNIQUE(source, source_event_id)
+                );
+                CREATE INDEX idx_usage_ts ON usage_event(ts);
+                CREATE INDEX idx_usage_source_ts ON usage_event(source, ts);
+                CREATE INDEX idx_usage_session ON usage_event(source, session_id);",
+            )
+            .unwrap();
+        }
+
+        // Open with Store::open, which should run migrations
+        let store = Store::open(&db_path).unwrap();
+        let conn = store.read_conn();
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='usage_event' ORDER BY name")
+            .unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(names.contains(&"idx_usage_model".to_string()));
+        assert!(names.contains(&"idx_usage_project".to_string()));
+        assert!(names.contains(&"idx_usage_session".to_string()));
+
+        let session_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_usage_session'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(session_sql.to_lowercase().contains("ts desc"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
+
