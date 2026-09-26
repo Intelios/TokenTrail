@@ -102,12 +102,12 @@ mod tests {
         let n = collect(&store, &home).unwrap();
         assert_eq!(n, 1);
         let count: i64 = store
-            .conn()
+            .read_conn()
             .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
         let (proj, model, ttft): (String, String, Option<i64>) = store
-            .conn()
+            .read_conn()
             .query_row("SELECT project, model, ttft_ms FROM usage_event", [], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })
@@ -118,7 +118,7 @@ mod tests {
         // second pass (inside overlap): same rows, still exactly one stored event
         collect(&store, &home).unwrap();
         let count: i64 = store
-            .conn()
+            .read_conn()
             .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);

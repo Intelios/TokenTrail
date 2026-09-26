@@ -276,7 +276,7 @@ pub struct LeaderboardEvent {
 type DbResult<T> = Result<T, rusqlite::Error>;
 
 pub fn overview(store: &Store) -> DbResult<Overview> {
-    let conn = store.conn();
+    let conn = store.read_conn();
     let totals_sql = format!(
         "SELECT COALESCE(SUM({T}),0), COALESCE(SUM(input_tokens),0),
                 COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0),
@@ -369,7 +369,7 @@ pub fn active_days_for_range(store: &Store, days: i64) -> DbResult<i64> {
          FROM usage_event u WHERE u.ts >= ?1 AND {H}",
         H = NOT_HIDDEN
     );
-    store.conn().query_row(&sql, [cutoff(days)], |r| r.get(0))
+    store.read_conn().query_row(&sql, [cutoff(days)], |r| r.get(0))
 }
 
 pub fn daily(store: &Store, days: i64) -> DbResult<Vec<DailyRow>> {
@@ -379,7 +379,8 @@ pub fn daily(store: &Store, days: i64) -> DbResult<Vec<DailyRow>> {
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<DailyRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(DailyRow { date: r.get(0)?, source: r.get(1)?, tokens: r.get(2)?, cost_usd: r.get(3)? })
@@ -397,7 +398,8 @@ pub fn daily_by_model(store: &Store, days: i64) -> DbResult<Vec<DailyModelRow>> 
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<DailyModelRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(DailyModelRow { date: r.get(0)?, model: r.get(1)?, tokens: r.get(2)? })
@@ -407,7 +409,8 @@ pub fn daily_by_model(store: &Store, days: i64) -> DbResult<Vec<DailyModelRow>> 
 }
 
 pub fn daily_cache(store: &Store, days: i64) -> DbResult<Vec<DailyCacheRow>> {
-    let mut stmt = store.conn().prepare(&format!(
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&format!(
         "SELECT date(ts/1000,'unixepoch') AS d,
                 COALESCE(SUM(input_tokens),0), COALESCE(SUM(cache_write_tokens),0),
                 COALESCE(SUM(cache_read_tokens),0)
@@ -431,7 +434,8 @@ pub fn by_model(store: &Store, days: i64) -> DbResult<Vec<ModelRow>> {
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<ModelRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(ModelRow { model: r.get(0)?, tokens: r.get(1)?, events: r.get(2)?, cost_usd: r.get(3)?, last_ts: r.get(4)? })
@@ -453,7 +457,8 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<ModelStatsRow> = stmt
         .query_map([cutoff(days)], |r| {
             let src_str: Option<String> = r.get(11)?;
@@ -490,7 +495,8 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
          LIMIT 1",
         H = NOT_HIDDEN
     );
-    let mut exists_stmt = store.conn().prepare(&exists_sql)?;
+    let conn = store.read_conn();
+    let mut exists_stmt = conn.prepare(&exists_sql)?;
     let canonical_name = match exists_stmt.query_row(rusqlite::params![model], |r| r.get::<_, String>(0)) {
         Ok(name) => name,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
@@ -513,7 +519,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let row = stmt.query_row(rusqlite::params![cutoff_ts, model], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -548,7 +554,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_src = store.conn().prepare(&sql_src)?;
+    let mut stmt_src = conn.prepare(&sql_src)?;
     let by_source: Vec<SourceTotals> = stmt_src
         .query_map(rusqlite::params![cutoff_ts, model], |r| {
             Ok(SourceTotals {
@@ -574,7 +580,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         H = NOT_HIDDEN,
         P = PROJECT
     );
-    let mut stmt_proj = store.conn().prepare(&sql_proj)?;
+    let mut stmt_proj = conn.prepare(&sql_proj)?;
     let by_project: Vec<ProjectRow> = stmt_proj
         .query_map(rusqlite::params![cutoff_ts, model], |r| {
             Ok(ProjectRow {
@@ -598,7 +604,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_daily = store.conn().prepare(&sql_daily)?;
+    let mut stmt_daily = conn.prepare(&sql_daily)?;
     let daily: Vec<HeatmapCell> = stmt_daily
         .query_map(rusqlite::params![cutoff_ts, model], |r| {
             Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
@@ -615,7 +621,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut total_stmt = store.conn().prepare(&total_sql)?;
+    let mut total_stmt = conn.prepare(&total_sql)?;
     let total_window_tokens: i64 = total_stmt.query_row([cutoff_ts], |r| r.get(0))?;
 
     Ok(Some(ModelDetail {
@@ -675,7 +681,8 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
          LIMIT 1",
         H = NOT_HIDDEN
     );
-    let mut exists_stmt = store.conn().prepare(&exists_sql)?;
+    let conn = store.read_conn();
+    let mut exists_stmt = conn.prepare(&exists_sql)?;
     let canonical_name = match exists_stmt.query_row(rusqlite::params![model], |r| r.get::<_, String>(0)) {
         Ok(name) => name,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Vec::new()),
@@ -693,7 +700,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_daily = store.conn().prepare(&sql_daily)?;
+    let mut stmt_daily = conn.prepare(&sql_daily)?;
     let daily_rows: Vec<(String, i64, i64)> = stmt_daily
         .query_map(rusqlite::params![&canonical_name], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
@@ -757,7 +764,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
          ORDER BY first_ts ASC",
         H = NOT_HIDDEN
     );
-    let mut stmt_sources = store.conn().prepare(&sql_sources)?;
+    let mut stmt_sources = conn.prepare(&sql_sources)?;
     let sources: Vec<(String, i64)> = stmt_sources
         .query_map(rusqlite::params![&canonical_name], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
@@ -786,7 +793,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
             T = TOKENS,
             H = NOT_HIDDEN
         );
-        let mut stmt_models = store.conn().prepare(&sql_models)?;
+        let mut stmt_models = conn.prepare(&sql_models)?;
         let model_totals: Vec<(String, i64)> = stmt_models
             .query_map([], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
@@ -819,7 +826,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_events = store.conn().prepare(&sql_events)?;
+    let mut stmt_events = conn.prepare(&sql_events)?;
     let mut event_rows = stmt_events.query(rusqlite::params![&canonical_name])?;
 
     let token_tiers: &[(i64, &str, &str, &str)] = &[
@@ -894,7 +901,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
         H = NOT_HIDDEN,
         P = PROJECT
     );
-    let mut stmt_projects = store.conn().prepare(&sql_projects)?;
+    let mut stmt_projects = conn.prepare(&sql_projects)?;
     let projects: Vec<(String, i64)> = stmt_projects
         .query_map(rusqlite::params![&canonical_name], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
@@ -1009,7 +1016,8 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
         H = NOT_HIDDEN,
         P = PROJECT
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<ProjectRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(ProjectRow {
@@ -1042,7 +1050,8 @@ pub fn daily_by_project(store: &Store, days: i64) -> DbResult<Vec<DailyProjectRo
         H = NOT_HIDDEN,
         P = PROJECT
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<DailyProjectRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(DailyProjectRow {
@@ -1078,7 +1087,8 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
             P = PROJECT
         )
     };
-    let mut exists_stmt = store.conn().prepare(&exists_sql)?;
+    let conn = store.read_conn();
+    let mut exists_stmt = conn.prepare(&exists_sql)?;
     let exists_res = if is_unknown {
         exists_stmt.query_row([], |_| Ok(()))
     } else {
@@ -1110,7 +1120,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let map_row = |r: &rusqlite::Row| {
         Ok((
             r.get::<_, i64>(0)?,
@@ -1157,7 +1167,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_model = store.conn().prepare(&sql_model)?;
+    let mut stmt_model = conn.prepare(&sql_model)?;
     let map_model = |r: &rusqlite::Row| {
         Ok(ProjectModelRow {
             model: r.get(0)?,
@@ -1187,7 +1197,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_src = store.conn().prepare(&sql_src)?;
+    let mut stmt_src = conn.prepare(&sql_src)?;
     let map_src = |r: &rusqlite::Row| {
         Ok(SourceTotals {
             source: r.get(0)?,
@@ -1213,7 +1223,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_daily = store.conn().prepare(&sql_daily)?;
+    let mut stmt_daily = conn.prepare(&sql_daily)?;
     let map_daily = |r: &rusqlite::Row| {
         Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
     };
@@ -1247,7 +1257,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt_sessions = store.conn().prepare(&sql_sessions)?;
+    let mut stmt_sessions = conn.prepare(&sql_sessions)?;
     let map_session = |r: &rusqlite::Row| {
         let models_str: Option<String> = r.get(7)?;
         let mut models: Vec<String> = models_str
@@ -1277,7 +1287,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut total_stmt = store.conn().prepare(&total_sql)?;
+    let mut total_stmt = conn.prepare(&total_sql)?;
     let total_window_tokens: i64 = total_stmt.query_row([cutoff_ts], |r| r.get(0))?;
 
     Ok(Some(ProjectDetail {
@@ -1313,7 +1323,8 @@ pub fn heatmap(store: &Store, days: i64) -> DbResult<Vec<HeatmapCell>> {
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<HeatmapCell> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
@@ -1329,7 +1340,8 @@ pub fn hourly(store: &Store) -> DbResult<Vec<HourRow>> {
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<HourRow> = stmt
         .query_map([], |r| Ok(HourRow { hour: r.get(0)?, tokens: r.get(1)? }))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1352,7 +1364,8 @@ pub fn peak_days(store: &Store, days: i64) -> DbResult<Vec<PeakDayRow>> {
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<PeakDayRow> = stmt
         .query_map([cutoff(days)], |r| {
             Ok(PeakDayRow {
@@ -1384,7 +1397,8 @@ pub fn estimated_share(store: &Store) -> DbResult<Vec<EstimatedShare>> {
          FROM usage_event u WHERE {H} GROUP BY source HAVING SUM(estimated) > 0",
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<EstimatedShare> = stmt
         .query_map([], |r| {
             Ok(EstimatedShare { source: r.get(0)?, events: r.get(1)?, estimated: r.get(2)? })
@@ -1395,7 +1409,7 @@ pub fn estimated_share(store: &Store) -> DbResult<Vec<EstimatedShare>> {
 
 pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardEvent>> {
     let cutoff_ts = cutoff(days);
-    let cutoff_date: String = store.conn().query_row(
+    let cutoff_date: String = store.read_conn().query_row(
         "SELECT date(?1/1000, 'unixepoch')",
         [cutoff_ts],
         |r| r.get(0),
@@ -1414,13 +1428,14 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
         T = TOKENS,
         H = NOT_HIDDEN
     );
-    let mut stmt = store.conn().prepare(&sql)?;
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<(String, String, i64)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut aliased_models: HashSet<String> = HashSet::new();
-    if let Ok(mut alias_stmt) = store.conn().prepare("SELECT alias FROM model_alias UNION SELECT canonical FROM model_alias") {
+    if let Ok(mut alias_stmt) = conn.prepare("SELECT alias FROM model_alias UNION SELECT canonical FROM model_alias") {
         if let Ok(alias_rows) = alias_stmt.query_map([], |r| r.get::<_, String>(0)) {
             for name in alias_rows.flatten() {
                 aliased_models.insert(name);

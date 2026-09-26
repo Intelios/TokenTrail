@@ -219,7 +219,7 @@ mod tests {
         seed(&home);
         assert_eq!(collect(&store, &home).unwrap(), 2);
         let rows: Vec<(i64, String, String, String)> = store
-            .conn()
+            .read_conn()
             .prepare("SELECT ts, COALESCE(model,''), COALESCE(provider,''), project FROM usage_event ORDER BY ts")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(rows[1].2, "qwen-cloud");
         assert_eq!(rows[0].3, "/Users/jack/cx");
         let tokens: i64 = store
-            .conn()
+            .read_conn()
             .query_row("SELECT input_tokens + cache_read_tokens + cache_write_tokens + output_tokens FROM usage_event WHERE model = 'qwen3.8-max'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(tokens, 70 + 30 + 0 + 15);
@@ -265,7 +265,7 @@ mod tests {
         std::fs::write(&path, src).unwrap();
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let (model, provider): (Option<String>, String) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT model, COALESCE(provider,'') FROM usage_event WHERE source = 'codex'",
                 [],
@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(collect(&store, &home).unwrap(), 2);
         let snapshot = |store: &Store| -> Vec<(String, i64, Option<String>, i64)> {
             store
-                .conn()
+                .read_conn()
                 .prepare("SELECT source_event_id, ts, model, cost_usd IS NOT NULL FROM usage_event ORDER BY source_event_id")
                 .unwrap()
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
@@ -368,7 +368,7 @@ mod tests {
         // touched row counts as processed), the dropped turn is retained.
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let rows: Vec<(String, i64)> = store
-            .conn()
+            .read_conn()
             .prepare("SELECT source_event_id, input_tokens + cache_read_tokens + cache_write_tokens + output_tokens FROM usage_event ORDER BY ts")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))

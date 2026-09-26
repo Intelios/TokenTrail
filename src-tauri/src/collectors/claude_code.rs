@@ -112,7 +112,7 @@ mod tests {
         let n = collect(&store, &home).unwrap();
         assert_eq!(n, 1);
         let (input, output, cr, cw, reasoning, sub): (i64, i64, i64, i64, i64, i64) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                         COALESCE(reasoning_tokens,0), is_subagent
@@ -123,7 +123,7 @@ mod tests {
             .unwrap();
         assert_eq!((input, output, cr, cw, reasoning, sub), (10, 100, 300, 200, 42, 0));
         let model: String = store
-            .conn()
+            .read_conn()
             .query_row("SELECT model FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert_eq!(model, "claude-opus-5");

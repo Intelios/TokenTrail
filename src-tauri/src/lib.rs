@@ -65,7 +65,8 @@ pub fn run() {
 
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             app.manage(AppState {
-                store: Mutex::new(store),
+                write: Mutex::new(()),
+                store,
                 home: home.clone(),
             });
 
@@ -73,11 +74,11 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 let stats = {
                     let state = handle.state::<AppState>();
-                    let store = match state.store.lock() {
-                        Ok(s) => s,
-                        Err(_) => break,
-                    };
-                    collectors::sync_all(&store, &state.home)
+                    // Held across the whole pass so a manual refresh can't run
+                    // concurrently; UI queries read through the store's reader
+                    // pool and never queue behind it.
+                    let Ok(_sync) = state.write.lock() else { break };
+                    collectors::sync_all(&state.store, &state.home)
                 };
                 let _ = handle.emit("sync-done", &stats);
                 std::thread::sleep(SYNC_INTERVAL);

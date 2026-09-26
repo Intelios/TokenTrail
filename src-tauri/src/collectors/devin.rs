@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(collect(&store, &home).unwrap(), 1);
         type Row = (String, String, i64, i64, i64, i64, i64, Option<i64>, Option<i64>, String);
         let row: Row = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT source_event_id, COALESCE(project,''), input_tokens, output_tokens,
                         cache_read_tokens, cache_write_tokens, ts, ttft_ms, duration_ms, COALESCE(model,'')
@@ -254,7 +254,7 @@ mod tests {
         // never a second stored event.
         collect(&store, &home).unwrap();
         let n: i64 = store
-            .conn()
+            .read_conn()
             .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
@@ -310,7 +310,7 @@ mod tests {
         // one landed despite its row id being far below the old watermark.
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let count = |sql: &str| -> i64 {
-            store.conn().query_row(sql, [], |r| r.get(0)).unwrap()
+            store.read_conn().query_row(sql, [], |r| r.get(0)).unwrap()
         };
         // 2 stored events total, 1 of them from the reinstalled database.
         assert_eq!(count("SELECT COUNT(*) FROM usage_event"), 2);

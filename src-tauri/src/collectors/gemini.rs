@@ -123,7 +123,7 @@ mod tests {
         seed(&home);
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let (input, output, cr): (i64, i64, i64) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT input_tokens, output_tokens, cache_read_tokens FROM usage_event",
                 [],

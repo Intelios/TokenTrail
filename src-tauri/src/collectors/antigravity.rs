@@ -628,7 +628,7 @@ mod tests {
         let (model, input, output, reasoning, cache, provider, project, ts): (
             String, i64, i64, Option<i64>, i64, Option<String>, Option<String>, i64,
         ) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT model, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,
                         provider, project, ts FROM usage_event WHERE source_event_id LIKE '%:0'",
@@ -668,7 +668,7 @@ mod tests {
         .unwrap();
         drop(conn);
         assert_eq!(collect(&store, &home).unwrap(), 1);
-        assert_eq!(store.conn().query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(store.read_conn().query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get::<_, i64>(0)).unwrap(), 3);
     }
 
     #[test]
@@ -679,7 +679,7 @@ mod tests {
         assert_eq!(collect(&store, &home).unwrap(), 3);
 
         let (ts, dur, model, out, cache): (i64, Option<i64>, String, i64, i64) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT ts, duration_ms, model, output_tokens, cache_read_tokens
                  FROM usage_event WHERE source_event_id LIKE '%:0'",
@@ -695,7 +695,7 @@ mod tests {
 
         // step without an end timestamp: ts resolves, duration stays empty
         let (ts, dur, cache): (i64, Option<i64>, i64) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT ts, duration_ms, cache_read_tokens FROM usage_event WHERE source_event_id LIKE '%:1'",
                 [],
@@ -708,7 +708,7 @@ mod tests {
 
         // request id with no matching step falls back to the file's mtime
         let ts: i64 = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT ts FROM usage_event WHERE source_event_id LIKE '%:2'",
                 [],
@@ -775,14 +775,14 @@ mod tests {
         let store = test_store("antigravity_real");
         let n = collect(&store, Path::new(&home)).unwrap();
         let count: i64 = store
-            .conn()
+            .read_conn()
             .query_row("SELECT COUNT(*) FROM usage_event WHERE source='antigravity'", [], |r| r.get(0))
             .unwrap();
         assert!(n > 0, "expected events from real data, got {n}");
         assert_eq!(n as i64, count, "first run should insert everything once");
         assert_eq!(collect(&store, Path::new(&home)).unwrap(), 0, "second run must be a no-op");
         let (sum_in, sum_out): (i64, i64) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT SUM(input_tokens), SUM(output_tokens) FROM usage_event WHERE source='antigravity'",
                 [],

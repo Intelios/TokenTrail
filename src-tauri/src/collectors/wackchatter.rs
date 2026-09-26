@@ -368,7 +368,7 @@ mod tests {
             i64,
             i64,
         ) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT source_event_id, input_tokens, output_tokens, cache_read_tokens,
                         COALESCE(reasoning_tokens,0), COALESCE(ttft_ms,0), estimated
@@ -381,7 +381,7 @@ mod tests {
 
         // The OpenRouter vendor prefix is stripped so pricing and families can match.
         let (model, project, session): (String, String, String) = store
-            .conn()
+            .read_conn()
             .query_row("SELECT model, project, session_id FROM usage_event", [], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })
@@ -409,7 +409,7 @@ mod tests {
 
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let ids: Vec<String> = store
-            .conn()
+            .read_conn()
             .prepare("SELECT source_event_id FROM usage_event")
             .unwrap()
             .query_map([], |r| r.get(0))
@@ -522,7 +522,7 @@ mod tests {
         let (id, session, project, model, provider, input, output, dur, est): (
             String, String, String, String, String, i64, i64, i64, i64,
         ) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT source_event_id, session_id, project, model, provider,
                         input_tokens, output_tokens, COALESCE(duration_ms,0), estimated
@@ -552,7 +552,7 @@ mod tests {
 
         assert_eq!(collect(&store, &home).unwrap(), 2); // one insert, one upsert
         let rows: i64 =
-            store.conn().query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0)).unwrap();
+            store.read_conn().query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0)).unwrap();
         assert_eq!(rows, 1);
     }
 
@@ -566,7 +566,7 @@ mod tests {
 
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let (id, input, output, est, cost): (String, i64, i64, i64, Option<f64>) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT source_event_id, input_tokens, output_tokens, estimated, cost_usd
                  FROM usage_event",
@@ -599,7 +599,7 @@ mod tests {
         // One row per generation, across all four features, with the model strings
         // normalised for pricing and the background run marked as such.
         let mut rows: Vec<(String, String, i64, i64, i64, i64)> = store
-            .conn()
+            .read_conn()
             .prepare(
                 "SELECT source_event_id, COALESCE(model,''), input_tokens, output_tokens,
                         estimated, is_subagent
@@ -631,7 +631,7 @@ mod tests {
         // finetune it has never heard of gets no cost rather than a zero one, and still
         // contributes its tokens. This is what "tokens now, pricing later" looks like.
         let unpriced: Vec<String> = store
-            .conn()
+            .read_conn()
             .prepare("SELECT model FROM usage_event WHERE cost_usd IS NULL")
             .unwrap()
             .query_map([], |r| r.get(0))
@@ -715,7 +715,7 @@ mod tests {
 
     fn sessions(store: &Store) -> Vec<String> {
         store
-            .conn()
+            .read_conn()
             .prepare("SELECT DISTINCT session_id FROM usage_event ORDER BY session_id")
             .unwrap()
             .query_map([], |r| r.get(0))

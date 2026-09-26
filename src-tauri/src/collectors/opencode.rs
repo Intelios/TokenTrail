@@ -153,7 +153,7 @@ mod tests {
         seed(&home);
         assert_eq!(collect(&store, &home).unwrap(), 1);
         let (input, cr, cw, ts, model): (i64, i64, i64, i64, String) = store
-            .conn()
+            .read_conn()
             .query_row(
                 "SELECT input_tokens, cache_read_tokens, cache_write_tokens, ts, model FROM usage_event",
                 [],

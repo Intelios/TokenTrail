@@ -10,14 +10,13 @@ use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub fn sync_now(state: State<AppState>) -> Result<Vec<IngestStats>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    Ok(collectors::sync_all(&store, &state.home))
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    Ok(collectors::sync_all(&state.store, &state.home))
 }
 
 #[tauri::command]
 pub fn get_overview(state: State<AppState>) -> Result<Overview, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::overview(&store).map_err(|e| e.to_string())
+    aggregate::overview(&state.store).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -25,44 +24,37 @@ pub fn get_leaderboard_events(
     state: State<AppState>,
     days: i64,
 ) -> Result<Vec<LeaderboardEvent>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::leaderboard_events(&store, days).map_err(|e| e.to_string())
+    aggregate::leaderboard_events(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_daily(state: State<AppState>, days: i64) -> Result<Vec<DailyRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::daily(&store, days).map_err(|e| e.to_string())
+    aggregate::daily(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_daily_by_model(state: State<AppState>, days: i64) -> Result<Vec<DailyModelRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::daily_by_model(&store, days).map_err(|e| e.to_string())
+    aggregate::daily_by_model(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_daily_cache(state: State<AppState>, days: i64) -> Result<Vec<DailyCacheRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::daily_cache(&store, days).map_err(|e| e.to_string())
+    aggregate::daily_cache(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_by_model(state: State<AppState>, days: i64) -> Result<Vec<ModelRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::by_model(&store, days).map_err(|e| e.to_string())
+    aggregate::by_model(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_active_days(state: State<AppState>, days: i64) -> Result<i64, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::active_days_for_range(&store, days).map_err(|e| e.to_string())
+    aggregate::active_days_for_range(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_model_stats(state: State<AppState>, days: i64) -> Result<Vec<ModelStatsRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::model_stats(&store, days).map_err(|e| e.to_string())
+    aggregate::model_stats(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -71,8 +63,7 @@ pub fn get_model_detail(
     model: String,
     days: i64,
 ) -> Result<Option<ModelDetail>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::model_detail(&store, &model, days).map_err(|e| e.to_string())
+    aggregate::model_detail(&state.store, &model, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -80,8 +71,7 @@ pub fn get_model_achievements(
     state: State<AppState>,
     model: String,
 ) -> Result<Vec<Achievement>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::model_achievements(&store, &model).map_err(|e| e.to_string())
+    aggregate::model_achievements(&state.store, &model).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -89,14 +79,12 @@ pub fn get_daily_by_project(
     state: State<AppState>,
     days: i64,
 ) -> Result<Vec<DailyProjectRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::daily_by_project(&store, days).map_err(|e| e.to_string())
+    aggregate::daily_by_project(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_by_project(state: State<AppState>, days: i64) -> Result<Vec<ProjectRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::by_project(&store, days).map_err(|e| e.to_string())
+    aggregate::by_project(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -105,20 +93,17 @@ pub fn get_project_detail(
     project: String,
     days: i64,
 ) -> Result<Option<ProjectDetail>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::project_detail(&store, &project, days).map_err(|e| e.to_string())
+    aggregate::project_detail(&state.store, &project, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_heatmap(state: State<AppState>, days: i64) -> Result<Vec<HeatmapCell>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::heatmap(&store, days).map_err(|e| e.to_string())
+    aggregate::heatmap(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_hourly(state: State<AppState>) -> Result<Vec<HourRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::hourly(&store).map_err(|e| e.to_string())
+    aggregate::hourly(&state.store).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -128,26 +113,17 @@ pub fn get_source_status(state: State<AppState>) -> Vec<SourceStatus> {
 
 #[tauri::command]
 pub fn get_estimated_share(state: State<AppState>) -> Result<Vec<EstimatedShare>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::estimated_share(&store).map_err(|e| e.to_string())
+    aggregate::estimated_share(&state.store).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_raw_models(state: State<AppState>) -> Vec<String> {
-    state
-        .store
-        .lock()
-        .map(|store| store.get_raw_models().unwrap_or_default())
-        .unwrap_or_default()
+    state.store.get_raw_models().unwrap_or_default()
 }
 
 #[tauri::command]
 pub fn get_model_aliases(state: State<AppState>) -> Vec<ModelAlias> {
-    state
-        .store
-        .lock()
-        .map(|store| store.get_model_aliases().unwrap_or_default())
-        .unwrap_or_default()
+    state.store.get_model_aliases().unwrap_or_default()
 }
 
 #[tauri::command]
@@ -158,14 +134,15 @@ pub fn merge_models(state: State<AppState>, names: Vec<String>, canonical: Strin
         .filter(|n| !n.is_empty())
         .collect();
     let canonical = canonical.trim().to_string();
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store.merge_models(&names, &canonical).map(|_| ())
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.merge_models(&names, &canonical).map(|_| ())
 }
 
 #[tauri::command]
 pub fn unmerge_models(state: State<AppState>, canonical: String) -> Result<(), String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state
+        .store
         .remove_aliases_for(&canonical)
         .map(|_| ())
         .map_err(|e| format!("unmerge models: {e}"))
@@ -173,8 +150,9 @@ pub fn unmerge_models(state: State<AppState>, canonical: String) -> Result<(), S
 
 #[tauri::command]
 pub fn remove_model_alias(state: State<AppState>, alias: String) -> Result<(), String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state
+        .store
         .remove_model_alias(&alias)
         .map(|_| ())
         .map_err(|e| format!("remove model alias: {e}"))
@@ -186,17 +164,13 @@ pub fn rename_model(
     current_name: String,
     new_name: String,
 ) -> Result<(), String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store.rename_model(&current_name, &new_name)
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.rename_model(&current_name, &new_name)
 }
 
 #[tauri::command]
 pub fn get_hidden_models(state: State<AppState>) -> Vec<String> {
-    state
-        .store
-        .lock()
-        .map(|store| store.get_hidden_models().unwrap_or_default())
-        .unwrap_or_default()
+    state.store.get_hidden_models().unwrap_or_default()
 }
 
 #[tauri::command]
@@ -206,14 +180,15 @@ pub fn hide_models(state: State<AppState>, names: Vec<String>) -> Result<(), Str
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store.hide_models(&names).map(|_| ())
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.hide_models(&names).map(|_| ())
 }
 
 #[tauri::command]
 pub fn unhide_model(state: State<AppState>, name: String) -> Result<(), String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state
+        .store
         .unhide_model(&name)
         .map(|_| ())
         .map_err(|e| format!("unhide model: {e}"))
@@ -221,11 +196,7 @@ pub fn unhide_model(state: State<AppState>, name: String) -> Result<(), String> 
 
 #[tauri::command]
 pub fn get_project_colors(state: State<AppState>) -> Vec<ProjectColor> {
-    state
-        .store
-        .lock()
-        .map(|store| store.get_project_colors().unwrap_or_default())
-        .unwrap_or_default()
+    state.store.get_project_colors().unwrap_or_default()
 }
 
 /// `color: None` clears the project's color and returns it to the auto palette.
@@ -235,10 +206,11 @@ pub fn set_project_color(
     project: String,
     color: Option<String>,
 ) -> Result<(), String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
     match color {
-        Some(c) => store.set_project_color(&project, &c),
-        None => store
+        Some(c) => state.store.set_project_color(&project, &c),
+        None => state
+            .store
             .clear_project_color(&project)
             .map(|_| ())
             .map_err(|e| format!("clear project color: {e}")),
@@ -247,11 +219,7 @@ pub fn set_project_color(
 
 #[tauri::command]
 pub fn get_project_aliases(state: State<AppState>) -> Vec<ProjectAlias> {
-    state
-        .store
-        .lock()
-        .map(|store| store.get_project_aliases().unwrap_or_default())
-        .unwrap_or_default()
+    state.store.get_project_aliases().unwrap_or_default()
 }
 
 #[tauri::command]
@@ -262,8 +230,8 @@ pub fn merge_projects(state: State<AppState>, names: Vec<String>, canonical: Str
         .filter(|n| !n.is_empty())
         .collect();
     let canonical = canonical.trim().to_string();
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store.merge_projects(&names, &canonical).map(|_| ())
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.merge_projects(&names, &canonical).map(|_| ())
 }
 
 /// Folders kept as their own projects, overriding automatic root-folding.
@@ -274,8 +242,8 @@ pub fn unmerge_projects(state: State<AppState>, names: Vec<String>) -> Result<()
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store.unmerge_projects(&names).map(|_| ())
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.unmerge_projects(&names).map(|_| ())
 }
 
 /// Folders handed back to automatic root-folding.
@@ -286,8 +254,8 @@ pub fn regroup_projects(state: State<AppState>, names: Vec<String>) -> Result<()
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    store.regroup_projects(&names).map(|_| ())
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.regroup_projects(&names).map(|_| ())
 }
 
 #[tauri::command]
@@ -308,10 +276,13 @@ pub fn export_data(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    // Held so no sync or mutation can land mid-export: the file then shows one
+    // consistent view. Reads elsewhere are unaffected — they use their own
+    // connections.
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    let conn = state.store.read_conn();
 
-    let mut stmt = store
-        .conn()
+    let mut stmt = conn
         .prepare(
             "SELECT source, ts, session_id, project, model, input_tokens, output_tokens,
                     reasoning_tokens, cache_read_tokens, cache_write_tokens, duration_ms, ttft_ms,
@@ -342,6 +313,7 @@ pub fn export_data(
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
+    drop(stmt);
 
     let path = match format.as_str() {
         "json" => dir.join(format!("tokentrail-{stamp}.json")),
@@ -401,14 +373,12 @@ pub fn export_data(
 
 #[tauri::command]
 pub fn get_family_stats(state: State<AppState>, days: i64) -> Result<Vec<FamilyStatsRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::family_stats(&store, days).map_err(|e| e.to_string())
+    aggregate::family_stats(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_peak_days(state: State<AppState>, days: i64) -> Result<Vec<PeakDayRow>, String> {
-    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
-    aggregate::peak_days(&store, days).map_err(|e| e.to_string())
+    aggregate::peak_days(&state.store, days).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

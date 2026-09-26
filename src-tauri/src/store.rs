@@ -1,14 +1,31 @@
 use rusqlite::{params, Connection, OpenFlags};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 use crate::models::{ModelAlias, ProjectAlias, ProjectColor, Source, UsageEvent};
 use crate::pricing;
 
+/// How long a connection waits for a locked database before giving up. With
+/// readers and writer on separate WAL connections the remaining contention is
+/// a checkpoint racing a query, which passes quickly.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Read connections kept alive between queries; beyond this they are opened
+/// per call and dropped when their guard goes out of scope.
+const MAX_POOLED_READERS: usize = 4;
+
 /// TokenTrail's own long-term store. Append-mostly: rows are keyed by
 /// (source, source_event_id) so re-ingesting harness data is always safe,
 /// and upserts let late-finalized token counts (e.g. ZCode) land correctly.
+///
+/// One writer connection plus a small pool of readers. The database is in
+/// WAL mode, so a query never queues behind a sync's write batches — the
+/// background sync can commit while UI reads run right past it.
 pub struct Store {
-    conn: Connection,
+    writer: Mutex<Connection>,
+    path: PathBuf,
+    readers: Mutex<Vec<Connection>>,
 }
 
 const SCHEMA: &str = r#"
@@ -68,6 +85,8 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
         // CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a column added
         // after a release has to be added here too. Errors are ignored on purpose: the
@@ -76,50 +95,86 @@ impl Store {
             "ALTER TABLE usage_event ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0",
             [],
         );
-        Ok(Self { conn })
+        Ok(Self {
+            writer: Mutex::new(conn),
+            path: path.to_path_buf(),
+            readers: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The single write connection, for ingest state and all mutations. Poison
+    /// is recovered from rather than propagated: a panicking thread must not
+    /// turn the app's storage into a brick.
+    fn writer(&self) -> MutexGuard<'_, Connection> {
+        self.writer.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A connection to run read-only queries against: a pooled reader when the
+    /// store is file-backed, the writer connection itself for in-memory stores
+    /// (a second connection to `:memory:` would be a different, empty database).
+    pub fn read_conn(&self) -> ReadConn<'_> {
+        if self.path == Path::new(":memory:") {
+            return ReadConn::Writer(self.writer());
+        }
+        let pooled = self.readers.lock().unwrap_or_else(|p| p.into_inner()).pop();
+        match pooled {
+            Some(conn) => ReadConn::Pooled(PooledRead { conn: Some(conn), pool: &self.readers }),
+            None => match open_reader(&self.path) {
+                Ok(conn) => ReadConn::Pooled(PooledRead { conn: Some(conn), pool: &self.readers }),
+                // Unreachable in practice (Store::open created the file), but a
+                // query should degrade to the writer rather than fail outright.
+                Err(_) => ReadConn::Writer(self.writer()),
+            },
+        }
     }
 
     pub fn insert_events(&self, events: &[UsageEvent]) -> rusqlite::Result<usize> {
         if events.is_empty() {
             return Ok(0);
         }
-        let mut stmt = self.conn.prepare_cached(
-            "INSERT INTO usage_event (source, source_event_id, ts, session_id, project, provider, model,
-                input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens,
-                duration_ms, ttft_ms, is_subagent, cost_usd, estimated)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
-             ON CONFLICT(source, source_event_id) DO UPDATE SET
-                ts=excluded.ts, session_id=excluded.session_id, project=excluded.project,
-                provider=excluded.provider, model=excluded.model,
-                input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
-                reasoning_tokens=excluded.reasoning_tokens,
-                cache_read_tokens=excluded.cache_read_tokens, cache_write_tokens=excluded.cache_write_tokens,
-                duration_ms=excluded.duration_ms, ttft_ms=excluded.ttft_ms,
-                is_subagent=excluded.is_subagent, cost_usd=excluded.cost_usd,
-                estimated=excluded.estimated",
-        )?;
+        // One transaction per batch. Each row used to commit on its own, so a
+        // large sync spent most of its time in per-row WAL commits.
+        let conn = self.writer();
+        let tx = conn.unchecked_transaction()?;
         let mut n = 0;
-        for e in events {
-            let cost = pricing::cost_usd(e.model.as_deref(), e);
-            n += stmt.execute(params![
-                e.source.as_str(),
-                e.source_event_id,
-                e.ts,
-                e.session_id,
-                e.project,
-                e.provider,
-                e.model,
-                e.input_tokens,
-                e.output_tokens,
-                e.reasoning_tokens,
-                e.cache_read_tokens,
-                e.cache_write_tokens,
-                e.duration_ms,
-                e.ttft_ms,
-                e.is_subagent as i64,
-                cost,
-                e.estimated as i64,
-            ])?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO usage_event (source, source_event_id, ts, session_id, project, provider, model,
+                    input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens,
+                    duration_ms, ttft_ms, is_subagent, cost_usd, estimated)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+                 ON CONFLICT(source, source_event_id) DO UPDATE SET
+                    ts=excluded.ts, session_id=excluded.session_id, project=excluded.project,
+                    provider=excluded.provider, model=excluded.model,
+                    input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+                    reasoning_tokens=excluded.reasoning_tokens,
+                    cache_read_tokens=excluded.cache_read_tokens, cache_write_tokens=excluded.cache_write_tokens,
+                    duration_ms=excluded.duration_ms, ttft_ms=excluded.ttft_ms,
+                    is_subagent=excluded.is_subagent, cost_usd=excluded.cost_usd,
+                    estimated=excluded.estimated",
+            )?;
+            for e in events {
+                let cost = pricing::cost_usd(e.model.as_deref(), e);
+                n += stmt.execute(params![
+                    e.source.as_str(),
+                    e.source_event_id,
+                    e.ts,
+                    e.session_id,
+                    e.project,
+                    e.provider,
+                    e.model,
+                    e.input_tokens,
+                    e.output_tokens,
+                    e.reasoning_tokens,
+                    e.cache_read_tokens,
+                    e.cache_write_tokens,
+                    e.duration_ms,
+                    e.ttft_ms,
+                    e.is_subagent as i64,
+                    cost,
+                    e.estimated as i64,
+                ])?;
+            }
         }
         // Fold freshly seen folders into their project right away: a subdirectory
         // recorded mid-sync must never render as its own project.
@@ -132,8 +187,9 @@ impl Store {
             }
         }
         for p in &projects {
-            self.alias_project(p)?;
+            fold_project_alias(&tx, p)?;
         }
+        tx.commit()?;
         Ok(n)
     }
 
@@ -141,10 +197,11 @@ impl Store {
     /// pricing table. Called on startup when the embedded pricing fingerprint
     /// changes so history reflects updated list prices.
     pub fn reprice_all(&self) -> rusqlite::Result<usize> {
+        let conn = self.writer();
         // (id, source, model, input, output, reasoning, cache_read, cache_write)
         type Row = (i64, String, Option<String>, i64, i64, Option<i64>, i64, i64);
         let rows: Vec<Row> = {
-            let mut stmt = self.conn.prepare_cached(
+            let mut stmt = conn.prepare_cached(
                 "SELECT id, source, model, input_tokens, output_tokens, reasoning_tokens,
                         cache_read_tokens, cache_write_tokens FROM usage_event",
             )?;
@@ -162,7 +219,7 @@ impl Store {
             })?;
             q.collect::<Result<Vec<_>, _>>()?
         };
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = conn.unchecked_transaction()?;
         let mut n = 0usize;
         for (id, source_s, model, input, output, reasoning, cr, cw) in rows {
             // Unknown sources behave like ZCode: no reasoning-token surcharge.
@@ -179,18 +236,19 @@ impl Store {
     }
 
     pub fn get_offset(&self, source: &str, path: &str) -> Option<u64> {
-        self.conn
-            .query_row(
-                "SELECT offset FROM ingest_state WHERE source=?1 AND path=?2",
-                params![source, path],
-                |r| r.get::<_, i64>(0),
-            )
-            .ok()
-            .map(|v| v as u64)
+        let conn = self.writer();
+        conn.query_row(
+            "SELECT offset FROM ingest_state WHERE source=?1 AND path=?2",
+            params![source, path],
+            |r| r.get::<_, i64>(0),
+        )
+        .ok()
+        .map(|v| v as u64)
     }
 
     pub fn set_offset(&self, source: &str, path: &str, offset: u64) {
-        let _ = self.conn.execute(
+        let conn = self.writer();
+        let _ = conn.execute(
             "INSERT INTO ingest_state(source,path,offset,updated_at) VALUES(?1,?2,?3,strftime('%s','now'))
              ON CONFLICT(source,path) DO UPDATE SET offset=excluded.offset, updated_at=excluded.updated_at",
             params![source, path, offset as i64],
@@ -207,7 +265,8 @@ impl Store {
     /// an external drive comes back, and a library on it should still be there when it
     /// does. The cost of keeping a genuinely dead entry is one `exists()` per sync.
     pub fn remember_path(&self, source: &str, path: &str) {
-        let _ = self.conn.execute(
+        let conn = self.writer();
+        let _ = conn.execute(
             "INSERT OR IGNORE INTO ingest_state(source,path,updated_at)
              VALUES(?1,?2,strftime('%s','now'))",
             params![source, path],
@@ -215,9 +274,9 @@ impl Store {
     }
 
     pub fn known_paths(&self, source: &str) -> Vec<String> {
-        let Ok(mut stmt) = self
-            .conn
-            .prepare("SELECT path FROM ingest_state WHERE source=?1 AND path<>'' ORDER BY path")
+        let conn = self.writer();
+        let Ok(mut stmt) =
+            conn.prepare("SELECT path FROM ingest_state WHERE source=?1 AND path<>'' ORDER BY path")
         else {
             return Vec::new();
         };
@@ -227,17 +286,18 @@ impl Store {
     }
 
     pub fn get_watermark(&self, key: &str) -> i64 {
-        self.conn
-            .query_row(
-                "SELECT watermark FROM ingest_state WHERE source=?1 AND path=''",
-                params![key],
-                |r| r.get(0),
-            )
-            .unwrap_or(0)
+        let conn = self.writer();
+        conn.query_row(
+            "SELECT watermark FROM ingest_state WHERE source=?1 AND path=''",
+            params![key],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
     }
 
     pub fn set_watermark(&self, key: &str, watermark: i64) {
-        let _ = self.conn.execute(
+        let conn = self.writer();
+        let _ = conn.execute(
             "INSERT INTO ingest_state(source,path,watermark,updated_at) VALUES(?1,'',?2,strftime('%s','now'))
              ON CONFLICT(source,path) DO UPDATE SET watermark=excluded.watermark, updated_at=excluded.updated_at",
             params![key, watermark],
@@ -250,26 +310,27 @@ impl Store {
     /// watermarks, and re-ingesting is safe because events upsert on
     /// (source, source_event_id).
     pub fn clear_watermarks(&self, pattern: &str) {
-        let _ = self.conn.execute(
+        let conn = self.writer();
+        let _ = conn.execute(
             "DELETE FROM ingest_state WHERE source LIKE ?1",
             params![pattern],
         );
     }
 
     pub fn latest_session_model(&self, source: &str, session_id: &str) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT model FROM usage_event WHERE source=?1 AND session_id=?2 AND model IS NOT NULL
-                 ORDER BY ts DESC LIMIT 1",
-                params![source, session_id],
-                |r| r.get(0),
-            )
-            .ok()
+        let conn = self.writer();
+        conn.query_row(
+            "SELECT model FROM usage_event WHERE source=?1 AND session_id=?2 AND model IS NOT NULL
+             ORDER BY ts DESC LIMIT 1",
+            params![source, session_id],
+            |r| r.get(0),
+        )
+        .ok()
     }
 
     pub fn get_raw_models(&self) -> rusqlite::Result<Vec<String>> {
-        let mut stmt = self
-            .conn
+        let conn = self.read_conn();
+        let mut stmt = conn
             .prepare_cached("SELECT DISTINCT model FROM usage_event WHERE model IS NOT NULL AND model <> '' ORDER BY model")?;
         let rows = stmt
             .query_map([], |r| r.get(0))?
@@ -278,9 +339,9 @@ impl Store {
     }
 
     pub fn get_model_aliases(&self) -> rusqlite::Result<Vec<ModelAlias>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT alias, canonical FROM model_alias ORDER BY canonical, alias")?;
+        let conn = self.read_conn();
+        let mut stmt =
+            conn.prepare_cached("SELECT alias, canonical FROM model_alias ORDER BY canonical, alias")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(ModelAlias {
@@ -302,8 +363,8 @@ impl Store {
         if !names.iter().any(|n| n == canonical) {
             return Err("canonical name must be one of the merged names".to_string());
         }
-        let tx = self
-            .conn
+        let conn = self.writer();
+        let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("begin merge transaction: {e}"))?;
         // A canonical that was previously an alias must not keep its own row.
@@ -335,13 +396,13 @@ impl Store {
     }
 
     pub fn remove_model_alias(&self, alias: &str) -> rusqlite::Result<usize> {
-        self.conn
-            .execute("DELETE FROM model_alias WHERE alias = ?1", params![alias])
+        let conn = self.writer();
+        conn.execute("DELETE FROM model_alias WHERE alias = ?1", params![alias])
     }
 
     pub fn remove_aliases_for(&self, canonical: &str) -> rusqlite::Result<usize> {
-        self.conn
-            .execute("DELETE FROM model_alias WHERE canonical = ?1", params![canonical])
+        let conn = self.writer();
+        conn.execute("DELETE FROM model_alias WHERE canonical = ?1", params![canonical])
     }
 
     /// Rename a model display name: sets `current_name` to display as `new_name`.
@@ -357,8 +418,8 @@ impl Store {
         if target.is_empty() {
             return Err("new model name cannot be empty".to_string());
         }
-        let tx = self
-            .conn
+        let conn = self.writer();
+        let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("begin rename transaction: {e}"))?;
 
@@ -392,9 +453,8 @@ impl Store {
     }
 
     pub fn get_hidden_models(&self) -> rusqlite::Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT name FROM hidden_model ORDER BY name")?;
+        let conn = self.read_conn();
+        let mut stmt = conn.prepare_cached("SELECT name FROM hidden_model ORDER BY name")?;
         let rows = stmt
             .query_map([], |r| r.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -404,8 +464,8 @@ impl Store {
     /// Record `names` as hidden so they are excluded from every aggregate.
     /// Idempotent; existing entries are left untouched.
     pub fn hide_models(&self, names: &[String]) -> Result<usize, String> {
-        let tx = self
-            .conn
+        let conn = self.writer();
+        let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("begin hide transaction: {e}"))?;
         let mut n = 0usize;
@@ -426,14 +486,13 @@ impl Store {
     }
 
     pub fn unhide_model(&self, name: &str) -> rusqlite::Result<usize> {
-        self.conn
-            .execute("DELETE FROM hidden_model WHERE name = ?1", params![name])
+        let conn = self.writer();
+        conn.execute("DELETE FROM hidden_model WHERE name = ?1", params![name])
     }
 
     pub fn get_project_colors(&self) -> rusqlite::Result<Vec<ProjectColor>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT project, color FROM project_color ORDER BY project")?;
+        let conn = self.read_conn();
+        let mut stmt = conn.prepare_cached("SELECT project, color FROM project_color ORDER BY project")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(ProjectColor {
@@ -454,54 +513,34 @@ impl Store {
             return Err(format!("cannot color project {project:?}"));
         }
         let color = normalize_hex(color).ok_or_else(|| format!("invalid color {color:?}"))?;
-        self.conn
-            .execute(
-                "INSERT INTO project_color(project, color) VALUES(?1, ?2)
-                 ON CONFLICT(project) DO UPDATE SET color = excluded.color",
-                params![project, color],
-            )
-            .map(|_| ())
-            .map_err(|e| format!("set project color: {e}"))
+        let conn = self.writer();
+        conn.execute(
+            "INSERT INTO project_color(project, color) VALUES(?1, ?2)
+             ON CONFLICT(project) DO UPDATE SET color = excluded.color",
+            params![project, color],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("set project color: {e}"))
     }
 
     pub fn clear_project_color(&self, project: &str) -> rusqlite::Result<usize> {
-        self.conn
-            .execute("DELETE FROM project_color WHERE project = ?1", params![project.trim()])
+        let conn = self.writer();
+        conn.execute("DELETE FROM project_color WHERE project = ?1", params![project.trim()])
     }
 
     /// The project a recorded folder counts under: its mapped target if one exists,
     /// else the folder itself. Flat by construction — writers never map a folder
     /// onto another mapped folder, so one join is always enough.
     pub fn project_canonical(&self, name: &str) -> String {
-        self.conn
-            .query_row(
-                "SELECT canonical FROM project_alias WHERE alias = ?1",
-                params![name],
-                |r| r.get::<_, String>(0),
-            )
-            .unwrap_or_else(|_| name.to_string())
-    }
-
-    /// Fold `folder` into its project root, unless a mapping already exists —
-    /// a decision once recorded (by hand or by an earlier pass) is never recomputed,
-    /// so history stays grouped the way it was seen and repos that moved stay whole.
-    fn alias_project(&self, folder: &str) -> rusqlite::Result<usize> {
-        let root = resolve_project_root(folder);
-        if root == folder {
-            return Ok(0);
-        }
-        // Follow the root's own mapping so the table can never form a chain.
-        let canonical = self.project_canonical(&root);
-        self.conn.execute(
-            "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?2) ON CONFLICT(alias) DO NOTHING",
-            params![folder, canonical],
-        )
+        let conn = self.read_conn();
+        project_canonical(&conn, name)
     }
 
     /// Map every recorded folder to its project root. Idempotent and sticky.
     pub fn ensure_project_aliases(&self) -> rusqlite::Result<usize> {
+        let conn = self.writer();
         let projects: Vec<String> = {
-            let mut stmt = self.conn.prepare_cached(
+            let mut stmt = conn.prepare_cached(
                 "SELECT DISTINCT project FROM usage_event WHERE project IS NOT NULL AND project != ''",
             )?;
             let rows = stmt.query_map([], |r| r.get(0))?;
@@ -509,28 +548,16 @@ impl Store {
         };
         let mut n = 0;
         for p in &projects {
-            n += self.alias_project(p)?;
+            n += fold_project_alias(&conn, p)?;
         }
-        self.remap_project_colors()?;
+        remap_project_colors(&conn)?;
         Ok(n)
     }
 
-    /// Re-key pinned colors through the mapping table, so a color pinned on a folder
-    /// follows it into the project it counts under. `OR IGNORE` keeps one pin when
-    /// two pinned folders land on the same project.
-    fn remap_project_colors(&self) -> rusqlite::Result<usize> {
-        self.conn.execute(
-            "UPDATE OR IGNORE project_color
-             SET project = (SELECT canonical FROM project_alias WHERE alias = project_color.project)
-             WHERE project IN (SELECT alias FROM project_alias)",
-            [],
-        )
-    }
-
     pub fn get_project_aliases(&self) -> rusqlite::Result<Vec<ProjectAlias>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT alias, canonical FROM project_alias ORDER BY canonical, alias")?;
+        let conn = self.read_conn();
+        let mut stmt =
+            conn.prepare_cached("SELECT alias, canonical FROM project_alias ORDER BY canonical, alias")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(ProjectAlias {
@@ -558,8 +585,8 @@ impl Store {
         if names.iter().any(|n| n.is_empty() || n == "unknown") {
             return Err("the 'unknown' bucket cannot be merged".to_string());
         }
-        let tx = self
-            .conn
+        let conn = self.writer();
+        let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("begin merge transaction: {e}"))?;
         // A canonical kept separate from its own root must not keep that row.
@@ -586,9 +613,10 @@ impl Store {
                 )
                 .map_err(|e| format!("set mapping: {e}"))?;
         }
+        // Re-key pinned colors inside the transaction so a merge either moves
+        // folders and their colors together or not at all.
+        remap_project_colors(&tx).map_err(|e| format!("remap project colors: {e}"))?;
         tx.commit().map_err(|e| format!("commit merge: {e}"))?;
-        self.remap_project_colors()
-            .map_err(|e| format!("remap project colors: {e}"))?;
         Ok(n)
     }
 
@@ -596,14 +624,14 @@ impl Store {
     /// maps the folder to itself on purpose: a plain delete would hand it straight
     /// back to automatic root-folding on the next pass.
     pub fn unmerge_projects(&self, names: &[String]) -> Result<usize, String> {
+        let conn = self.writer();
         let mut n = 0usize;
         let mut seen = std::collections::HashSet::new();
         for name in names.iter().filter(|n| !n.is_empty() && **n != "unknown") {
             if !seen.insert(name.clone()) {
                 continue;
             }
-            n += self
-                .conn
+            n += conn
                 .execute(
                     "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?1)
                      ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
@@ -617,25 +645,60 @@ impl Store {
     /// Hand each folder back to automatic root-folding: drop the recorded decision
     /// and resolve it again from the filesystem.
     pub fn regroup_projects(&self, names: &[String]) -> Result<usize, String> {
+        let conn = self.writer();
         let mut n = 0usize;
         let mut seen = std::collections::HashSet::new();
         for name in names.iter().filter(|n| !n.is_empty() && **n != "unknown") {
             if !seen.insert(name.clone()) {
                 continue;
             }
-            self.conn
-                .execute("DELETE FROM project_alias WHERE alias = ?1", params![name])
+            conn.execute("DELETE FROM project_alias WHERE alias = ?1", params![name])
                 .map_err(|e| format!("clear project mapping: {e}"))?;
-            n += self
-                .alias_project(name)
+            n += fold_project_alias(&conn, name)
                 .map_err(|e| format!("resolve project root: {e}"))?;
         }
         Ok(n)
     }
+}
 
-    pub fn conn(&self) -> &Connection {
-        &self.conn
+/// The project a recorded folder counts under: its mapped target if one exists,
+/// else the folder itself.
+fn project_canonical(conn: &Connection, name: &str) -> String {
+    conn.query_row(
+        "SELECT canonical FROM project_alias WHERE alias = ?1",
+        params![name],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap_or_else(|_| name.to_string())
+}
+
+/// Fold `folder` into its project root, unless a mapping already exists —
+/// a decision once recorded (by hand or by an earlier pass) is never recomputed,
+/// so history stays grouped the way it was seen and repos that moved stay whole.
+/// Runs on the caller's connection so ingest can fold inside its own transaction.
+fn fold_project_alias(conn: &Connection, folder: &str) -> rusqlite::Result<usize> {
+    let root = resolve_project_root(folder);
+    if root == folder {
+        return Ok(0);
     }
+    // Follow the root's own mapping so the table can never form a chain.
+    let canonical = project_canonical(conn, &root);
+    conn.execute(
+        "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?2) ON CONFLICT(alias) DO NOTHING",
+        params![folder, canonical],
+    )
+}
+
+/// Re-key pinned colors through the mapping table, so a color pinned on a folder
+/// follows it into the project it counts under. `OR IGNORE` keeps one pin when
+/// two pinned folders land on the same project.
+fn remap_project_colors(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE OR IGNORE project_color
+         SET project = (SELECT canonical FROM project_alias WHERE alias = project_color.project)
+         WHERE project IN (SELECT alias FROM project_alias)",
+        [],
+    )
 }
 
 /// `#RRGGBB` → `#rrggbb`; anything else (short hex, names, rgba) → None.
@@ -670,6 +733,64 @@ pub fn resolve_project_root(path: &str) -> String {
             None => return path.to_string(),
         }
     }
+}
+
+/// A checked-out read connection, returned to the pool on drop.
+pub struct PooledRead<'a> {
+    conn: Option<Connection>,
+    pool: &'a Mutex<Vec<Connection>>,
+}
+
+impl Drop for PooledRead<'_> {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            let mut pool = self.pool.lock().unwrap_or_else(|p| p.into_inner());
+            if pool.len() < MAX_POOLED_READERS {
+                pool.push(conn);
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for PooledRead<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.conn.as_ref().expect("connection present until drop")
+    }
+}
+
+/// A connection to run read-only queries against. Deref's to `Connection`.
+pub enum ReadConn<'a> {
+    /// A pooled (or freshly opened) dedicated reader — file-backed stores.
+    Pooled(PooledRead<'a>),
+    /// The writer connection itself: in-memory stores have no second
+    /// connection to hand out, and a failed reader open degrades to this.
+    Writer(MutexGuard<'a, Connection>),
+}
+
+impl std::ops::Deref for ReadConn<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        match self {
+            ReadConn::Pooled(c) => c,
+            ReadConn::Writer(c) => c,
+        }
+    }
+}
+
+/// Open an additional read connection to TokenTrail's own store. WAL mode is a
+/// persistent property of the database file, so this reader never blocks the
+/// writer and vice versa. Plain read-write flags on purpose: a read-only
+/// connection cannot create a WAL's shared-memory index, and the `immutable=1`
+/// fallback `open_readonly` uses for harness files would ignore the WAL and
+/// read stale data.
+fn open_reader(path: &Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(conn)
 }
 
 /// Open a harness-owned SQLite database strictly read-only.
@@ -959,19 +1080,57 @@ mod tests {
         store.insert_events(&[e]).unwrap();
         // Insert priced it at $18 (1M in + 1M out at $3/$15).
         let before: f64 = store
-            .conn()
+            .read_conn()
             .query_row("SELECT cost_usd FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert!((before - 18.0).abs() < 1e-9);
 
         // Sabotage the stored cost, then reprice_all restores it.
-        store.conn().execute("UPDATE usage_event SET cost_usd = 1.0", []).unwrap();
+        store.read_conn().execute("UPDATE usage_event SET cost_usd = 1.0", []).unwrap();
         assert_eq!(store.reprice_all().unwrap(), 1);
         let after: f64 = store
-            .conn()
+            .read_conn()
             .query_row("SELECT cost_usd FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert!((after - 18.0).abs() < 1e-9);
+    }
+
+    /// The reader pool and the writer are separate connections, so reads must
+    /// run while batches commit — never failing with SQLITE_BUSY or starving.
+    #[test]
+    fn reads_run_concurrently_with_writes() {
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        let store = Arc::new(Store::open(&tmp_dir("concurrent").join("usage.db")).unwrap());
+        let batch: Vec<UsageEvent> = (0..200).map(|i| ev(&format!("w{i}"), None)).collect();
+
+        let reader_store = store.clone();
+        let writer = std::thread::spawn(move || {
+            for chunk in batch.chunks(50) {
+                reader_store.insert_events(chunk).unwrap();
+            }
+        });
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        let mut reads = 0;
+        while !writer.is_finished() {
+            let conn = store.read_conn();
+            let n: i64 = conn
+                .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))
+                .unwrap();
+            let _ = n;
+            reads += 1;
+            assert!(Instant::now() < deadline, "reads starved while writes ran");
+        }
+        writer.join().unwrap();
+        assert!(reads > 0, "no read completed during the writes");
+
+        let conn = store.read_conn();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n as usize, 200);
     }
 
     #[test]
