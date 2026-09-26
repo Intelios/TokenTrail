@@ -1,4 +1,4 @@
-use crate::collectors::{clean_model, parse_ts_ms};
+use crate::collectors::{clean_model, mtime_ns, parse_ts_ms};
 use crate::models::{Source, UsageEvent};
 use crate::store::{open_readonly, Store};
 use std::collections::HashSet;
@@ -18,15 +18,30 @@ use std::path::Path;
 /// write access, the immutable fallback sees no tables, and the sync quietly
 /// reports 0 until the CLI next opens and checkpoints its database.
 ///
-/// A row can be readable before its generation finishes, so every sync
+/// A row can be readable before its generation finishes, so an active sync
 /// re-reads an overlap window of recent rows and relies on upserts.
-const OVERLAP_ROWS: i64 = 500;
+/// Kept small (20 rows) because each generation is at most twin nodes plus a few
+/// tool calls; an idle database is skipped entirely via the mtime watermark.
+const OVERLAP_ROWS: i64 = 20;
 
 pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
     let db = home.join(".local/share/devin/cli/sessions.db");
     if !db.exists() {
         return Ok(0);
     }
+
+    let mt_key = "devin:mtime";
+    let last_mtime = store.get_watermark(mt_key);
+    let wal_path = {
+        let mut p = db.as_os_str().to_os_string();
+        p.push("-wal");
+        std::path::PathBuf::from(p)
+    };
+    let file_mtime_ns = mtime_ns(&db).max(mtime_ns(&wal_path));
+    if file_mtime_ns > 0 && file_mtime_ns <= last_mtime {
+        return Ok(0);
+    }
+
     let conn = open_readonly(&db).map_err(|e| format!("open devin db: {e}"))?;
     let has_messages: bool = conn
         .query_row(
@@ -48,6 +63,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
         .map_err(|e| format!("devin max row: {e}"))?;
     if max_row_id < store.get_watermark("devin") {
         store.set_watermark("devin", 0);
+        store.set_watermark(mt_key, 0);
     }
     let watermark = store.get_watermark("devin").saturating_sub(OVERLAP_ROWS);
 
@@ -74,11 +90,11 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
 
     let mut events = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut max_row_id = 0i64;
+    let mut max_seen_row_id = 0i64;
     for row in rows {
         let (row_id, session_id, chat_message, row_created_at, cwd, session_model) =
             row.map_err(|e| format!("devin row: {e}"))?;
-        max_row_id = max_row_id.max(row_id);
+        max_seen_row_id = max_seen_row_id.max(row_id);
         let Some(ev) = from_message(&session_id, &chat_message, row_created_at, cwd, session_model)
         else {
             continue;
@@ -89,8 +105,12 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
         }
     }
     let processed = store.insert_events(&events).map_err(|e| format!("devin insert: {e}"))?;
-    if max_row_id > 0 {
-        store.set_watermark("devin", max_row_id);
+    let new_watermark = max_row_id.max(max_seen_row_id);
+    if new_watermark > 0 {
+        store.set_watermark("devin", new_watermark);
+    }
+    if file_mtime_ns > 0 {
+        store.set_watermark(mt_key, file_mtime_ns);
     }
     Ok(processed)
 }
@@ -250,14 +270,40 @@ mod tests {
         assert_eq!(row.8, Some(1885));
         assert_eq!(row.9, "swe-1-6-slow");
 
-        // Re-sync inside the overlap window: the twin and the re-read upsert,
-        // never a second stored event.
-        collect(&store, &home).unwrap();
+        // An unchanged database skips via the mtime gate.
+        assert_eq!(collect(&store, &home).unwrap(), 0);
         let n: i64 = store
             .read_conn()
             .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+
+        // Touching the database (simulating active session writes) triggers re-scan
+        // through the overlap window; upsert ensures twin/re-read never duplicates.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let c = rusqlite::Connection::open(home.join(".local/share/devin/cli/sessions.db")).unwrap();
+        c.execute("UPDATE sessions SET last_activity_at = 1789563200 WHERE id = 'fossil-echium'", []).unwrap();
+        drop(c);
+        collect(&store, &home).unwrap();
+        let n2: i64 = store
+            .read_conn()
+            .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n2, 1);
+    }
+
+    #[test]
+    fn skips_unchanged_db_and_records_mtime_watermark() {
+        let home = test_home("devin-mtime-skip");
+        let store = test_store("devin-mtime-skip");
+        seed(&home);
+        assert_eq!(collect(&store, &home).unwrap(), 1);
+
+        let mtime = store.get_watermark("devin:mtime");
+        assert!(mtime > 0, "devin:mtime watermark must be recorded after collect");
+
+        // Second collect skips without querying
+        assert_eq!(collect(&store, &home).unwrap(), 0);
     }
 
     #[test]
@@ -281,6 +327,7 @@ mod tests {
         assert_eq!(collect(&store, &home).unwrap(), 1);
 
         // Fresh install: brand-new database whose row ids restart at 1.
+        std::thread::sleep(std::time::Duration::from_millis(10));
         std::fs::remove_file(home.join(".local/share/devin/cli/sessions.db")).unwrap();
         let db = home.join(".local/share/devin/cli/sessions.db");
         let c = rusqlite::Connection::open(&db).unwrap();

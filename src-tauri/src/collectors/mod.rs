@@ -94,6 +94,16 @@ pub fn sorted_glob(pattern: &str) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+/// Nanosecond mtime of `path`, or 0 if the file is missing / inaccessible.
+pub fn mtime_ns(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 pub(crate) fn test_home(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("tokentrail-test-{tag}-{}", std::process::id()));

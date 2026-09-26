@@ -1,8 +1,8 @@
+use crate::collectors::mtime_ns;
 use crate::models::{Source, UsageEvent};
 use crate::store::{open_readonly, Store};
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 /// Google Antigravity stores one SQLite DB per conversation under
 /// ~/.gemini/antigravity/conversations/<uuid>.db. LLM calls live in the
@@ -446,15 +446,6 @@ fn sorted_glob_db(root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
         .collect();
     files.sort();
     Ok(files)
-}
-
-fn mtime_ns(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos().min(i64::MAX as u128) as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
