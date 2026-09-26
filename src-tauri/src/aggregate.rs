@@ -157,6 +157,7 @@ pub struct ModelStatsRow {
     pub first_ts: Option<i64>,
     pub last_ts: Option<i64>,
     pub sources: Vec<String>,
+    pub active_days: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -361,6 +362,16 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
     })
 }
 
+/// Count of distinct UTC dates with at least one non-hidden event in the window.
+pub fn active_days_for_range(store: &Store, days: i64) -> DbResult<i64> {
+    let sql = format!(
+        "SELECT COUNT(DISTINCT date(ts/1000, 'unixepoch'))
+         FROM usage_event u WHERE u.ts >= ?1 AND {H}",
+        H = NOT_HIDDEN
+    );
+    store.conn().query_row(&sql, [cutoff(days)], |r| r.get(0))
+}
+
 pub fn daily(store: &Store, days: i64) -> DbResult<Vec<DailyRow>> {
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, source, COALESCE(SUM({T}),0), SUM(cost_usd)
@@ -435,7 +446,8 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
                 COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
                 COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
-                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source)
+                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source),
+                COUNT(DISTINCT date(u.ts/1000, 'unixepoch'))
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
          WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 6 DESC",
         T = TOKENS,
@@ -461,6 +473,7 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
                 first_ts: r.get(9)?,
                 last_ts: r.get(10)?,
                 sources,
+                active_days: r.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -2887,6 +2900,36 @@ mod tests {
         assert_eq!(rows[2].project, "project-b");
         assert_eq!(rows[2].tokens, 700);
         assert_ne!(rows[0].date, rows[2].date);
+    }
+
+    #[test]
+    fn model_stats_and_active_days_for_range() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let day1 = 1_700_000_000_000;
+        let day2 = day1 + 86_400_000;
+
+        store
+            .insert_events(&[
+                test_event("gpt-4", day1, 100),
+                test_event("gpt-4", day1 + 5000, 200),
+                test_event("gpt-4", day2, 300),
+                test_event("claude-3", day2 + 1000, 400),
+            ])
+            .unwrap();
+
+        let stats = model_stats(&store, 3650).unwrap();
+        let gpt4 = stats.iter().find(|r| r.model == "gpt-4").unwrap();
+        assert_eq!(gpt4.active_days, 2);
+        assert_eq!(gpt4.events, 3);
+        assert_eq!(gpt4.tokens, 600);
+
+        let claude = stats.iter().find(|r| r.model == "claude-3").unwrap();
+        assert_eq!(claude.active_days, 1);
+        assert_eq!(claude.events, 1);
+        assert_eq!(claude.tokens, 400);
+
+        let active_days_all = active_days_for_range(&store, 3650).unwrap();
+        assert_eq!(active_days_all, 2);
     }
 }
 

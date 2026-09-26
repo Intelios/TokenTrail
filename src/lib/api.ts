@@ -73,6 +73,7 @@ export interface ModelStatsRow {
   first_ts: number | null;
   last_ts: number | null;
   sources: string[];
+  active_days: number;
 }
 
 export interface ProjectRow {
@@ -257,6 +258,7 @@ export const api = {
   dailyByModel: (days: number) => invoke<DailyModelRow[]>('get_daily_by_model', { days }),
   dailyCache: (days: number) => invoke<DailyCacheRow[]>('get_daily_cache', { days }),
   byModel: (days: number) => invoke<ModelRow[]>('get_by_model', { days }),
+  activeDays: (days: number) => invoke<number>('get_active_days', { days }),
   modelStats: (days: number) => invoke<ModelStatsRow[]>('get_model_stats', { days }),
   modelDetail: (model: string, days: number) =>
     invoke<ModelDetail | null>('get_model_detail', { model, days }),

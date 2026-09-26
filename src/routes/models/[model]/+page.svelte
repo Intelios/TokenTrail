@@ -179,11 +179,11 @@
         <div class="h">{detail.sessions.toLocaleString()} session{detail.sessions !== 1 ? 's' : ''}</div>
       </div>
       <div class="mc up" style="animation-delay:180ms">
-        <div class="k">Avg tok / call</div>
+        <div class="k">Avg tok / day</div>
         <div class="v">
-          <AnimatedNumber value={detail.events ? detail.tokens / detail.events : 0} format={fmtTokens} />
+          <AnimatedNumber value={detail.active_days ? detail.tokens / detail.active_days : 0} format={fmtTokens} />
         </div>
-        <div class="h">{detail.tokens ? ((detail.output_tokens / detail.tokens) * 100).toFixed(0) : 0}% output</div>
+        <div class="h">{detail.active_days} active day{detail.active_days !== 1 ? 's' : ''}</div>
       </div>
       {#if usagePct !== null}
         <div class="mc hl up" style="animation-delay:240ms">

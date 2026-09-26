@@ -91,6 +91,7 @@ pub fn run() {
             commands::get_daily_by_model,
             commands::get_daily_cache,
             commands::get_by_model,
+            commands::get_active_days,
             commands::get_model_stats,
             commands::get_model_detail,
             commands::get_model_achievements,

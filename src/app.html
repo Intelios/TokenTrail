@@ -81,12 +81,14 @@
               case 'get_daily': return dailyRows(args.days ?? 90);
               case 'get_by_model':
                 return MODELS.map((m) => ({ model: m[0], tokens: m[1] * (args.days > 90 ? 1 : 0.4), events: m[4], cost_usd: m[3], last_ts: Date.now() - MODELS.indexOf(m) * 86400000 }));
+              case 'get_active_days': return Math.min(args.days ?? 90, 214);
               case 'get_model_stats':
                 return MODELS.map((m) => ({
                   model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31,
                   cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5,
                   events: m[4], sessions: m[5], cost_usd: m[3],
                   first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - MODELS.indexOf(m) * 86400000, sources: m[2],
+                  active_days: Math.max(1, Math.min(Math.round((args.days ?? 90) * 0.6), 42)),
                 }));
               case 'get_daily_by_model': {
                 const n = Math.min(args.days ?? 90, 150);

@@ -293,7 +293,7 @@
         <div class="k">Model calls</div>
         <div class="v"><AnimatedNumber value={detail.events} /></div>
         <div class="h">
-          {detail.events ? fmtTokens(detail.tokens / detail.events) : '—'} avg tok / call
+          {detail.active_days ? fmtTokens(detail.tokens / detail.active_days) : '—'} avg tok / day
         </div>
       </div>
       {#if usagePct !== null}

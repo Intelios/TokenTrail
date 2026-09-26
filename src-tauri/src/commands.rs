@@ -54,6 +54,12 @@ pub fn get_by_model(state: State<AppState>, days: i64) -> Result<Vec<ModelRow>, 
 }
 
 #[tauri::command]
+pub fn get_active_days(state: State<AppState>, days: i64) -> Result<i64, String> {
+    let store = state.store.lock().map_err(|_| "store lock poisoned")?;
+    aggregate::active_days_for_range(&store, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn get_model_stats(state: State<AppState>, days: i64) -> Result<Vec<ModelStatsRow>, String> {
     let store = state.store.lock().map_err(|_| "store lock poisoned")?;
     aggregate::model_stats(&store, days).map_err(|e| e.to_string())

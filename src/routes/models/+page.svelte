@@ -42,6 +42,7 @@
   let rows = $state<ModelStatsRow[]>([]);
   let trendRows = $state<DailyModelRow[]>([]);
   let events = $state<LeaderboardEvent[]>([]);
+  let activeDays = $state(0);
   let error = $state('');
 
   function metricVal(r: ModelStatsRow): number {
@@ -64,14 +65,16 @@
 
   async function load() {
     try {
-      const [rs, trends, evs] = await Promise.all([
+      const [rs, trends, evs, ad] = await Promise.all([
         api.modelStats(days),
         api.dailyByModel(90),
         api.leaderboardEvents(days),
+        api.activeDays(days),
       ]);
       rows = rs;
       trendRows = trends;
       events = evs;
+      activeDays = ad;
       error = '';
     } catch (e) {
       error = String(e);
@@ -336,14 +339,14 @@
         <div class="h">{fmtTokens(totalTokens)} tokens</div>
       </div>
       <div class="mc up" style="animation-delay:240ms">
-        <div class="k">Avg tok / call</div>
+        <div class="k">Avg tok / day</div>
         <div class="v">
-          <AnimatedNumber value={totalEvents ? totalTokens / totalEvents : 0} format={(n) => fmtTokensSplit(n).value} />
-          {#if totalEvents}
-            <span class="unit">{fmtTokensSplit(totalTokens / totalEvents).unit || ' '}</span>
+          <AnimatedNumber value={activeDays ? totalTokens / activeDays : 0} format={(n) => fmtTokensSplit(n).value} />
+          {#if activeDays}
+            <span class="unit">{fmtTokensSplit(totalTokens / activeDays).unit || ' '}</span>
           {/if}
         </div>
-        <div class="h">{totalTokens ? ((totalOutput / totalTokens) * 100).toFixed(0) : 0}% output</div>
+        <div class="h">{activeDays} active day{activeDays !== 1 ? 's' : ''}</div>
       </div>
     </div>
 
@@ -481,7 +484,7 @@
             <th class="num">Calls</th>
             <th class="num">Tokens</th>
             <th class="num">In / Out</th>
-            <th class="num">Avg/call</th>
+            <th class="num">Avg/day</th>
             <th>90d trend</th>
             <th class="num">Est. cost</th>
             <th class="num">Share</th>
@@ -512,7 +515,7 @@
               <td class="num inout">
                 {fmtTokens(r.input_tokens)} in<br />{fmtTokens(r.output_tokens)} out
               </td>
-              <td class="num">{r.events ? fmtTokens(r.tokens / r.events) : '—'}</td>
+              <td class="num">{r.active_days ? fmtTokens(r.tokens / r.active_days) : '—'}</td>
               <td>
                 {#if trend && trend.length > 1}
                   <Spark values={trend} width={94} height={20} color={modelFlat(r.model, i)} delay={200 + i * 45} />
