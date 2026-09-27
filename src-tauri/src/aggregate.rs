@@ -1,5 +1,6 @@
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
@@ -1443,34 +1444,71 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
         }
     }
 
-    let mut days_map: BTreeMap<String, Vec<(String, i64)>> = BTreeMap::new();
+    // Dense model ids in lexicographic order: id order is exactly the
+    // standings' (tokens desc, name asc) tie-break, and every hot structure
+    // below is a Vec indexed by id rather than a HashMap keyed by name.
+    let mut names: Vec<String> = Vec::new();
+    {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (_, model, _) in &rows {
+            if seen.insert(model.as_str()) {
+                names.push(model.clone());
+            }
+        }
+    }
+    names.sort();
+    let id_of: HashMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+    let n_models = names.len();
+
+    let mut days_map: BTreeMap<String, Vec<(usize, i64)>> = BTreeMap::new();
     for (d, model, tokens) in rows {
-        days_map.entry(d).or_default().push((model, tokens));
+        let id = id_of[model.as_str()];
+        days_map.entry(d).or_default().push((id, tokens));
+    }
+    // Same-day events are emitted in model-name order, deterministically.
+    for day_models in days_map.values_mut() {
+        day_models.sort_by_key(|(id, _)| *id);
     }
 
-    let mut cumulative_tokens: HashMap<String, i64> = HashMap::new();
-    let mut first_seen_date: HashMap<String, String> = HashMap::new();
-    let mut ever_top5: HashSet<String> = HashSet::new();
-    let mut pre_window_daily_max: HashMap<String, i64> = HashMap::new();
-    let mut in_window_daily_max: HashMap<String, i64> = HashMap::new();
-    let mut prev_rankings: HashMap<String, usize> = HashMap::new();
-    let mut prev_top6: Vec<String> = Vec::new();
-    let mut rank_since: HashMap<String, (usize, String)> = HashMap::new();
+    let mut cumulative: Vec<i64> = vec![0; n_models];
+    // Standings, kept ordered by (tokens desc, id asc). Only the day's active
+    // models move each day, so maintaining this is O(active models) per day —
+    // no clone-and-resort of the whole model list like the per-day rebuild.
+    // A model enters the standings when its first row lands (the remove below
+    // is a no-op until then): the old rebuild only ever contained seen models,
+    // and the Big-6 guard `prev_top6.len() == 6` depends on that — phantom
+    // zero-token entries would promote and demote against models that don't
+    // exist yet.
+    let mut order: BTreeSet<(Reverse<i64>, usize)> = BTreeSet::new();
+    let mut first_seen: Vec<Option<String>> = vec![None; n_models];
+    let mut ever_top5: HashSet<usize> = HashSet::new();
+    let mut pre_window_max: Vec<Option<i64>> = vec![None; n_models];
+    let mut in_window_max: Vec<Option<i64>> = vec![None; n_models];
+    let mut rank_since: Vec<Option<(usize, String)>> = vec![None; n_models];
+    // Yesterday's ranks, materialized once at the window boundary: the
+    // standings after the last pre-window day, before the first window day's
+    // tokens land. Stays None until then, which is what keeps day-1 overtakes
+    // (there is nothing to have been overtaken from) off.
+    let mut prev_rank: Option<Vec<usize>> = None;
+    let mut prev_top6: Vec<usize> = Vec::new();
+    let mut seen_pre_window = false;
 
     let mut events: Vec<LeaderboardEvent> = Vec::new();
 
     for (d, day_models) in &days_map {
         let in_window = d >= &cutoff_date;
+        if !in_window {
+            seen_pre_window = true;
+        }
 
-        // 1. First seen & Record days
+        // 1. First seen & record days
         for (model, daily_tokens) in day_models {
-            let is_first_time = !first_seen_date.contains_key(model);
-            if is_first_time {
-                first_seen_date.insert(model.clone(), d.clone());
-                if in_window && !aliased_models.contains(model) {
+            if first_seen[*model].is_none() {
+                first_seen[*model] = Some(d.clone());
+                if in_window && !aliased_models.contains(&names[*model]) {
                     events.push(LeaderboardEvent {
                         kind: "first_seen".into(),
-                        model: model.clone(),
+                        model: names[*model].clone(),
                         other_model: None,
                         rank: None,
                         date: d.clone(),
@@ -1481,20 +1519,17 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
 
             if !in_window {
-                let cur = pre_window_daily_max.entry(model.clone()).or_insert(0);
+                let cur = pre_window_max[*model].get_or_insert(*daily_tokens);
                 if *daily_tokens > *cur {
                     *cur = *daily_tokens;
                 }
-            } else if pre_window_daily_max.contains_key(model) {
-                let cur_record = in_window_daily_max
-                    .get(model)
-                    .cloned()
-                    .unwrap_or_else(|| pre_window_daily_max[model]);
+            } else if let Some(pre_max) = pre_window_max[*model] {
+                let cur_record = in_window_max[*model].unwrap_or(pre_max);
                 if *daily_tokens > cur_record {
-                    in_window_daily_max.insert(model.clone(), *daily_tokens);
+                    in_window_max[*model] = Some(*daily_tokens);
                     events.push(LeaderboardEvent {
                         kind: "record".into(),
-                        model: model.clone(),
+                        model: names[*model].clone(),
                         other_model: None,
                         rank: None,
                         date: d.clone(),
@@ -1505,38 +1540,204 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
         }
 
-        // 2. Cumulative totals
+        // 2. Snapshot the standings once, on the first window day — exactly the
+        //    state this window's overtakes and Big-6 movements compare against.
+        if in_window && prev_rank.is_none() && seen_pre_window {
+            let mut ranks = vec![0usize; n_models];
+            for (idx, &(_, id)) in order.iter().enumerate() {
+                ranks[id] = idx + 1;
+            }
+            prev_rank = Some(ranks);
+        }
+
+        // 3. Cumulative totals; the ordered set above stays current.
         for (model, daily_tokens) in day_models {
-            *cumulative_tokens.entry(model.clone()).or_insert(0) += *daily_tokens;
+            let old = cumulative[*model];
+            order.remove(&(Reverse(old), *model));
+            let new = old + daily_tokens;
+            cumulative[*model] = new;
+            order.insert((Reverse(new), *model));
         }
 
-        // 3. Current standings across all known models
-        let mut standings: Vec<(String, i64)> = cumulative_tokens
-            .iter()
-            .map(|(m, &t)| (m.clone(), t))
-            .collect();
-        standings.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let curr_top6: Vec<usize> = order.iter().take(6).map(|&(_, id)| id).collect();
 
-        let mut curr_rankings: HashMap<String, usize> = HashMap::new();
-        for (idx, (model, _)) in standings.iter().enumerate() {
-            curr_rankings.insert(model.clone(), idx + 1);
+        // 4. Ranks for today. Only window days emit rank-bearing events, so the
+        //    full rank map is built only on those days. curr_order is the same
+        //    ordering as a rank-indexed vec, for the overtake scan below.
+        let mut curr_rank: Vec<usize> = Vec::new();
+        let mut curr_order: Vec<usize> = Vec::new();
+        if in_window {
+            curr_rank.resize(n_models, 0);
+            for (idx, &(_, id)) in order.iter().enumerate() {
+                curr_rank[id] = idx + 1;
+                curr_order.push(id);
+            }
         }
 
-        // 4. Debut (entered top 5 for the first time with prior history, suppressed on ALL filter)
-        if !is_all_time {
+        // 5. Debut (entered top 5 for the first time with prior history,
+        //    suppressed on ALL filter)
+        if in_window && !is_all_time {
             for (model, _) in day_models {
-                if let Some(&rank) = curr_rankings.get(model) {
-                    if rank <= 5 && !ever_top5.contains(model) {
-                        let first_d = first_seen_date.get(model);
-                        let has_prior_history = first_d.map(|fd| fd < d).unwrap_or(false);
-                        if has_prior_history && in_window {
+                let rank = curr_rank[*model];
+                if rank <= 5 && !ever_top5.contains(model) {
+                    let has_prior_history = first_seen[*model]
+                        .as_ref()
+                        .map(|fd| fd < d)
+                        .unwrap_or(false);
+                    if has_prior_history {
+                        events.push(LeaderboardEvent {
+                            kind: "debut".into(),
+                            model: names[*model].clone(),
+                            other_model: None,
+                            rank: Some(rank as i64),
+                            date: d.clone(),
+                            tokens: cumulative[*model],
+                            tenure_days: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Mark models in top 5 so far
+        for &(_, id) in order.iter().take(5) {
+            ever_top5.insert(id);
+        }
+
+        // 6. Big 6 movements (promotion / demotion on ALL filter)
+        let mut promoted_models: Vec<usize> = Vec::new();
+        let mut demoted_models: Vec<usize> = Vec::new();
+
+        if in_window && prev_top6.len() == 6 && curr_top6.len() == 6 {
+            for m in &curr_top6 {
+                if !prev_top6.contains(m) {
+                    promoted_models.push(*m);
+                }
+            }
+            for m in &prev_top6 {
+                if !curr_top6.contains(m) {
+                    demoted_models.push(*m);
+                }
+            }
+        }
+
+        if in_window && is_all_time && !promoted_models.is_empty() {
+            let mut sorted_promoted = promoted_models.clone();
+            sorted_promoted.sort_by_key(|m| curr_rank[*m]);
+            let mut sorted_demoted = demoted_models.clone();
+            sorted_demoted.sort_by_key(|m| prev_top6.iter().position(|x| x == m).unwrap_or(99));
+
+            for (i, promoted) in sorted_promoted.iter().enumerate() {
+                let demoted = sorted_demoted.get(i);
+                let promo_rank = curr_rank[*promoted];
+
+                events.push(LeaderboardEvent {
+                    kind: "promotion".into(),
+                    model: names[*promoted].clone(),
+                    other_model: demoted.map(|d| names[*d].clone()),
+                    rank: Some(promo_rank as i64),
+                    date: d.clone(),
+                    tokens: cumulative[*promoted],
+                    tenure_days: None,
+                });
+
+                if let Some(demoted_name) = demoted {
+                    let (demoted_rank, entry_date) =
+                        rank_since[*demoted_name].clone().unwrap_or((6, d.clone()));
+                    let tenure = days_between(&entry_date, d).unwrap_or(0);
+
+                    events.push(LeaderboardEvent {
+                        kind: "demotion".into(),
+                        model: names[*demoted_name].clone(),
+                        other_model: Some(names[*promoted].clone()),
+                        rank: Some(demoted_rank as i64),
+                        date: d.clone(),
+                        tokens: cumulative[*demoted_name],
+                        tenure_days: Some(tenure),
+                    });
+                }
+            }
+
+            if sorted_demoted.len() > sorted_promoted.len() {
+                for demoted_name in &sorted_demoted[sorted_promoted.len()..] {
+                    let (demoted_rank, entry_date) =
+                        rank_since[*demoted_name].clone().unwrap_or((6, d.clone()));
+                    let tenure = days_between(&entry_date, d).unwrap_or(0);
+                    events.push(LeaderboardEvent {
+                        kind: "demotion".into(),
+                        model: names[*demoted_name].clone(),
+                        other_model: None,
+                        rank: Some(demoted_rank as i64),
+                        date: d.clone(),
+                        tokens: cumulative[*demoted_name],
+                        tenure_days: Some(tenure),
+                    });
+                }
+            }
+        }
+
+        // 7. Overtakes (adjacent rank swaps)
+        if let Some(prev_ranks) = &prev_rank {
+            if in_window {
+                // Models sorted by yesterday's rank. A model X overtakes exactly
+                // the models that sat above it yesterday and sit below it today,
+                // so scanning the shorter of those two sides finds them all —
+                // no all-models sweep per active model. Rank numbers alone
+                // cannot bound the search: a third model rising past X while X
+                // rises past Y leaves both rank numbers unchanged, and a model
+                // first seen today was in nobody's yesterday.
+                let mut prev_order: Vec<usize> = vec![0; n_models];
+                let mut prev_seen = 0usize;
+                for m in 0..n_models {
+                    if prev_ranks[m] > 0 {
+                        prev_order[prev_ranks[m] - 1] = m;
+                        prev_seen += 1;
+                    }
+                }
+                prev_order.truncate(prev_seen);
+
+                for (model, _) in day_models {
+                    let px = prev_ranks[*model];
+                    let cx = curr_rank[*model];
+                    let above_yesterday = px.saturating_sub(1);
+                    let below_today = curr_order.len() - cx.min(curr_order.len());
+
+                    let mut hits: Vec<usize> = Vec::new();
+                    if above_yesterday <= below_today {
+                        for &other in &prev_order[..above_yesterday] {
+                            if curr_rank[other] > cx {
+                                hits.push(other);
+                            }
+                        }
+                    } else {
+                        for &other in &curr_order[cx..] {
+                            if prev_ranks[other] > 0 && prev_ranks[other] < px {
+                                hits.push(other);
+                            }
+                        }
+                    }
+
+                    // Passed models are listed in the rank order they were
+                    // passed from, so same-day events come out deterministically.
+                    hits.sort_by_key(|&other| prev_ranks[other]);
+
+                    for other in hits {
+                        if is_all_time
+                            && promoted_models.contains(model)
+                            && demoted_models.contains(&other)
+                        {
+                            continue; // already told as a Big-6 promotion/demotion
+                        }
+
+                        let gap = cumulative[*model] - cumulative[other];
+                        if gap > 0 {
                             events.push(LeaderboardEvent {
-                                kind: "debut".into(),
-                                model: model.clone(),
-                                other_model: None,
-                                rank: Some(rank as i64),
+                                kind: "overtake".into(),
+                                model: names[*model].clone(),
+                                other_model: Some(names[other].clone()),
+                                rank: Some(cx as i64),
                                 date: d.clone(),
-                                tokens: *cumulative_tokens.get(model).unwrap_or(&0),
+                                tokens: gap,
                                 tenure_days: None,
                             });
                         }
@@ -1545,146 +1746,27 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
         }
 
-        // Mark models in top 5 so far
-        for (idx, (model, _)) in standings.iter().enumerate() {
-            if idx < 5 {
-                ever_top5.insert(model.clone());
-            }
-        }
-
-        // 5. Big 6 movements (promotion / demotion on ALL filter)
-        let curr_top6: Vec<String> = standings.iter().take(6).map(|(m, _)| m.clone()).collect();
-        let mut promoted_models: Vec<String> = Vec::new();
-        let mut demoted_models: Vec<String> = Vec::new();
-
-        if prev_top6.len() == 6 && curr_top6.len() == 6 {
-            for m in &curr_top6 {
-                if !prev_top6.contains(m) {
-                    promoted_models.push(m.clone());
-                }
-            }
-            for m in &prev_top6 {
-                if !curr_top6.contains(m) {
-                    demoted_models.push(m.clone());
-                }
-            }
-        }
-
-        if is_all_time && in_window && !promoted_models.is_empty() {
-            let mut sorted_promoted = promoted_models.clone();
-            sorted_promoted.sort_by_key(|m| curr_rankings.get(m).copied().unwrap_or(99));
-            let mut sorted_demoted = demoted_models.clone();
-            sorted_demoted.sort_by_key(|m| prev_top6.iter().position(|x| x == m).unwrap_or(99));
-
-            for (i, promoted) in sorted_promoted.iter().enumerate() {
-                let demoted = sorted_demoted.get(i);
-                let promo_rank = curr_rankings.get(promoted).copied().unwrap_or(6);
-
-                events.push(LeaderboardEvent {
-                    kind: "promotion".into(),
-                    model: promoted.clone(),
-                    other_model: demoted.cloned(),
-                    rank: Some(promo_rank as i64),
-                    date: d.clone(),
-                    tokens: *cumulative_tokens.get(promoted).unwrap_or(&0),
-                    tenure_days: None,
-                });
-
-                if let Some(demoted_name) = demoted {
-                    let (demoted_rank, entry_date) = rank_since
-                        .get(demoted_name)
-                        .cloned()
-                        .unwrap_or((6, d.clone()));
-                    let tenure = days_between(&entry_date, d).unwrap_or(0);
-
-                    events.push(LeaderboardEvent {
-                        kind: "demotion".into(),
-                        model: demoted_name.clone(),
-                        other_model: Some(promoted.clone()),
-                        rank: Some(demoted_rank as i64),
-                        date: d.clone(),
-                        tokens: *cumulative_tokens.get(demoted_name).unwrap_or(&0),
-                        tenure_days: Some(tenure),
-                    });
-                }
-            }
-
-            if sorted_demoted.len() > sorted_promoted.len() {
-                for demoted_name in &sorted_demoted[sorted_promoted.len()..] {
-                    let (demoted_rank, entry_date) = rank_since
-                        .get(demoted_name)
-                        .cloned()
-                        .unwrap_or((6, d.clone()));
-                    let tenure = days_between(&entry_date, d).unwrap_or(0);
-                    events.push(LeaderboardEvent {
-                        kind: "demotion".into(),
-                        model: demoted_name.clone(),
-                        other_model: None,
-                        rank: Some(demoted_rank as i64),
-                        date: d.clone(),
-                        tokens: *cumulative_tokens.get(demoted_name).unwrap_or(&0),
-                        tenure_days: Some(tenure),
-                    });
-                }
-            }
-        }
-
-        // 6. Overtakes (adjacent rank swaps)
-        if !prev_rankings.is_empty() && in_window {
-            for (model, _) in day_models {
-                if let Some(&curr_rank) = curr_rankings.get(model) {
-                    if let Some(&prev_rank) = prev_rankings.get(model) {
-                        for (other_model, &other_prev_rank) in &prev_rankings {
-                            if other_model != model && other_prev_rank < prev_rank {
-                                if let Some(&other_curr_rank) = curr_rankings.get(other_model) {
-                                    if curr_rank < other_curr_rank {
-                                        if is_all_time
-                                            && promoted_models.contains(model)
-                                            && demoted_models.contains(other_model)
-                                        {
-                                            continue;
-                                        }
-
-                                        let my_tokens = *cumulative_tokens.get(model).unwrap_or(&0);
-                                        let other_tokens = *cumulative_tokens.get(other_model).unwrap_or(&0);
-                                        let gap = my_tokens - other_tokens;
-                                        if gap > 0 {
-                                            events.push(LeaderboardEvent {
-                                                kind: "overtake".into(),
-                                                model: model.clone(),
-                                                other_model: Some(other_model.clone()),
-                                                rank: Some(curr_rank as i64),
-                                                date: d.clone(),
-                                                tokens: gap,
-                                                tenure_days: None,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+        // 8. Big-6 tenure bookkeeping: demoted models leave their rank's
+        //    history; today's top 6 reset their entry date when they move.
         for demoted in &demoted_models {
-            rank_since.remove(demoted);
+            rank_since[*demoted] = None;
         }
 
         for (idx, model) in curr_top6.iter().enumerate() {
             let rank = idx + 1;
-            if let Some((r, _)) = rank_since.get(model) {
-                if *r != rank {
-                    rank_since.insert(model.clone(), (rank, d.clone()));
+            if let Some((r, _)) = rank_since[*model] {
+                if r != rank {
+                    rank_since[*model] = Some((rank, d.clone()));
                 }
             } else {
-                rank_since.insert(model.clone(), (rank, d.clone()));
+                rank_since[*model] = Some((rank, d.clone()));
             }
         }
 
         prev_top6 = curr_top6;
-        prev_rankings = curr_rankings;
+        if in_window {
+            prev_rank = Some(std::mem::take(&mut curr_rank));
+        }
     }
 
     events.sort_by(|a, b| b.date.cmp(&a.date));
@@ -2559,6 +2641,118 @@ mod tests {
     }
 
     #[test]
+    fn leaderboard_debut_suppressed_after_pre_window_top5() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let pre_day = now - 40 * day_ms;
+        let mid_day = now - 20 * day_ms;
+        let reentry_day = now - 5 * day_ms;
+        let control_day = now - 4 * day_ms;
+
+        store
+            .insert_events(&[
+                // Pre-window: M sits at rank 5, with m1..m4 above it.
+                test_event("m1", pre_day, 10_000),
+                test_event("m2", pre_day, 9_000),
+                test_event("m3", pre_day, 8_000),
+                test_event("m4", pre_day, 7_000),
+                test_event("M", pre_day, 6_000),
+                test_event("tail", pre_day, 100),
+                // Mid-window: four big models push M out of the top 5.
+                test_event("m6", mid_day, 50_000),
+                test_event("m7", mid_day, 40_000),
+                test_event("m8", mid_day, 30_000),
+                test_event("m9", mid_day, 20_000),
+                // Control model N: first seen mid-window below the top 5...
+                test_event("N", mid_day, 500),
+                // ...then jumps in later -> debut expected.
+                test_event("N", control_day, 59_000),
+                // M re-enters the top 5: it was already a top-5 member once,
+                // so this is not a debut no matter how far back that was.
+                test_event("M", reentry_day, 60_000),
+            ])
+            .unwrap();
+
+        let events = leaderboard_events(&store, 30).unwrap();
+        let debuts: Vec<_> = events.iter().filter(|e| e.kind == "debut").collect();
+        assert_eq!(debuts.len(), 1, "only the control model should debut");
+        assert_eq!(debuts[0].model, "N");
+        assert!(!events.iter().any(|e| e.kind == "debut" && e.model == "M"));
+    }
+
+    #[test]
+    fn leaderboard_overtake_multi_rank_jump_lists_every_passed_model() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day1 = now - 2 * day_ms;
+        let day2 = now - day_ms;
+
+        store
+            .insert_events(&[
+                test_event("a", day1, 1000),
+                test_event("b", day1, 2000),
+                test_event("c", day1, 3000),
+                test_event("d", day1, 4000),
+                test_event("e", day1, 5000),
+                // a jumps from last to first in one day, passing all four.
+                test_event("a", day2, 6000),
+            ])
+            .unwrap();
+
+        let events = leaderboard_events(&store, 30).unwrap();
+        let overtakes: Vec<_> = events.iter().filter(|e| e.kind == "overtake").collect();
+        assert_eq!(overtakes.len(), 4);
+        let others: Vec<_> = overtakes
+            .iter()
+            .map(|e| e.other_model.as_deref().unwrap())
+            .collect();
+        // Same-day overtakes are emitted in the passed model's previous-rank
+        // order, deterministically.
+        assert_eq!(others, ["e", "d", "c", "b"]);
+        for ot in &overtakes {
+            assert_eq!(ot.model, "a");
+            assert_eq!(ot.rank, Some(1));
+        }
+        assert_eq!(overtakes[0].tokens, 2000); // 7000 - 5000
+        assert_eq!(overtakes[1].tokens, 3000); // 7000 - 4000
+        assert_eq!(overtakes[2].tokens, 4000); // 7000 - 3000
+        assert_eq!(overtakes[3].tokens, 5000); // 7000 - 2000
+    }
+
+    #[test]
+    fn leaderboard_tenure_counts_from_before_all_time_cutoff() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let ancient = now - 3700 * day_ms; // before the ALL filter's 3650-day cutoff
+        let recent = now - day_ms;
+
+        store
+            .insert_events(&[
+                test_event("m1", ancient, 60_000),
+                test_event("m2", ancient, 50_000),
+                test_event("m3", ancient, 40_000),
+                test_event("m4", ancient, 30_000),
+                test_event("m5", ancient, 20_000),
+                test_event("m6", ancient, 10_000),
+                test_event("m7", ancient, 5_000),
+            ])
+            .unwrap();
+
+        // m7 passes m6 for #6; m6's tenure reaches back to the ancient day,
+        // not to the cutoff.
+        store.insert_events(&[test_event("m7", recent, 10_000)]).unwrap();
+
+        let events = leaderboard_events(&store, 3650).unwrap();
+        let demotions: Vec<_> = events.iter().filter(|e| e.kind == "demotion").collect();
+        assert_eq!(demotions.len(), 1);
+        assert_eq!(demotions[0].model, "m6");
+        assert_eq!(demotions[0].tenure_days, Some(3699));
+    }
+
+    #[test]
     fn project_detail_returns_none_for_nonexistent_project() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         assert!(project_detail(&store, "nonexistent-proj", 30).unwrap().is_none());
@@ -2947,4 +3141,6 @@ mod tests {
         assert_eq!(active_days_all, 2);
     }
 }
+
+
 
