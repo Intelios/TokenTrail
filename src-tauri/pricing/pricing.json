@@ -47,6 +47,7 @@
     { "prefix": "kimi-k2.6", "rates": { "input": 0.95, "output": 4.0, "cache_read": 0.16, "cache_write": 0.95 } },
     { "prefix": "kimi-k2.5", "rates": { "input": 0.6, "output": 3.0, "cache_read": 0.1, "cache_write": 0.6 } },
     { "prefix": "kimi", "rates": { "input": 2.78, "output": 13.89, "cache_read": 0.28, "cache_write": 2.78 } },
+    { "prefix": "longcat-2.5", "rates": { "input": 0.3, "output": 1.2, "cache_read": 0.006, "cache_write": 0.3 } },
     { "prefix": "longcat-2", "rates": { "input": 0.75, "output": 2.95, "cache_read": 0.015, "cache_write": 0.75 } },
     { "prefix": "hunyuan-hy4", "rates": { "input": 0.834, "output": 2.501, "cache_read": 0.042, "cache_write": 0.834 } },
     { "prefix": "hy4", "rates": { "input": 0.834, "output": 2.501, "cache_read": 0.042, "cache_write": 0.834 } },
