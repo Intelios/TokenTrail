@@ -476,6 +476,53 @@ pub struct PeakDayRow {
     pub cost_usd: f64,
 }
 
+/// One model's contribution to the Wrapped card. No cost field: the card is a
+/// token story by design, so the payload never carries a number it must disclaim.
+#[derive(Debug, Serialize)]
+pub struct WrappedModelRow {
+    pub model: String,
+    pub tokens: i64,
+    pub events: i64,
+}
+
+/// Same shape as `SourceTotals` minus cost, for the same reason as above.
+#[derive(Debug, Serialize)]
+pub struct WrappedSourceRow {
+    pub source: String,
+    pub tokens: i64,
+}
+
+/// Everything the shareable "Usage Wrapped" image draws, for one trailing
+/// window (`days` 7/30, or all-time at 0 — the same window semantics as every
+/// other ranged query). `window_days` is the span the card compares against:
+/// the request itself for week/month, first-event-to-today for all-time.
+/// `estimated_tokens` rides along so the card can flag the WackChatter share
+/// instead of letting it pass as measured.
+#[derive(Debug, Serialize)]
+pub struct WrappedSummary {
+    pub period_days: i64,
+    pub total_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub active_days: i64,
+    pub window_days: i64,
+    pub current_streak: i64,
+    pub longest_streak: i64,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub top_models: Vec<WrappedModelRow>,
+    pub by_source: Vec<WrappedSourceRow>,
+    pub daily: Vec<HeatmapCell>,
+    pub peak_day: Option<String>,
+    pub peak_day_tokens: i64,
+    pub busiest_hour: Option<i64>,
+    /// Share of tokens written between 22:00 and 06:00 UTC, 0.0–1.0.
+    pub night_share: f64,
+    pub top_project: Option<String>,
+    pub top_project_tokens: i64,
+    pub estimated_tokens: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ModelStatsRow {
     pub model: String,
@@ -1712,6 +1759,157 @@ pub fn peak_days(store: &Store, days: i64) -> DbResult<Vec<PeakDayRow>> {
     Ok(rows)
 }
 
+/// The whole Wrapped card in one read: totals, top models, harness mix, daily
+/// totals for the waveform, streaks over the window's own dates, peak day,
+/// hour-of-day buckets, top project and the estimated share — all through the
+/// same alias-resolving, hidden-model-excluding lens as every other aggregate.
+pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
+    let cut = cutoff(days);
+    let w = format!("u.ts >= ?1 AND {H}", H = NOT_HIDDEN);
+    let conn = store.read_conn();
+
+    // One row of totals, always present (aggregates without GROUP BY never skip).
+    let (total_tokens, events, sessions, first_ts, last_ts, estimated_tokens) = conn
+        .query_row(
+            &format!(
+                "SELECT COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
+                        MIN(u.ts), MAX(u.ts),
+                        COALESCE(SUM(CASE WHEN u.estimated = 1 THEN {T} ELSE 0 END),0)
+                 FROM usage_event u WHERE {w}",
+                T = TOKENS
+            ),
+            [cut],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            },
+        )?;
+
+    let top_models = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*)
+             FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+             WHERE {w} GROUP BY 1 ORDER BY 2 DESC LIMIT 6",
+            T = TOKENS
+        ))?;
+        let rows = stmt
+            .query_map([cut], |r| {
+                Ok(WrappedModelRow { model: r.get(0)?, tokens: r.get(1)?, events: r.get(2)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    let by_source = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT u.source, COALESCE(SUM({T}),0)
+             FROM usage_event u WHERE {w} GROUP BY 1 ORDER BY 2 DESC",
+            T = TOKENS
+        ))?;
+        let rows = stmt
+            .query_map([cut], |r| {
+                Ok(WrappedSourceRow { source: r.get(0)?, tokens: r.get(1)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    // Daily totals double as the waveform and the streak/active-day input.
+    let daily: Vec<HeatmapCell> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT date(u.ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
+             FROM usage_event u WHERE {w} GROUP BY d ORDER BY d",
+            T = TOKENS
+        ))?;
+        let rows = stmt
+            .query_map([cut], |r| Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? }))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let (current_streak, longest_streak) = streaks(&daily.iter().map(|c| c.date.clone()).collect::<Vec<_>>());
+    let active_days = daily.len() as i64;
+
+    let (peak_day, peak_day_tokens) = daily
+        .iter()
+        .max_by_key(|c| c.tokens)
+        .map(|c| (Some(c.date.clone()), c.tokens))
+        .unwrap_or((None, 0));
+
+    // Hour-of-day buckets feed both the "power hour" and the night share.
+    let hours: Vec<HourRow> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT CAST(strftime('%H', u.ts/1000, 'unixepoch') AS INTEGER), COALESCE(SUM({T}),0)
+             FROM usage_event u WHERE {w} GROUP BY 1 ORDER BY 1",
+            T = TOKENS
+        ))?;
+        let rows = stmt
+            .query_map([cut], |r| Ok(HourRow { hour: r.get(0)?, tokens: r.get(1)? }))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let busiest_hour = hours.iter().max_by_key(|h| h.tokens).map(|h| h.hour);
+    let night_tokens: i64 = hours
+        .iter()
+        .filter(|h| h.hour >= 22 || h.hour < 6)
+        .map(|h| h.tokens)
+        .sum();
+    let night_share = if total_tokens > 0 {
+        night_tokens as f64 / total_tokens as f64
+    } else {
+        0.0
+    };
+
+    let (top_project, top_project_tokens) = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PROJECT}, COALESCE(SUM({T}),0)
+             FROM usage_event u LEFT JOIN project_alias pj ON pj.alias = u.project
+             WHERE {w} GROUP BY 1 ORDER BY 2 DESC LIMIT 1",
+            T = TOKENS
+        ))?;
+        let mut rows = stmt
+            .query_map([cut], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.pop().map(|(p, t)| (if p == "unknown" { None } else { Some(p) }, t)).unwrap_or((None, 0))
+    };
+
+    // For week/month the card compares against the requested window; all-time
+    // compares against first-event-to-today, so "X of Y days" reads honestly.
+    let window_days = if days > 0 {
+        days
+    } else {
+        first_ts.map(|t| (now_ms() - t) / 86_400_000 + 1).unwrap_or(0)
+    };
+
+    Ok(WrappedSummary {
+        period_days: days,
+        total_tokens,
+        events,
+        sessions,
+        active_days,
+        window_days,
+        current_streak,
+        longest_streak,
+        first_ts,
+        last_ts,
+        top_models,
+        by_source,
+        daily,
+        peak_day,
+        peak_day_tokens,
+        busiest_hour,
+        night_share,
+        top_project,
+        top_project_tokens,
+        estimated_tokens,
+    })
+}
+
 /// How much of a source's history is the reporting app's own guess.
 ///
 /// Only WackChatter can be anything but zero — every coding harness writes the provider's
@@ -2260,6 +2458,86 @@ mod tests {
         store.remove_aliases_for("GLM-5.3").unwrap();
         let stats = model_stats(&store, 3650).unwrap();
         assert_eq!(stats.len(), 2);
+    }
+
+    /// UTC midnight-relative timestamp `days_ago` back at hour `h`, so hour
+    /// buckets are deterministic no matter when the test runs.
+    fn ts_at(days_ago: i64, h: u8) -> i64 {
+        let d = time::OffsetDateTime::now_utc().date() - time::Duration::days(days_ago);
+        d.with_time(time::Time::from_hms(h, 30, 0).unwrap())
+            .assume_utc()
+            .unix_timestamp()
+            * 1000
+    }
+
+    fn wrapped_event(
+        id: &str,
+        model: &str,
+        ts: i64,
+        input: i64,
+        session: Option<&str>,
+        project: Option<&str>,
+        estimated: bool,
+    ) -> UsageEvent {
+        UsageEvent {
+            source_event_id: id.to_string(),
+            session_id: session.map(str::to_string),
+            project: project.map(str::to_string),
+            estimated,
+            ..test_event(model, ts, input)
+        }
+    }
+
+    #[test]
+    fn wrapped_summary_windows_totals_and_persona_inputs() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        store
+            .insert_events(&[
+                // yesterday 23:30 — the night owl event, and the only estimated one
+                wrapped_event("w1", "claude-sonnet-5", ts_at(1, 23), 100, Some("s1"), Some("/repo/x"), true),
+                wrapped_event("w2", "claude-sonnet-5", ts_at(1, 10), 50, Some("s2"), Some("/repo/y"), false),
+                wrapped_event("w3", "gpt-5.6", ts_at(1, 10), 30, Some("s1"), None, false),
+                // ten days back: outside every window below except all-time
+                wrapped_event("w4", "gpt-5.6", ts_at(10, 12), 999, Some("old"), None, false),
+            ])
+            .unwrap();
+
+        let s = wrapped_summary(&store, 2).unwrap();
+        assert_eq!((s.period_days, s.window_days), (2, 2));
+        assert_eq!(s.total_tokens, 180);
+        assert_eq!(s.events, 3);
+        assert_eq!(s.sessions, 2);
+        assert_eq!(s.active_days, 1);
+        assert_eq!((s.current_streak, s.longest_streak), (1, 1));
+        assert_eq!(s.top_models.len(), 2);
+        assert_eq!(s.top_models[0].model, "claude-sonnet-5");
+        assert_eq!((s.top_models[0].tokens, s.top_models[0].events), (150, 2));
+        assert_eq!(s.by_source.len(), 1);
+        assert_eq!(s.by_source[0].source, "zcode");
+        assert_eq!(s.by_source[0].tokens, 180);
+        let yesterday = shift_day(
+            &time::OffsetDateTime::now_utc()
+                .date()
+                .format(&format_description!("[year]-[month]-[day]"))
+                .unwrap(),
+            -1,
+        )
+        .unwrap();
+        assert_eq!(s.peak_day.as_deref(), Some(yesterday.as_str()));
+        assert_eq!(s.peak_day_tokens, 180);
+        assert_eq!(s.busiest_hour, Some(23));
+        assert!((s.night_share - 100.0 / 180.0).abs() < 1e-9);
+        assert_eq!(s.top_project.as_deref(), Some("/repo/x"));
+        assert_eq!(s.top_project_tokens, 100);
+        assert_eq!(s.estimated_tokens, 100);
+
+        // All-time folds the old event back in; the window spans to first use.
+        let all = wrapped_summary(&store, 0).unwrap();
+        assert_eq!(all.total_tokens, 1179);
+        assert_eq!(all.events, 4);
+        assert_eq!(all.top_models[0].model, "gpt-5.6");
+        assert_eq!(all.top_models[0].tokens, 1029);
+        assert!(all.window_days >= 10);
     }
 
     fn project_event(id: &str, project: &str, ts: i64, input: i64) -> UsageEvent {

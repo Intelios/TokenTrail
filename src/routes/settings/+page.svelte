@@ -3,6 +3,7 @@
   import { api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectAlias, type ProjectColor, type SourceStatus } from '$lib/api';
   import { basename, normalizeModelName, sourceSwatch } from '$lib/format';
   import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
+  import WrappedCard from '$lib/WrappedCard.svelte';
 
   type Tab = 'sources' | 'merges' | 'hidden' | 'pmerges' | 'projects' | 'export';
   let activeTab = $state<Tab>('sources');
@@ -893,6 +894,16 @@
             <code>{exportPath}</code>
           </div>
         {/if}
+
+        <div class="col-hd" style="margin-top:28px">
+          <h2>Usage Wrapped</h2>
+        </div>
+        <p class="note">
+          A shareable summary image of your usage — top models, harness mix and streaks in one
+          card, drawn in the Marathon style. Counts fold in self-reported estimates where a
+          source reports none; the card says so when they do.
+        </p>
+        <WrappedCard />
       </div>
 
       <div class="col">

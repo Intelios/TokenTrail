@@ -328,6 +328,43 @@ export interface PeakDayRow {
   cost_usd: number;
 }
 
+export interface WrappedModelRow {
+  model: string;
+  tokens: number;
+  events: number;
+}
+
+export interface WrappedSourceRow {
+  source: string;
+  tokens: number;
+}
+
+/** One trailing window's worth of the shareable "Usage Wrapped" card.
+ *  Deliberately carries no cost fields — the card is a token story. */
+export interface WrappedSummary {
+  period_days: number;
+  total_tokens: number;
+  events: number;
+  sessions: number;
+  active_days: number;
+  window_days: number;
+  current_streak: number;
+  longest_streak: number;
+  first_ts: number | null;
+  last_ts: number | null;
+  top_models: WrappedModelRow[];
+  by_source: WrappedSourceRow[];
+  daily: HeatmapCell[];
+  peak_day: string | null;
+  peak_day_tokens: number;
+  busiest_hour: number | null;
+  /** Share of tokens written 22:00–06:00 UTC, 0–1. */
+  night_share: number;
+  top_project: string | null;
+  top_project_tokens: number;
+  estimated_tokens: number;
+}
+
 export const api = {
   overview: () => invoke<Overview>('get_overview'),
   wackcodeDetail: (days: number) => invoke<WackCodeDetail>('get_wackcode_detail', { days }),
@@ -380,4 +417,8 @@ export const api = {
   familyStats: (days: number) => invoke<FamilyStatsRow[]>('get_family_stats', { days }),
   leaderboardEvents: (days: number) => invoke<LeaderboardEvent[]>('get_leaderboard_events', { days }),
   peakDays: (days: number) => invoke<PeakDayRow[]>('get_peak_days', { days }),
+  wrappedSummary: (days: number) => invoke<WrappedSummary>('get_wrapped_summary', { days }),
+  /** `path` comes from the save dialog; `dataB64` is the canvas PNG. */
+  exportWrappedPng: (path: string, dataB64: string) =>
+    invoke<string>('export_wrapped_png', { path, dataB64 }),
 };

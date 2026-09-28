@@ -357,6 +357,46 @@
               }
               case 'get_source_status':
                 return SOURCES.map((s, i) => ({ source: s, display: s.replace('_', ' '), path: '/home/dev/.config/' + s, found: i !== 5 }));
+              // Usage Wrapped mock: the same fixtures the other cards use,
+              // folded into one summary so ?mock can preview and export.
+              case 'get_wrapped_summary': {
+                const d = args.days ?? 30;
+                const scale = d === 0 ? 1 : d === 30 ? 0.5 : 0.15;
+                const cells = (d === 0 ? dailyRows(365) : dailyRows(d)).reduce((m, r) => {
+                  m[r.date] = (m[r.date] ?? 0) + r.tokens;
+                  return m;
+                }, {});
+                const daily = Object.entries(cells)
+                  .map(([date, tokens]) => ({ date, tokens }))
+                  .sort((a, b) => (a.date < b.date ? -1 : 1));
+                const peak = daily.reduce((a, c) => (c.tokens > a.tokens ? c : a), daily[0]);
+                return {
+                  period_days: d,
+                  total_tokens: Math.round(totalTokens * scale),
+                  events: Math.round(totalEvents * scale),
+                  sessions: Math.round(totalSessions * scale),
+                  active_days: Math.min(d || 214, daily.length),
+                  window_days: d || 420,
+                  current_streak: 12,
+                  longest_streak: Math.round(30 * scale) + 5,
+                  first_ts: Date.now() - 420 * 86400000,
+                  last_ts: Date.now(),
+                  top_models: MODELS.slice(0, 6).map((m) => ({ model: m[0], tokens: Math.round(m[1] * scale), events: Math.round(m[4] * scale) })),
+                  by_source: SOURCES.map((s, i) => ({ source: s, tokens: Math.round(totalTokens * scale * (WEIGHT[i] || 0.02)) })),
+                  daily,
+                  peak_day: peak.date,
+                  peak_day_tokens: Math.round(peak.tokens),
+                  busiest_hour: 22,
+                  night_share: 0.31,
+                  top_project: PROJECTS[0][0],
+                  top_project_tokens: Math.round(totalTokens * scale * PROJECTS[0][1]),
+                  estimated_tokens: Math.round(totalTokens * scale * 0.02),
+                };
+              }
+              case 'export_wrapped_png':
+                return args.path ?? '/home/dev/Pictures/tokentrail-wrapped.png';
+              case 'plugin:dialog|save':
+                return (args.options && args.options.defaultPath) || args.defaultPath || '/home/dev/Pictures/tokentrail-wrapped.png';
               // Only WackChatter ever reports estimates; the harnesses are all measured.
               case 'get_estimated_share':
                 return [{ source: 'wackchatter', events: 1400, estimated: 874 }];

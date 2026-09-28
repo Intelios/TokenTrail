@@ -23,6 +23,7 @@ const SYNC_INTERVAL: Duration = Duration::from_secs(30);
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let base_data_dir = app.path().data_dir()?;
             let new_data_dir = base_data_dir.join("TokenTrail");
@@ -123,7 +124,9 @@ pub fn run() {
             commands::export_data,
             commands::get_family_stats,
             commands::get_leaderboard_events,
-            commands::get_peak_days
+            commands::get_peak_days,
+            commands::get_wrapped_summary,
+            commands::export_wrapped_png
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

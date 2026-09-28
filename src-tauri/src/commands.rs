@@ -2,6 +2,7 @@ use crate::aggregate::{
     self, Achievement, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow, EstimatedShare,
     FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow,
     Overview, PeakDayRow, ProjectDetail, ProjectRow, WackCodeCallRow, WackCodeDetail,
+    WrappedSummary,
 };
 use crate::collectors;
 use crate::models::{IngestStats, ModelAlias, ProjectAlias, ProjectColor, SourceStatus};
@@ -394,6 +395,27 @@ pub fn export_data(
 #[tauri::command]
 pub fn get_family_stats(state: State<AppState>, days: i64) -> Result<Vec<FamilyStatsRow>, String> {
     aggregate::family_stats(&state.store, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_wrapped_summary(state: State<AppState>, days: i64) -> Result<WrappedSummary, String> {
+    aggregate::wrapped_summary(&state.store, days).map_err(|e| e.to_string())
+}
+
+/// Write a PNG the webview rendered to a path the user picked in the save
+/// dialog. A pure file write — the bytes are already final, so unlike
+/// `export_data` there is no store read and no lock to hold.
+#[tauri::command]
+pub fn export_wrapped_png(path: String, data_b64: String) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.as_bytes())
+        .map_err(|e| format!("decode png: {e}"))?;
+    if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return Err("not a PNG payload".into());
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("write png: {e}"))?;
+    Ok(path)
 }
 
 #[tauri::command]
