@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(collect(&store, &home).unwrap(), 7);
         assert_eq!(collect(&store, &home).unwrap(), 0);
         assert_eq!(count(&store), 7);
-        let rows = crate::aggregate::wackcode_usage(&store, 3650).unwrap();
+        let rows = crate::aggregate::wackcode_detail(&store, 3650).unwrap().by_purpose;
         assert_eq!(rows.len(), 7);
         assert_eq!(rows.iter().map(|r| r.tokens).sum::<i64>(), 140);
         // The provider split shows the display name from the ledger, not the raw id.
@@ -245,7 +245,7 @@ mod tests {
             .read_conn()
             .execute("INSERT INTO hidden_model VALUES ('claude-sonnet-4-5')", [])
             .unwrap();
-        assert!(crate::aggregate::wackcode_usage(&store, 3650).unwrap().is_empty());
+        assert!(crate::aggregate::wackcode_detail(&store, 3650).unwrap().by_purpose.is_empty());
     }
     #[test]
     fn waits_for_tail_and_handles_replacement_truncation_and_many_writers() {

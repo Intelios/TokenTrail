@@ -96,28 +96,6 @@ pub struct WackCodeDetail {
     pub sessions_list: Vec<WackCodeSessionRow>,
 }
 
-pub fn wackcode_usage(store: &Store, days: i64) -> DbResult<Vec<UsagePurposeRow>> {
-    let conn = store.read_conn();
-    let mut stmt = conn.prepare(&format!(
-        "SELECT COALESCE(purpose, 'chat'), COUNT(*), SUM({T}), SUM(cost_usd)
-         FROM usage_event u WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
-         GROUP BY purpose ORDER BY SUM({T}) DESC",
-        T = TOKENS,
-        H = NOT_HIDDEN
-    ))?;
-    let rows = stmt
-        .query_map([cutoff(days)], |r| {
-            Ok(UsagePurposeRow {
-                purpose: r.get(0)?,
-                requests: r.get(1)?,
-                tokens: r.get(2)?,
-                cost_usd: r.get(3)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
 pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
     let conn = store.read_conn();
     let cut = cutoff(days);
@@ -158,7 +136,28 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
         .query_row(&p50_sql, [cut], |r| r.get(0))
         .unwrap_or(0);
 
-    let by_purpose = wackcode_usage(store, days)?;
+    // by_purpose runs on the connection already held here — asking the store
+    // for a second one deadlocks a :memory: database (see read_conn).
+    let by_purpose = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT COALESCE(purpose, 'chat'), COUNT(*), SUM({T}), SUM(cost_usd)
+             FROM usage_event u WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
+             GROUP BY purpose ORDER BY SUM({T}) DESC",
+            T = TOKENS,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt
+            .query_map([cut], |r| {
+                Ok(UsagePurposeRow {
+                    purpose: r.get(0)?,
+                    requests: r.get(1)?,
+                    tokens: r.get(2)?,
+                    cost_usd: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
 
     let by_outcome = {
         let mut stmt = conn.prepare(
@@ -2331,9 +2330,10 @@ mod tests {
         assert_eq!(d.total_tokens, 155);
         assert_eq!(d.subagent_events, 1);
         assert_eq!(d.subagent_tokens, 50);
-        // avg (1000+4000+200+300)/4 = 1375; p50 of {200,300,1000,4000} = (300+1000)/2 → upper 1000
+        // avg (1000+4000+200+300)/4 = 1375; the median lands on the lower
+        // middle of {200,300,1000,4000} — element (n-1)/2 of the sorted run
         assert_eq!(d.avg_duration_ms, 1375);
-        assert_eq!(d.p50_duration_ms, 1000);
+        assert_eq!(d.p50_duration_ms, 300);
         let purposes: Vec<&str> = d.by_purpose.iter().map(|p| p.purpose.as_str()).collect();
         assert_eq!(purposes, vec!["chat", "subagent", "title"]);
         assert_eq!(
