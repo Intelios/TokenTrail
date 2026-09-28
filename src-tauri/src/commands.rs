@@ -20,6 +20,11 @@ pub fn get_overview(state: State<AppState>) -> Result<Overview, String> {
 }
 
 #[tauri::command]
+pub fn get_wackcode_usage(state: State<AppState>) -> Result<Vec<aggregate::UsagePurposeRow>, String> {
+    aggregate::wackcode_usage(&state.store).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn get_leaderboard_events(
     state: State<AppState>,
     days: i64,
@@ -286,7 +291,7 @@ pub fn export_data(
         .prepare(
             "SELECT source, ts, session_id, project, model, input_tokens, output_tokens,
                     reasoning_tokens, cache_read_tokens, cache_write_tokens, duration_ms, ttft_ms,
-                    is_subagent, cost_usd, estimated
+                    is_subagent, cost_usd, estimated, purpose, outcome, workspace, subagent_id
              FROM usage_event ORDER BY ts",
         )
         .map_err(|e| e.to_string())?;
@@ -308,6 +313,10 @@ pub fn export_data(
                 r.get::<_, i64>(12)?,
                 r.get::<_, Option<f64>>(13)?,
                 r.get::<_, i64>(14)?,
+                r.get::<_, Option<String>>(15)?,
+                r.get::<_, Option<String>>(16)?,
+                r.get::<_, Option<String>>(17)?,
+                r.get::<_, Option<String>>(18)?,
             ))
         })
         .map_err(|e| e.to_string())?
@@ -332,6 +341,7 @@ pub fn export_data(
                         "cache_write_tokens": r.9, "duration_ms": r.10, "ttft_ms": r.11,
                         "is_subagent": r.12 != 0, "cost_usd": r.13,
                         "estimated": r.14 != 0,
+                        "purpose": r.15, "outcome": r.16, "workspace": r.17, "subagent_id": r.18,
                     })
                 })
                 .collect();
@@ -347,13 +357,13 @@ pub fn export_data(
             };
             writeln!(
                 out,
-                "source,ts,session_id,project,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,cost_usd,estimated"
+                "source,ts,session_id,project,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,cost_usd,estimated,purpose,outcome,workspace,subagent_id"
             )
             .map_err(|e| e.to_string())?;
             for r in &rows {
                 writeln!(
                     out,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     esc(&r.0), r.1, esc(r.2.as_deref().unwrap_or("")),
                     esc(r.3.as_deref().unwrap_or("")), esc(r.4.as_deref().unwrap_or("")),
                     r.5, r.6, r.7.unwrap_or(0), r.8, r.9,
@@ -362,6 +372,8 @@ pub fn export_data(
                     r.12,
                     r.13.map(|c| c.to_string()).unwrap_or_default(),
                     r.14,
+                    esc(r.15.as_deref().unwrap_or("")), esc(r.16.as_deref().unwrap_or("")),
+                    esc(r.17.as_deref().unwrap_or("")), esc(r.18.as_deref().unwrap_or("")),
                 )
                 .map_err(|e| e.to_string())?;
             }

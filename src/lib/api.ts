@@ -8,6 +8,13 @@ export interface SourceTotals {
   cost_usd: number | null;
 }
 
+export interface UsagePurposeRow {
+  purpose: string;
+  requests: number;
+  tokens: number;
+  cost_usd: number | null;
+}
+
 export interface Overview {
   total_tokens: number;
   input_tokens: number;
@@ -254,6 +261,7 @@ export interface PeakDayRow {
 
 export const api = {
   overview: () => invoke<Overview>('get_overview'),
+  wackcodeUsage: () => invoke<UsagePurposeRow[]>('get_wackcode_usage'),
   daily: (days: number) => invoke<DailyRow[]>('get_daily', { days }),
   dailyByModel: (days: number) => invoke<DailyModelRow[]>('get_daily_by_model', { days }),
   dailyCache: (days: number) => invoke<DailyCacheRow[]>('get_daily_cache', { days }),

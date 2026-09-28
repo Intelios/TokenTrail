@@ -1,5 +1,14 @@
 <h1 align="center">TokenTrail</h1>
 
+**WackCode integration:** TokenTrail automatically imports WackCode's small local usage ledger,
+without reading its conversations. New usage is recorded by default in WackCode's
+Settings > Integrations, retained indefinitely, and imported every 30 seconds. The overview's
+**WackCode Usage** table breaks down chat, sub-agents, titles, compaction, branch summaries,
+goal verification, and commit messages. Costs are API-equivalent estimates, not subscription
+spend. Missing provider counts are not estimated. Historical chats from before recording
+was enabled are not imported. See the [usage contract](docs/wackcode-usage-v1.md) for the
+local path, metadata, privacy boundaries, and coverage limits.
+
 <p align="center">
   One dashboard for all the AI tokens you burn while coding.
 </p>

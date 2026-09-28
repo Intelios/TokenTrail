@@ -17,6 +17,7 @@ export const SOURCE_COLORS: Record<string, ChartColor> = {
   gemini: '#4796E3',
   devin: '#5E6AD2',
   wackchatter: '#c2ee4a',
+  wackcode: '#00c2c2',
 };
 
 export const SOURCE_LABEL: Record<string, string> = {
@@ -28,6 +29,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   antigravity: 'Antigravity',
   devin: 'Devin CLI',
   wackchatter: 'WackChatter',
+  wackcode: 'WackCode',
 };
 
 /// Default palette for models with no brand family — TokenTrail's own

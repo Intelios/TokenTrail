@@ -95,6 +95,7 @@ fn parse_log_line(line: &str) -> Option<UsageEvent> {
         ttft_ms: v.get("ttft_ms").and_then(|x| x.as_i64()).filter(|n| *n > 0),
         is_subagent: is_background(feature),
         estimated: v.get("estimated").and_then(|x| x.as_bool()).unwrap_or(true),
+        purpose: None, outcome: None, workspace: None, subagent_id: None,
     })
 }
 
@@ -336,6 +337,7 @@ fn from_swipe(row: SwipeRow, prefix: &str) -> Option<UsageEvent> {
         // The flag is only written from 2026-08 onwards. Its absence means the count came
         // from the app's own tokenizer, which is what every older row holds.
         estimated: !reported.unwrap_or(false),
+        purpose: None, outcome: None, workspace: None, subagent_id: None,
     })
 }
 

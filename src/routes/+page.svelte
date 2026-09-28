@@ -3,7 +3,7 @@
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
   import Spark from '$lib/Spark.svelte';
-  import { api, type DailyRow, type ModelRow, type Overview } from '$lib/api';
+  import { api, type DailyRow, type ModelRow, type Overview, type UsagePurposeRow } from '$lib/api';
   import {
     fmtCost,
     fmtTokens,
@@ -16,7 +16,9 @@
   import { dailyColumns, dailyOption, spineTotals, dailyRange } from '$lib/dailyColumns';
 
   // stack order matches the Marathon mockup legend
-  const SOURCE_ORDER = ['claude_code', 'codex', 'zcode', 'antigravity', 'devin', 'opencode', 'gemini', 'wackchatter'];
+  const SOURCE_ORDER = ['claude_code', 'codex', 'zcode', 'antigravity', 'devin', 'opencode', 'gemini', 'wackchatter', 'wackcode'];
+  const PURPOSE_LABELS: Record<string, string> = { chat: 'Chat', subagent: 'Sub-agents', title: 'Titles', compaction: 'Compaction', branch_summary: 'Branch summaries', goal_verification: 'Goal verification', commit_message: 'Commit messages' };
+  let purposes = $state<UsagePurposeRow[]>([]);
 
   let overview = $state<Overview | null>(null);
   let daily = $state<DailyRow[]>([]);
@@ -25,7 +27,8 @@
 
   async function load() {
     try {
-      const [o, d, m] = await Promise.all([api.overview(), api.daily(150), api.byModel(30)]);
+      const [o, d, m, p] = await Promise.all([api.overview(), api.daily(150), api.byModel(30), api.wackcodeUsage()]);
+      purposes = p;
       overview = o;
       daily = d;
       models = m.slice(0, 5);
@@ -218,7 +221,26 @@
   {/if}
 {/if}
 
+{#if purposes.length}
+  <section class="usage-breakdown up" aria-label="WackCode Usage">
+    <h2>WackCode Usage</h2>
+    <div class="usage-table-wrap"><table>
+      <thead><tr><th scope="col">Purpose</th><th scope="col">Requests</th><th scope="col">Tokens</th><th scope="col">API-equivalent estimate</th></tr></thead>
+      <tbody>{#each purposes as row}<tr>
+        <th scope="row">{PURPOSE_LABELS[row.purpose] ?? row.purpose}</th>
+        <td>{row.requests.toLocaleString()}</td><td>{fmtTokens(row.tokens)}</td><td>{fmtCost(row.cost_usd)}</td>
+      </tr>{/each}</tbody>
+    </table></div>
+  </section>
+{/if}
+
 <style>
+  .usage-breakdown { padding: 24px 30px; border-top: 2px solid var(--ink); }
+  .usage-breakdown h2 { margin: 0 0 16px; font-size: 24px; }
+  .usage-table-wrap { overflow-x: auto; }
+  .usage-breakdown table { width: 100%; border-collapse: collapse; }
+  .usage-breakdown th, .usage-breakdown td { padding: 12px 8px; border-bottom: 1px solid var(--ink); text-align: right; }
+  .usage-breakdown th:first-child { text-align: left; }
   .band {
     display: grid;
     grid-template-columns: 1.06fr 0.94fr;

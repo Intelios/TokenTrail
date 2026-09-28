@@ -11,6 +11,7 @@ pub enum Source {
     Antigravity,
     Devin,
     WackChatter,
+    WackCode,
 }
 
 impl Source {
@@ -24,6 +25,7 @@ impl Source {
             Source::Antigravity => "antigravity",
             Source::Devin => "devin",
             Source::WackChatter => "wackchatter",
+            Source::WackCode => "wackcode",
         }
     }
 
@@ -37,6 +39,7 @@ impl Source {
             Source::Antigravity => "Antigravity",
             Source::Devin => "Devin CLI",
             Source::WackChatter => "WackChatter",
+            Source::WackCode => "WackCode",
         }
     }
 
@@ -51,6 +54,7 @@ impl Source {
             "antigravity" => Some(Source::Antigravity),
             "devin" => Some(Source::Devin),
             "wackchatter" => Some(Source::WackChatter),
+            "wackcode" => Some(Source::WackCode),
             _ => None,
         }
     }
@@ -82,6 +86,10 @@ pub struct UsageEvent {
     /// a count that was billed are different claims, and merging them would quietly turn
     /// one into the other.
     pub estimated: bool,
+    pub purpose: Option<String>,
+    pub outcome: Option<String>,
+    pub workspace: Option<String>,
+    pub subagent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

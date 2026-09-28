@@ -130,6 +130,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 ttft_ms: None,
                 is_subagent: false,
                 estimated: false,
+                purpose: None, outcome: None, workspace: None, subagent_id: None,
             });
         }
         processed += store

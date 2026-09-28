@@ -5,6 +5,7 @@ pub mod devin;
 pub mod gemini;
 pub mod opencode;
 pub mod wackchatter;
+pub mod wackcode;
 pub mod zcode;
 
 use crate::models::{IngestStats, Source, SourceStatus};
@@ -25,6 +26,7 @@ pub fn sync_all(store: &Store, home: &Path) -> Vec<IngestStats> {
         ("antigravity", antigravity::collect),
         ("devin", devin::collect),
         ("wackchatter", wackchatter::collect),
+        ("wackcode", wackcode::collect),
     ];
     runs.into_iter()
         .map(|(name, f)| match f(store, home) {
@@ -45,6 +47,7 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
         (Source::Devin, home.join(".local/share/devin/cli/sessions.db")),
         // The log, not the library: the library moves, and this path never does.
         (Source::WackChatter, home.join(".wackchatter/usage.jsonl")),
+        (Source::WackCode, wackcode::root(home)),
     ];
     paths
         .into_iter()

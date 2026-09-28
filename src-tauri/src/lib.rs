@@ -88,6 +88,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::sync_now,
             commands::get_overview,
+            commands::get_wackcode_usage,
             commands::get_daily,
             commands::get_daily_by_model,
             commands::get_daily_cache,

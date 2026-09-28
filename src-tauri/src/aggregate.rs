@@ -11,6 +11,27 @@ use crate::store::Store;
 /// are a subset of output on both Anthropic and OpenAI and never added.
 const TOKENS: &str = "(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)";
 
+#[derive(Debug, Serialize)]
+pub struct UsagePurposeRow {
+    pub purpose: String,
+    pub requests: i64,
+    pub tokens: i64,
+    pub cost_usd: Option<f64>,
+}
+
+pub fn wackcode_usage(store: &Store) -> rusqlite::Result<Vec<UsagePurposeRow>> {
+    let conn = store.read_conn();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT COALESCE(purpose, 'chat'), COUNT(*), SUM({TOKENS}), SUM(cost_usd)
+         FROM usage_event u WHERE source='wackcode' AND {NOT_HIDDEN}
+         GROUP BY purpose ORDER BY SUM({TOKENS}) DESC"
+    ))?;
+    let rows = stmt.query_map([], |r| Ok(UsagePurposeRow {
+        purpose: r.get(0)?, requests: r.get(1)?, tokens: r.get(2)?, cost_usd: r.get(3)?,
+    }))?.collect();
+    rows
+}
+
 /// Rows whose model is user-hidden are excluded from every aggregate. A row is
 /// hidden when its model name is hidden, or when it aliases to a hidden
 /// canonical name (hiding the display name hides all merged variants). The
@@ -1885,6 +1906,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
+            purpose: None, outcome: None, workspace: None, subagent_id: None,
         }
     }
 
@@ -3141,6 +3163,4 @@ mod tests {
         assert_eq!(active_days_all, 2);
     }
 }
-
-
 
