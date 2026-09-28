@@ -88,6 +88,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 session_id: (!sid.is_empty()).then_some(sid),
                 project: meta.cwd.clone(),
                 provider: ns.or_else(|| Some("openai".into())),
+                provider_name: None,
                 model,
                 input_tokens: input,
                 output_tokens: out,

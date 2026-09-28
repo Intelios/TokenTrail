@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS usage_event (
     session_id TEXT,
     project TEXT,
     provider TEXT,
+    provider_name TEXT,
     model TEXT,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -94,7 +95,7 @@ impl Store {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
-        for column in ["purpose", "outcome", "workspace", "subagent_id"] {
+        for column in ["purpose", "outcome", "workspace", "subagent_id", "provider_name"] {
             let exists = conn.prepare("SELECT name FROM pragma_table_info('usage_event') WHERE name=?1")?
                 .exists([column])?;
             if !exists { conn.execute(&format!("ALTER TABLE usage_event ADD COLUMN {column} TEXT"), [])?; }
@@ -174,13 +175,13 @@ impl Store {
         let mut n = 0;
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO usage_event (source, source_event_id, ts, session_id, project, provider, model,
+                "INSERT INTO usage_event (source, source_event_id, ts, session_id, project, provider, provider_name, model,
                     input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens,
                     duration_ms, ttft_ms, is_subagent, cost_usd, estimated, purpose, outcome, workspace, subagent_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
                  ON CONFLICT(source, source_event_id) DO UPDATE SET
                     ts=excluded.ts, session_id=excluded.session_id, project=excluded.project,
-                    provider=excluded.provider, model=excluded.model,
+                    provider=excluded.provider, provider_name=excluded.provider_name, model=excluded.model,
                     input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
                     reasoning_tokens=excluded.reasoning_tokens,
                     cache_read_tokens=excluded.cache_read_tokens, cache_write_tokens=excluded.cache_write_tokens,
@@ -198,6 +199,7 @@ impl Store {
                     e.session_id,
                     e.project,
                     e.provider,
+                    e.provider_name,
                     e.model,
                     e.input_tokens,
                     e.output_tokens,
@@ -878,6 +880,7 @@ mod tests {
             session_id: None,
             project: project.map(String::from),
             provider: None,
+            provider_name: None,
             model: Some("gpt-5".to_string()),
             input_tokens: 1,
             output_tokens: 1,
@@ -1104,6 +1107,7 @@ mod tests {
             session_id: None,
             project: None,
             provider: None,
+            provider_name: None,
             model: Some("claude-sonnet-4.5".into()),
             input_tokens: 1_000_000,
             output_tokens: 1_000_000,
@@ -1209,6 +1213,7 @@ mod tests {
             session_id: None,
             project: None,
             provider: None,
+            provider_name: None,
             model: Some("gpt-4o".into()),
             input_tokens: 100,
             output_tokens: 100,
@@ -1228,6 +1233,7 @@ mod tests {
             session_id: None,
             project: None,
             provider: None,
+            provider_name: None,
             model: Some("gpt-4o-2024-08-06".into()),
             input_tokens: 100,
             output_tokens: 100,
@@ -1247,6 +1253,7 @@ mod tests {
             session_id: None,
             project: None,
             provider: None,
+            provider_name: None,
             model: Some("gpt-4o".into()),
             input_tokens: 100,
             output_tokens: 100,
@@ -1266,6 +1273,7 @@ mod tests {
             session_id: None,
             project: None,
             provider: None,
+            provider_name: None,
             model: None,
             input_tokens: 100,
             output_tokens: 100,

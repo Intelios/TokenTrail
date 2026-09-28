@@ -70,6 +70,10 @@ pub struct UsageEvent {
     pub session_id: Option<String>,
     pub project: Option<String>,
     pub provider: Option<String>,
+    /// The provider's display name at record time (WackCode-only: custom
+    /// connections have uuid ids, so the ledger also writes what the user
+    /// typed). NULL for every other source and for old WackCode rows.
+    pub provider_name: Option<String>,
     pub model: Option<String>,
     pub input_tokens: i64,
     pub output_tokens: i64,

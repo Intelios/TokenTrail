@@ -166,6 +166,7 @@ fn from_message(
         session_id: Some(session_id.to_string()),
         project: cwd,
         provider: None,
+        provider_name: None,
         model,
         input_tokens: input,
         output_tokens: output,

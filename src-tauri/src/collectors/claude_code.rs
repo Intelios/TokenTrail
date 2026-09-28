@@ -63,6 +63,7 @@ fn parse_line(line: &str, is_sub_path: bool) -> Option<UsageEvent> {
         session_id: v.get("sessionId").and_then(|x| x.as_str()).map(String::from),
         project: v.get("cwd").and_then(|x| x.as_str()).map(String::from),
         provider: Some("anthropic".into()),
+        provider_name: None,
         model: msg.get("model").and_then(|x| x.as_str()).map(clean_model),
         input_tokens: input,
         output_tokens: output,

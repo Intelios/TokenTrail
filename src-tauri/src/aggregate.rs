@@ -198,8 +198,10 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
         T = TOKENS,
         H = NOT_HIDDEN
     ))?;
+    // Custom WackCode connections have uuid ids; the ledger also writes the
+    // display name the user typed, so prefer it and fall back to the raw id.
     let by_provider = breakdown(format!(
-        "SELECT COALESCE(u.provider, 'unknown'), COUNT(*), COALESCE(SUM({T}),0), SUM(u.cost_usd)
+        "SELECT COALESCE(u.provider_name, u.provider, 'unknown'), COUNT(*), COALESCE(SUM({T}),0), SUM(u.cost_usd)
          FROM usage_event u
          WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
          GROUP BY 1 ORDER BY 3 DESC",
@@ -2206,6 +2208,7 @@ mod tests {
             session_id: None,
             project: None,
             provider: None,
+            provider_name: None,
             model: Some(model.to_string()),
             input_tokens: input,
             output_tokens: 0,
@@ -2277,6 +2280,7 @@ mod tests {
             session_id: Some("chat-1".to_string()),
             project: Some("/repo".to_string()),
             provider: Some("anthropic".to_string()),
+            provider_name: None,
             model: Some("claude-sonnet-4-5".to_string()),
             input_tokens: input,
             output_tokens: 0,

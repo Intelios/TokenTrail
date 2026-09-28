@@ -34,6 +34,8 @@ struct Record {
     project: Option<String>,
     workspace: Option<String>,
     provider: String,
+    #[serde(default)]
+    provider_name: Option<String>,
     model: String,
     purpose: String,
     subagent_id: Option<String>,
@@ -79,6 +81,7 @@ fn parse(line: &str) -> Result<Option<UsageEvent>, String> {
         session_id: Some(r.session_id),
         project: r.project,
         provider: Some(r.provider),
+        provider_name: r.provider_name,
         model: Some(r.model),
         input_tokens: t.input,
         output_tokens: t.output,
@@ -225,6 +228,10 @@ mod tests {
         let rows = crate::aggregate::wackcode_usage(&store, 3650).unwrap();
         assert_eq!(rows.len(), 7);
         assert_eq!(rows.iter().map(|r| r.tokens).sum::<i64>(), 140);
+        // The provider split shows the display name from the ledger, not the raw id.
+        let detail = crate::aggregate::wackcode_detail(&store, 3650).unwrap();
+        assert_eq!(detail.by_provider.len(), 1);
+        assert_eq!(detail.by_provider[0].name, "Fixture Provider");
         let children: i64 = store
             .read_conn()
             .query_row(
@@ -286,7 +293,7 @@ mod tests {
         store
             .insert_events(&[parse(FIXTURE.lines().next().unwrap()).unwrap().unwrap()])
             .unwrap();
-        for col in ["purpose", "outcome", "workspace", "subagent_id"] {
+        for col in ["purpose", "outcome", "workspace", "subagent_id", "provider_name"] {
             store
                 .read_conn()
                 .execute(&format!("ALTER TABLE usage_event DROP COLUMN {col}"), [])

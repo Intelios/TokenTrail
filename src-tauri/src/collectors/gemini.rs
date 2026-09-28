@@ -91,6 +91,7 @@ fn parse_message(v: &Value, fallback_ts: Option<i64>) -> Option<UsageEvent> {
         session_id: (!session.is_empty()).then(|| session.to_string()),
         project: None,
         provider: Some("google".into()),
+        provider_name: None,
         model: v.get("model").and_then(|x| x.as_str()).map(String::from),
         input_tokens: input,
         output_tokens: output,

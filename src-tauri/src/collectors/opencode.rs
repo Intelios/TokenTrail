@@ -112,6 +112,7 @@ fn from_message(
         session_id: session_id.clone(),
         project: directory,
         provider: v.get("providerID").and_then(|x| x.as_str()).map(String::from),
+        provider_name: None,
         model,
         input_tokens: input,
         output_tokens: output,

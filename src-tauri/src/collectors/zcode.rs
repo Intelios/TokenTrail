@@ -37,6 +37,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 session_id: r.get::<_, Option<String>>(1)?,
                 project: r.get::<_, Option<String>>(2)?,
                 provider: None,
+                provider_name: None,
                 model: r.get::<_, Option<String>>(3)?,
                 ts: r.get::<_, i64>(4)?,
                 duration_ms: r.get::<_, Option<i64>>(5)?,

@@ -142,6 +142,7 @@ mod tests {
             session_id: None,
             project: None,
             provider: None,
+            provider_name: None,
             model: model.map(String::from),
             input_tokens: input,
             output_tokens: out,

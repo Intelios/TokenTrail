@@ -83,6 +83,7 @@ fn parse_log_line(line: &str) -> Option<UsageEvent> {
         session_id: str_of("session_id"),
         project: project_for(v.get("character").and_then(|x| x.as_str())),
         provider: str_of("provider"),
+        provider_name: None,
         model: v.get("model").and_then(|x| x.as_str()).map(clean_model),
         input_tokens: input,
         output_tokens: output,
@@ -323,6 +324,7 @@ fn from_swipe(row: SwipeRow, prefix: &str) -> Option<UsageEvent> {
         session_id: Some(parent),
         project: project_for(character.as_deref()),
         provider: api,
+        provider_name: None,
         model: model.as_deref().map(clean_model),
         // Prompt tokens are only ever written when the provider reported them, so there
         // is no cached figure to subtract here — the client already did it.

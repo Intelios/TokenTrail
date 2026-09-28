@@ -120,6 +120,7 @@ pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
                 session_id: Some(uuid.to_string()),
                 project: project.clone(),
                 provider: provider_for(g.model.as_deref()),
+                provider_name: None,
                 model: g.model,
                 input_tokens: g.input,
                 output_tokens: g.output_total - thinking,
