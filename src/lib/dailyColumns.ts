@@ -115,7 +115,21 @@ export function dailyRange(cols: Column[]): string {
   return span(cols[0].start, last.start + (last.kind === 'quiet' ? (last.days - 1) * DAY : 0));
 }
 
-export function dailyOption(cols: Column[], sources: string[]): EChartsOption | undefined {
+/**
+ * Per-series display overrides for `dailyOption`. The default paints sources;
+ * pass these when the stacked key is something else (the WackCode page stacks
+ * purposes) so names and colors match the rest of the page.
+ */
+export interface DailySeriesStyle {
+  label?: (key: string) => string;
+  color?: (key: string) => ChartColor;
+}
+
+export function dailyOption(
+  cols: Column[],
+  sources: string[],
+  style: DailySeriesStyle = {},
+): EChartsOption | undefined {
   if (!cols.length) return undefined;
 
   const cats = cols.map((c, i) => (c.kind === 'day' ? iso(c.start) : `quiet-${i}`));
@@ -184,9 +198,9 @@ export function dailyOption(cols: Column[], sources: string[]): EChartsOption | 
     series: [
       ...sources.map((s, i) =>
         stackedColumn(
-          sourceLabel(s),
+          style.label ? style.label(s) : sourceLabel(s),
           cols.map((c) => (c.kind === 'day' ? c.values[i] || null : null)),
-          sourceColor(s),
+          style.color ? style.color(s) : sourceColor(s),
           { delay: i * 60 },
         ),
       ),

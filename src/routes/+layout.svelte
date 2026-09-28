@@ -20,6 +20,7 @@
     { href: '/trends', label: 'Trends' },
     { href: '/projects', label: 'Projects' },
     { href: '/activity', label: 'Activity' },
+    { href: '/wackcode', label: 'WackCode' },
     { href: '/settings', label: 'Settings' },
   ];
 

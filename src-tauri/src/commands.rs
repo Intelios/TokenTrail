@@ -1,7 +1,7 @@
 use crate::aggregate::{
     self, Achievement, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow, EstimatedShare,
     FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow,
-    Overview, PeakDayRow, ProjectDetail, ProjectRow,
+    Overview, PeakDayRow, ProjectDetail, ProjectRow, WackCodeCallRow, WackCodeDetail,
 };
 use crate::collectors;
 use crate::models::{IngestStats, ModelAlias, ProjectAlias, ProjectColor, SourceStatus};
@@ -20,8 +20,16 @@ pub fn get_overview(state: State<AppState>) -> Result<Overview, String> {
 }
 
 #[tauri::command]
-pub fn get_wackcode_usage(state: State<AppState>) -> Result<Vec<aggregate::UsagePurposeRow>, String> {
-    aggregate::wackcode_usage(&state.store).map_err(|e| e.to_string())
+pub fn get_wackcode_detail(state: State<AppState>, days: i64) -> Result<WackCodeDetail, String> {
+    aggregate::wackcode_detail(&state.store, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_wackcode_session_calls(
+    state: State<AppState>,
+    session_id: String,
+) -> Result<Vec<WackCodeCallRow>, String> {
+    aggregate::wackcode_session_calls(&state.store, &session_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

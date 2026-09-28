@@ -58,6 +58,118 @@
           // in-memory project colors so the picker round-trips in ?mock mode
           const PROJECT_COLORS = {};
 
+          // ── WackCode synthetic ledger ──────────────────────────────────
+          // Deterministic per seed: chats, their call timelines and every
+          // aggregate are derived from the same rows the "backend" would store.
+          const WC_PURPOSES = [
+            ['chat', 0.62], ['subagent', 0.21], ['compaction', 0.05], ['title', 0.05],
+            ['branch_summary', 0.03], ['goal_verification', 0.025], ['commit_message', 0.015],
+          ];
+          const WC_MODELS = [['claude-sonnet-4-5', 0.55], ['glm-5.3', 0.25], ['gpt-5-codex', 0.2]];
+          const WC_PROJECTS = ['~/dev/TokenTrail', '~/dev/aurora-api', '~/work/billing-svc', '~/notes/scripts'];
+          const wcPick = (r, pairs) => {
+            const x = r();
+            let acc = 0;
+            for (const [v, w] of pairs) { acc += w; if (x < acc) return v; }
+            return pairs[pairs.length - 1][0];
+          };
+          const WC_SESSIONS = (() => {
+            let s = 4242;
+            const r = () => ((s = (s * 1664525 + 1013904223) >>> 0), s / 4294967296);
+            const hex = (n) => Array.from({ length: n }, () => '0123456789abcdef'[Math.floor(r() * 16)]).join('');
+            return Array.from({ length: 26 }, (_, i) => {
+              const id = hex(24) + i; // uniqueness guard on top of the rng
+              const project = WC_PROJECTS[Math.floor(r() * WC_PROJECTS.length)];
+              const lastTs = Date.now() - Math.floor(r() * 150) * 86400000 - Math.floor(r() * 86400000);
+              const spanMs = (2 + r() * 26) * 3600000;
+              const nCalls = 5 + Math.floor(r() * 34);
+              let cs = 9000 + i * 131;
+              const cr = () => ((cs = (cs * 1664525 + 1013904223) >>> 0), cs / 4294967296);
+              const calls = Array.from({ length: nCalls }, (_, k) => {
+                const purpose = wcPick(cr, WC_PURPOSES);
+                const model = wcPick(cr, WC_MODELS);
+                const big = purpose === 'chat' || purpose === 'subagent';
+                const isSub = purpose === 'subagent' || (purpose !== 'chat' && cr() < 0.15);
+                const roll = cr();
+                const outcome = roll < 0.93 ? 'completed' : roll < 0.97 ? 'failed' : 'cancelled';
+                const tokens = Math.round(big ? 18000 + cr() * 102000 : 200 + cr() * 2800);
+                return {
+                  ts: Math.round(lastTs - spanMs + (k / nCalls) * spanMs + cr() * 900000),
+                  purpose,
+                  subagent_id: isSub ? hex(8) : null,
+                  model,
+                  outcome,
+                  tokens,
+                  duration_ms: Math.round(big ? 3000 + cr() * 17000 : 300 + cr() * 1700),
+                };
+              });
+              calls.sort((a, b) => a.ts - b.ts);
+              return { id, project, calls };
+            });
+          })();
+          function wcDetail(days) {
+            const cut = days >= 3650 ? 0 : Date.now() - days * 86400000;
+            const rows = WC_SESSIONS.flatMap((s) => s.calls.filter((c) => c.ts >= cut).map((c) => ({ ...c, session: s })));
+            if (!rows.length) {
+              return {
+                total_tokens: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+                events: 0, sessions: 0, active_days: 0, cost_usd: 0, first_ts: null, last_ts: null,
+                subagent_events: 0, subagent_tokens: 0, avg_duration_ms: 0, p50_duration_ms: 0,
+                by_purpose: [], by_outcome: [], by_model: [], by_provider: [], by_project: [], daily: [], sessions_list: [],
+              };
+            }
+            const total = rows.reduce((a, c) => a + c.tokens, 0);
+            const durations = rows.map((c) => c.duration_ms).sort((a, b) => a - b);
+            const group = (keyFn) => {
+              const m = new Map();
+              for (const c of rows) {
+                const k = keyFn(c);
+                const g = m.get(k) ?? { name: k, events: 0, tokens: 0, cost_usd: 0 };
+                g.events++; g.tokens += c.tokens; g.cost_usd += c.tokens * 0.000012;
+                m.set(k, g);
+              }
+              return [...m.values()].sort((a, b) => b.tokens - a.tokens);
+            };
+            const outcomes = ['completed', 'failed', 'cancelled'].map((o) => ({ outcome: o, events: rows.filter((c) => c.outcome === o).length })).filter((o) => o.events);
+            const subs = rows.filter((c) => c.subagent_id);
+            return {
+              total_tokens: total,
+              input_tokens: Math.round(total * 0.28), output_tokens: Math.round(total * 0.17),
+              cache_read_tokens: Math.round(total * 1.4), cache_write_tokens: Math.round(total * 0.3),
+              events: rows.length,
+              sessions: new Set(rows.map((c) => c.session.id)).size,
+              active_days: new Set(rows.map((c) => new Date(c.ts).toISOString().slice(0, 10))).size,
+              cost_usd: total * 0.000012,
+              first_ts: Math.min(...rows.map((c) => c.ts)), last_ts: Math.max(...rows.map((c) => c.ts)),
+              subagent_events: subs.length, subagent_tokens: subs.reduce((a, c) => a + c.tokens, 0),
+              avg_duration_ms: Math.round(durations.reduce((a, b) => a + b, 0) / durations.length),
+              p50_duration_ms: durations[Math.floor((durations.length - 1) / 2)],
+              by_purpose: group((c) => c.purpose).map((g) => ({ purpose: g.name, requests: g.events, tokens: g.tokens, cost_usd: g.cost_usd })),
+              by_outcome: outcomes,
+              by_model: group((c) => c.model),
+              by_provider: group((c) => (c.model.startsWith('claude') ? 'anthropic' : c.model.startsWith('glm') ? 'zai' : 'openai')),
+              by_project: group((c) => c.session.project),
+              daily: Object.entries(rows.reduce((m, c) => {
+                const k = new Date(c.ts).toISOString().slice(0, 10) + '|' + c.purpose;
+                m[k] = (m[k] ?? 0) + c.tokens;
+                return m;
+              }, {})).map(([k, tokens]) => { const [date, purpose] = k.split('|'); return { date, purpose, tokens }; }),
+              sessions_list: WC_SESSIONS.filter((s) => s.calls.some((c) => c.ts >= cut)).map((s) => {
+                const cs = s.calls.filter((c) => c.ts >= cut);
+                const done = cs.filter((c) => c.outcome === 'completed').length;
+                return {
+                  session_id: s.id, project: s.project,
+                  models: [...new Set(cs.map((c) => c.model))].sort(),
+                  events: cs.length, subagents: cs.filter((c) => c.subagent_id).length,
+                  tokens: cs.reduce((a, c) => a + c.tokens, 0), cost_usd: cs.reduce((a, c) => a + c.tokens, 0) * 0.000012,
+                  completed: done, failed: cs.filter((c) => c.outcome === 'failed').length,
+                  cancelled: cs.filter((c) => c.outcome === 'cancelled').length,
+                  first_ts: cs[0].ts, last_ts: cs[cs.length - 1].ts,
+                };
+              }).sort((a, b) => b.last_ts - a.last_ts),
+            };
+          }
+
           const totalTokens = MODELS.reduce((s, m) => s + m[1], 0);
           const totalCost = MODELS.reduce((s, m) => s + m[3], 0);
           const totalEvents = MODELS.reduce((s, m) => s + m[4], 0);
@@ -65,14 +177,9 @@
 
           function mockData(cmd, args) {
             switch (cmd) {
-              case 'get_wackcode_usage': return [
-                { purpose: 'chat', requests: 810, tokens: 8400000, cost_usd: 18.2 },
-                { purpose: 'subagent', requests: 120, tokens: 1900000, cost_usd: 4.5 },
-                { purpose: 'compaction', requests: 18, tokens: 310000, cost_usd: 0.9 },
-                { purpose: 'title', requests: 90, tokens: 27000, cost_usd: 0.02 },
-                { purpose: 'goal_verification', requests: 12, tokens: 21000, cost_usd: 0.04 },
-                { purpose: 'commit_message', requests: 20, tokens: 14000, cost_usd: 0.01 }
-              ];
+              case 'get_wackcode_detail': return wcDetail(args.days ?? 90);
+              case 'get_wackcode_session_calls':
+                return (WC_SESSIONS.find((s) => s.id === args.sessionId) ?? { calls: [] }).calls;
               case 'get_overview':
                 return {
                   total_tokens: totalTokens, input_tokens: totalTokens * 0.62, output_tokens: totalTokens * 0.31,

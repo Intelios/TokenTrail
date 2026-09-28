@@ -15,6 +15,75 @@ export interface UsagePurposeRow {
   cost_usd: number | null;
 }
 
+export interface WackCodeOutcomeRow {
+  outcome: string;
+  events: number;
+}
+
+export interface WackCodeBreakdownRow {
+  name: string;
+  events: number;
+  tokens: number;
+  cost_usd: number | null;
+}
+
+export interface DailyPurposeRow {
+  date: string;
+  purpose: string;
+  tokens: number;
+}
+
+export interface WackCodeSessionRow {
+  session_id: string;
+  project: string;
+  models: string[];
+  events: number;
+  subagents: number;
+  tokens: number;
+  cost_usd: number | null;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  first_ts: number;
+  last_ts: number;
+}
+
+/** One WackCode model call inside a chat, in timeline order. */
+export interface WackCodeCallRow {
+  ts: number;
+  purpose: string;
+  subagent_id: string | null;
+  model: string;
+  outcome: string;
+  tokens: number;
+  duration_ms: number;
+}
+
+export interface WackCodeDetail {
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+  sessions: number;
+  active_days: number;
+  cost_usd: number | null;
+  first_ts: number | null;
+  last_ts: number | null;
+  subagent_events: number;
+  subagent_tokens: number;
+  avg_duration_ms: number;
+  p50_duration_ms: number;
+  by_purpose: UsagePurposeRow[];
+  by_outcome: WackCodeOutcomeRow[];
+  by_model: WackCodeBreakdownRow[];
+  by_provider: WackCodeBreakdownRow[];
+  by_project: WackCodeBreakdownRow[];
+  daily: DailyPurposeRow[];
+  sessions_list: WackCodeSessionRow[];
+}
+
 export interface Overview {
   total_tokens: number;
   input_tokens: number;
@@ -261,7 +330,10 @@ export interface PeakDayRow {
 
 export const api = {
   overview: () => invoke<Overview>('get_overview'),
-  wackcodeUsage: () => invoke<UsagePurposeRow[]>('get_wackcode_usage'),
+  wackcodeDetail: (days: number) => invoke<WackCodeDetail>('get_wackcode_detail', { days }),
+  /** The whole life of one chat, regardless of the page's range filter. */
+  wackcodeSessionCalls: (sessionId: string) =>
+    invoke<WackCodeCallRow[]>('get_wackcode_session_calls', { sessionId }),
   daily: (days: number) => invoke<DailyRow[]>('get_daily', { days }),
   dailyByModel: (days: number) => invoke<DailyModelRow[]>('get_daily_by_model', { days }),
   dailyCache: (days: number) => invoke<DailyCacheRow[]>('get_daily_cache', { days }),
