@@ -1,0 +1,87 @@
+# Builds the macOS (Apple Silicon) and Windows installers and attaches them
+# to a GitHub release, then rebuilds intelios.github.io so the downloads show up.
+#
+# Opt-in per release: put <!-- build --> anywhere in the release notes before
+# publishing. To build a release that's already out, run this workflow from the
+# Actions tab and enter its tag.
+
+name: Build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build (e.g. 1.11)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.release.body, '<!-- build -->')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Ad-hoc signed: not notarized, but macOS lets users open it from
+      # System Settings › Privacy & Security instead of calling it damaged.
+      - name: Build macOS disk image
+        if: runner.os == 'macOS'
+        run: bun run tauri build --bundles dmg --ci --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        run: bun run tauri build --bundles nsis --ci
+
+      - name: Attach to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            src=$(ls src-tauri/target/release/bundle/dmg/*.dmg)
+            dest="TokenTrail-$TAG-macos.dmg"
+          else
+            src=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe)
+            dest="TokenTrail-$TAG-windows-setup.exe"
+          fi
+          cp "$src" "$dest"
+          gh release upload "$TAG" "$dest" --clobber -R "$GITHUB_REPOSITORY"
+
+  rebuild-site:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger website rebuild
+        run: |
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $SITE_REBUILD_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/Intelios/Intelios.github.io/dispatches \
+            -d '{"event_type":"rebuild"}'
+        env:
+          SITE_REBUILD_TOKEN: ${{ secrets.SITE_REBUILD_TOKEN }}
