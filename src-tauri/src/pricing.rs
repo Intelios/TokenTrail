@@ -346,6 +346,28 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_55_prices() {
+        // Claude Sonnet 5.5 keeps Sonnet 5's $2/$10 pricing with the
+        // standard 10% cache hit ($0.20) and 1.25x five-minute cache write
+        // ($2.50) — the 0.025x/0.05x cache-hit discounts are limited to
+        // Fable/Mythos 5.1 and Opus 5.5. Both the hyphenated API id and the
+        // dot spelling resolve; their prefixes sit above claude-sonnet-5,
+        // which would otherwise swallow them.
+        assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.cache_write), Some(2.5));
+        assert_eq!(rates_for("claude-sonnet-5.5").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("claude-sonnet-5.5[ffe]").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("claude-sonnet-5.5-20261026").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("claude-sonnet-5-5-20261026").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("anthropic/claude-sonnet-5.5").map(|r| r.input), Some(2.0));
+        // Plain Sonnet 5 carries the same list rates; Sonnet 4.x keeps $3/$15.
+        assert_eq!(rates_for("claude-sonnet-5").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("claude-sonnet-4.6").map(|r| r.input), Some(3.0));
+    }
+
+    #[test]
     fn deepseek_v41_flash_prices() {
         // V4.1 Flash lists at $0.15/$0.60 off-peak and 2x at peak; the table
         // carries peak rates like the other deepseek entries. "deepseek-flash"
@@ -402,6 +424,28 @@ mod tests {
         assert_eq!(rates_for("swe-1-7-lightning-medium").map(|r| r.cache_read), Some(1.0));
         assert_eq!(rates_for("swe-1-7-lightning-2026-08-01").map(|r| r.output), Some(12.5));
         assert_eq!(rates_for("windsurf/swe-1-7-lightning").map(|r| r.input), Some(2.5));
+    }
+
+    #[test]
+    fn gpt_6_1_sol_prices() {
+        // GPT-6.1 Sol keeps GPT-6 Sol's $2/$10 standard short-context list
+        // rates and 1.25x cache write ($2.50), but cache hits halved to
+        // $0.10 (vs GPT-6 Sol's $0.20). The table carries standard
+        // short-context rates throughout; long-context (>272K) tiers are
+        // ignored, as for the other entries.
+        assert_eq!(rates_for("gpt-6.1-sol").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("gpt-6.1-sol").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("gpt-6.1-sol").map(|r| r.cache_read), Some(0.1));
+        assert_eq!(rates_for("gpt-6.1-sol").map(|r| r.cache_write), Some(2.5));
+        // Dated snapshots, provider prefixes and "model/variant" spellings
+        // resolve through the family.
+        assert_eq!(rates_for("gpt-6.1-sol-2026-10-26").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("openai/gpt-6.1-sol").map(|r| r.cache_read), Some(0.1));
+        assert_eq!(rates_for("gpt-6.1-sol/long-context").map(|r| r.input), Some(2.0));
+        // The dot in "6.1" means the gpt-6-sol prefix can't swallow it, and
+        // plain GPT-6 Sol keeps its own (pricier) $0.20 cache-hit rate.
+        assert_eq!(rates_for("gpt-6-sol").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("gpt-6-astra").map(|r| r.output), Some(50.0));
     }
 
     #[test]
