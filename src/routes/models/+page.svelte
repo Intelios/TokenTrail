@@ -199,7 +199,7 @@
       case 'promotion':
         return fmtTokens(ev.tokens);
       case 'demotion':
-        return ev.tenure_days != null ? `${ev.tenure_days}d at #${ev.rank ?? '?'}` : fmtTokens(ev.tokens);
+        return ev.tenure_days != null ? `${ev.tenure_days}d in Big 6` : fmtTokens(ev.tokens);
     }
   }
 

@@ -2014,7 +2014,10 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
     let mut ever_top5: HashSet<usize> = HashSet::new();
     let mut pre_window_max: Vec<Option<i64>> = vec![None; n_models];
     let mut in_window_max: Vec<Option<i64>> = vec![None; n_models];
-    let mut rank_since: Vec<Option<(usize, String)>> = vec![None; n_models];
+    // Date each top-6 member last ENTERED the Big 6 — not the date it took its
+    // current rank, so a long-reigning #1 that slides down through the ranks
+    // still counts its whole run when it finally exits.
+    let mut top6_since: Vec<Option<String>> = vec![None; n_models];
     // Yesterday's ranks, materialized once at the window boundary: the
     // standings after the last pre-window day, before the first window day's
     // tokens land. Stays None until then, which is what keeps day-1 overtakes
@@ -2172,9 +2175,13 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
                 });
 
                 if let Some(demoted_name) = demoted {
-                    let (demoted_rank, entry_date) =
-                        rank_since[*demoted_name].clone().unwrap_or((6, d.clone()));
-                    let tenure = days_between(&entry_date, d).unwrap_or(0);
+                    let demoted_rank =
+                        prev_top6.iter().position(|x| x == demoted_name).unwrap_or(5) + 1;
+                    let tenure = days_between(
+                        top6_since[*demoted_name].as_deref().unwrap_or(d),
+                        d,
+                    )
+                    .unwrap_or(0);
 
                     events.push(LeaderboardEvent {
                         kind: "demotion".into(),
@@ -2190,9 +2197,13 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
 
             if sorted_demoted.len() > sorted_promoted.len() {
                 for demoted_name in &sorted_demoted[sorted_promoted.len()..] {
-                    let (demoted_rank, entry_date) =
-                        rank_since[*demoted_name].clone().unwrap_or((6, d.clone()));
-                    let tenure = days_between(&entry_date, d).unwrap_or(0);
+                    let demoted_rank =
+                        prev_top6.iter().position(|x| x == demoted_name).unwrap_or(5) + 1;
+                    let tenure = days_between(
+                        top6_since[*demoted_name].as_deref().unwrap_or(d),
+                        d,
+                    )
+                    .unwrap_or(0);
                     events.push(LeaderboardEvent {
                         kind: "demotion".into(),
                         model: names[*demoted_name].clone(),
@@ -2276,20 +2287,20 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
             }
         }
 
-        // 8. Big-6 tenure bookkeeping: demoted models leave their rank's
-        //    history; today's top 6 reset their entry date when they move.
-        for demoted in &demoted_models {
-            rank_since[*demoted] = None;
+        // 8. Big-6 tenure bookkeeping: an entry date is stamped when a model
+        //    (re-)joins the top 6 and cleared whenever it isn't there — a rank
+        //    shuffle inside the top 6 never resets it. Clearing is not gated
+        //    on demoted_models: that list only exists once a full 6-member
+        //    top 6 has formed, and an early-days departure must not carry a
+        //    stale entry date into a later re-entry.
+        for (id, since) in top6_since.iter_mut().enumerate() {
+            if since.is_some() && !curr_top6.contains(&id) {
+                *since = None;
+            }
         }
-
-        for (idx, model) in curr_top6.iter().enumerate() {
-            let rank = idx + 1;
-            if let Some((r, _)) = rank_since[*model] {
-                if r != rank {
-                    rank_since[*model] = Some((rank, d.clone()));
-                }
-            } else {
-                rank_since[*model] = Some((rank, d.clone()));
+        for model in &curr_top6 {
+            if top6_since[*model].is_none() {
+                top6_since[*model] = Some(d.clone());
             }
         }
 
@@ -3490,6 +3501,62 @@ mod tests {
         assert_eq!(demotions.len(), 1);
         assert_eq!(demotions[0].model, "m6");
         assert_eq!(demotions[0].tenure_days, Some(3699));
+    }
+
+    #[test]
+    fn leaderboard_demotion_tenure_spans_whole_top6_run_not_last_rank() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day1 = now - 90 * day_ms;
+        let day50 = now - 40 * day_ms;
+        let day90 = now;
+
+        // Day 1: hero debuts at #1 and fills the top 6 with m2..m6; m7 sits at #7.
+        store
+            .insert_events(&[
+                test_event("hero", day1, 99_000),
+                test_event("m2", day1, 90_000),
+                test_event("m3", day1, 80_000),
+                test_event("m4", day1, 70_000),
+                test_event("m5", day1, 60_000),
+                test_event("m6", day1, 50_000),
+                test_event("m7", day1, 5_000),
+            ])
+            .unwrap();
+
+        // Day 50 (40 days before now): m2..m6 all pass hero, sliding it from
+        // #1 to #6 without leaving the top 6 — the membership set is unchanged.
+        store
+            .insert_events(&[
+                test_event("m2", day50, 50_000),
+                test_event("m3", day50, 50_000),
+                test_event("m4", day50, 50_000),
+                test_event("m5", day50, 50_000),
+                test_event("m6", day50, 50_000),
+            ])
+            .unwrap();
+
+        // Day 90 (now): m7 reaches 100_000, tying m6 and edging hero (99_000)
+        // out of the Big 6. hero's run lasted 90 days: day 1 -> today. If
+        // tenure were measured from when it entered #6 it would read 40.
+        store
+            .insert_events(&[test_event("m7", day90, 95_000)])
+            .unwrap();
+
+        let events = leaderboard_events(&store, 3650).unwrap();
+
+        let promotions: Vec<_> = events.iter().filter(|e| e.kind == "promotion").collect();
+        assert_eq!(promotions.len(), 1);
+        assert_eq!(promotions[0].model, "m7");
+        assert_eq!(promotions[0].other_model, Some("hero".into()));
+
+        let demotions: Vec<_> = events.iter().filter(|e| e.kind == "demotion").collect();
+        assert_eq!(demotions.len(), 1);
+        assert_eq!(demotions[0].model, "hero");
+        assert_eq!(demotions[0].other_model, Some("m7".into()));
+        assert_eq!(demotions[0].rank, Some(6));
+        assert_eq!(demotions[0].tenure_days, Some(90));
     }
 
     #[test]
