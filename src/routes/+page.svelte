@@ -133,9 +133,13 @@
         <div class="h">api-equivalent estimate</div>
       </div>
       <div class="q up" style="animation-delay:140ms">
-        <div class="k">Sessions</div>
-        <div class="v"><AnimatedNumber value={overview.sessions} /></div>
-        <div class="h">{overview.events.toLocaleString()} model calls</div>
+        <div class="k">Avg tokens / month</div>
+        <div class="v"><AnimatedNumber value={overview.avg_monthly_tokens} format={fmtTokens} /></div>
+        {#if overview.months_tracked > 0}
+          <div class="h">over {overview.months_tracked} {overview.months_tracked === 1 ? 'month' : 'months'}</div>
+        {:else}
+          <div class="h">no usage yet</div>
+        {/if}
       </div>
       <div class="q acd up" style="animation-delay:210ms">
         <div class="k">Streak</div>

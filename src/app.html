@@ -184,7 +184,8 @@
                 return {
                   total_tokens: totalTokens, input_tokens: totalTokens * 0.62, output_tokens: totalTokens * 0.31,
                   cache_read_tokens: totalTokens * 1.7, cache_write_tokens: totalTokens * 0.55,
-                  events: totalEvents, sessions: totalSessions, active_days: 214,
+                  events: totalEvents, active_days: 214,
+                  avg_monthly_tokens: totalTokens / 14, months_tracked: 14,
                   cost_usd: totalCost, first_ts: Date.now() - 420 * 86400000, last_ts: Date.now(),
                   current_streak: 59, longest_streak: 73,
                   by_source: SOURCES.map((s, i) => ({

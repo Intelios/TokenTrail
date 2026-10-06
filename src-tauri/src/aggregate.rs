@@ -395,8 +395,12 @@ pub struct Overview {
     pub cache_read_tokens: i64,
     pub cache_write_tokens: i64,
     pub events: i64,
-    pub sessions: i64,
     pub active_days: i64,
+    /// Total tokens divided by the calendar months that have any usage —
+    /// the same UTC dates the streaks are computed from, prefixed to YYYY-MM.
+    /// Idle gap months are not counted.
+    pub avg_monthly_tokens: f64,
+    pub months_tracked: i64,
     pub cost_usd: Option<f64>,
     pub first_ts: Option<i64>,
     pub last_ts: Option<i64>,
@@ -661,7 +665,7 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
         "SELECT COALESCE(SUM({T}),0), COALESCE(SUM(input_tokens),0),
                 COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0),
                 COALESCE(SUM(cache_write_tokens),0), COUNT(*),
-                COUNT(DISTINCT session_id), SUM(cost_usd), MIN(ts), MAX(ts)
+                SUM(cost_usd), MIN(ts), MAX(ts)
          FROM usage_event u WHERE {H}",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -673,7 +677,6 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
         cr: i64,
         cw: i64,
         events: i64,
-        sessions: i64,
         cost: Option<f64>,
         first_ts: Option<i64>,
         last_ts: Option<i64>,
@@ -686,10 +689,9 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
             cr: r.get(3)?,
             cw: r.get(4)?,
             events: r.get(5)?,
-            sessions: r.get(6)?,
-            cost: r.get(7)?,
-            first_ts: r.get(8)?,
-            last_ts: r.get(9)?,
+            cost: r.get(6)?,
+            first_ts: r.get(7)?,
+            last_ts: r.get(8)?,
         })
     })?;
 
@@ -722,7 +724,17 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
 
     let (current, longest) = streaks(&dates);
     let active_days = dates.len() as i64;
+    let months_tracked = dates
+        .iter()
+        .map(|d| &d[..7])
+        .collect::<std::collections::BTreeSet<_>>()
+        .len() as i64;
     dates.clear();
+    let avg_monthly_tokens = if months_tracked > 0 {
+        t.total as f64 / months_tracked as f64
+    } else {
+        0.0
+    };
 
     Ok(Overview {
         total_tokens: t.total,
@@ -731,8 +743,9 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
         cache_read_tokens: t.cr,
         cache_write_tokens: t.cw,
         events: t.events,
-        sessions: t.sessions,
         active_days,
+        avg_monthly_tokens,
+        months_tracked,
         cost_usd: t.cost,
         first_ts: t.first_ts,
         last_ts: t.last_ts,
@@ -2469,6 +2482,45 @@ mod tests {
         store.remove_aliases_for("GLM-5.3").unwrap();
         let stats = model_stats(&store, 3650).unwrap();
         assert_eq!(stats.len(), 2);
+    }
+
+    /// `avg_monthly_tokens` divides total tokens by the calendar months that
+    /// have any usage; idle gap months never enter the divisor.
+    #[test]
+    fn overview_monthly_average_counts_months_with_usage() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+
+        // Empty store: nothing to average.
+        let ov = overview(&store).unwrap();
+        assert_eq!(ov.months_tracked, 0);
+        assert_eq!(ov.avg_monthly_tokens, 0.0);
+
+        // Two events in January 2024, one in February — 600 tokens over 2 months.
+        store
+            .insert_events(&[
+                test_event("glm-5.3", 1705320000000, 100), // 2024-01-15
+                test_event("glm-5.3", 1705752000000, 200), // 2024-01-20
+                test_event("glm-5.3", 1707134400000, 300), // 2024-02-05
+            ])
+            .unwrap();
+        let ov = overview(&store).unwrap();
+        assert_eq!(ov.total_tokens, 600);
+        assert_eq!(ov.months_tracked, 2);
+        assert_eq!(ov.avg_monthly_tokens, 300.0);
+
+        // A March gap then April usage: April counts, March does not — 1000/3.
+        store
+            .insert_events(&[test_event("glm-5.3", 1712318400000, 400)]) // 2024-04-05
+            .unwrap();
+        let ov = overview(&store).unwrap();
+        assert_eq!(ov.months_tracked, 3);
+        assert!((ov.avg_monthly_tokens - 1000.0 / 3.0).abs() < 1e-9);
+
+        // Hidden models leave both the total and the month count (NOT_HIDDEN).
+        store.hide_models(&["glm-5.3".into()]).unwrap();
+        let ov = overview(&store).unwrap();
+        assert_eq!(ov.months_tracked, 0);
+        assert_eq!(ov.avg_monthly_tokens, 0.0);
     }
 
     /// UTC midnight-relative timestamp `days_ago` back at hour `h`, so hour

@@ -91,8 +91,10 @@ export interface Overview {
   cache_read_tokens: number;
   cache_write_tokens: number;
   events: number;
-  sessions: number;
   active_days: number;
+  /** Total tokens ÷ calendar months with any usage (UTC); idle gaps don't count. */
+  avg_monthly_tokens: number;
+  months_tracked: number;
   cost_usd: number | null;
   first_ts: number | null;
   last_ts: number | null;
