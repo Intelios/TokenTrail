@@ -468,6 +468,47 @@ mod tests {
     }
 
     #[test]
+    fn grok_47_prices() {
+        // Grok 4.7 lists at $2/$6 with $0.50 cached input; no cache-write
+        // rate is published, so writes bill at the uncached input rate. The
+        // >200K long-context tier ($4/$12/$1) is ignored, as for other
+        // entries. Sibling Grok generations keep no pricing of their own.
+        assert_eq!(rates_for("grok-4.7").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("grok-4.7").map(|r| r.output), Some(6.0));
+        assert_eq!(rates_for("grok-4.7").map(|r| r.cache_read), Some(0.5));
+        assert_eq!(rates_for("grok-4.7").map(|r| r.cache_write), Some(2.0));
+        // Provider-prefixed spellings and dated snapshots resolve via the family.
+        assert_eq!(rates_for("x-ai/grok-4.7").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("xai/grok-4.7").map(|r| r.output), Some(6.0));
+        assert_eq!(rates_for("grok-4.7-20261112").map(|r| r.cache_read), Some(0.5));
+        // The prefix does not swallow earlier Grok generations.
+        assert!(rates_for("grok-4.6").is_none());
+        assert!(rates_for("grok-4.20").is_none());
+    }
+
+    #[test]
+    fn step_5_preview_prices() {
+        // StepFun Step 5 Preview lists at $1/$2.70 with $0.05 cached input;
+        // cache writes are undocumented and bill at the uncached input rate.
+        assert_eq!(rates_for("step-5-preview").map(|r| r.input), Some(1.0));
+        assert_eq!(rates_for("step-5-preview").map(|r| r.output), Some(2.7));
+        assert_eq!(rates_for("step-5-preview").map(|r| r.cache_read), Some(0.05));
+        assert_eq!(rates_for("step-5-preview").map(|r| r.cache_write), Some(1.0));
+        // The provider-prefixed OpenRouter spelling resolves via the family.
+        assert_eq!(rates_for("stepfun/step-5-preview").map(|r| r.output), Some(2.7));
+        // A speculative step-5 catch-all (preview rates until StepFun
+        // publishes launch pricing) covers the out-of-preview spelling and
+        // variants; it sits after step-5-preview so the preview keeps its
+        // own entry if the rates later diverge.
+        assert_eq!(rates_for("step-5").map(|r| r.input), Some(1.0));
+        assert_eq!(rates_for("step-5").map(|r| r.output), Some(2.7));
+        assert_eq!(rates_for("step-5-max").map(|r| r.cache_read), Some(0.05));
+        assert_eq!(rates_for("stepfun/step-5").map(|r| r.output), Some(2.7));
+        // Older Step generations keep no pricing of their own.
+        assert!(rates_for("step-3.7-flash").is_none());
+    }
+
+    #[test]
     fn fingerprint_changes_with_the_table() {
         let a = pricing_fingerprint();
         assert_ne!(a, 0);
