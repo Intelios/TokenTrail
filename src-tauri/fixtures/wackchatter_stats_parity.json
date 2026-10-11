@@ -1,0 +1,1684 @@
+[
+  {
+    "tables": {
+      "chats": [],
+      "messages": [],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 0,
+        "messages": 0,
+        "userMessages": 0,
+        "replies": 0,
+        "swipes": 0,
+        "tokens": 0,
+        "activeMinutes": 0
+      },
+      "cast": [],
+      "models": [],
+      "personas": [],
+      "hours": [],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 0,
+        "avgUserChars": 0,
+        "avgReplyChars": 0,
+        "longestReplyChars": 0,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": null,
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968259
+    }
+  },
+  {
+    "tables": {
+      "chats": [],
+      "messages": [],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 0,
+        "messages": 0,
+        "userMessages": 0,
+        "replies": 0,
+        "swipes": 0,
+        "tokens": 0,
+        "activeMinutes": 0
+      },
+      "cast": [],
+      "models": [],
+      "personas": [],
+      "hours": [],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 0,
+        "avgUserChars": 0,
+        "avgReplyChars": 0,
+        "longestReplyChars": 0,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": null,
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968263
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "e33d3394-28d7-474d-b3b7-7ffd7436c4ce",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968267,
+          "modified": 1791730968267,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "e33d3394-28d7-474d-b3b7-7ffd7436c4ce",
+          "id": "2eaa3d12-50bf-4cf4-8d12-c6f00b8221fb",
+          "position": 4,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"single take\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "e33d3394-28d7-474d-b3b7-7ffd7436c4ce",
+          "id": "35d8c2a5-bc87-4ece-8eed-6acececb7685",
+          "position": 3,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"again\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "e33d3394-28d7-474d-b3b7-7ffd7436c4ce",
+          "id": "57a06f41-2e27-4491-b5b6-43ef2232a05f",
+          "position": 0,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"greeting a\",\"greeting b\",\"greeting c\",\"greeting d\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "e33d3394-28d7-474d-b3b7-7ffd7436c4ce",
+          "id": "86bf9782-a5ec-46db-b53a-8851dcc52542",
+          "position": 1,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hello\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "e33d3394-28d7-474d-b3b7-7ffd7436c4ce",
+          "id": "91b47074-f9b0-42cf-bc0c-3afc08f72013",
+          "position": 2,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"take one\",\"take two\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 1,
+        "messages": 5,
+        "userMessages": 2,
+        "replies": 3,
+        "swipes": 3,
+        "tokens": 300,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968267,
+          "lastChat": 1791730968267,
+          "messages": 5,
+          "tokens": 300
+        }
+      ],
+      "models": [
+        {
+          "model": "glm-5.2",
+          "api": "custom",
+          "swipes": 3,
+          "tokens": 300,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 10
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 2
+        },
+        {
+          "personaId": "",
+          "chats": 1,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          5
+        ]
+      ],
+      "habits": {
+        "rerolls": 1,
+        "rerolledReplies": 1,
+        "eligibleReplies": 2,
+        "avgUserChars": 5,
+        "avgReplyChars": 10,
+        "longestReplyChars": 11,
+        "reasoningSwipes": 0,
+        "timedSwipes": 3,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "e33d3394-28d7-474d-b3b7-7ffd7436c4ce",
+        "title": "New chat",
+        "created": 1791730968267,
+        "modified": 1791730968267,
+        "messages": 5,
+        "tokens": 300
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968270
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "db6b4c04-0d81-4599-b5b9-4d0820dccde8",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968273,
+          "modified": 1791730968273,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "db6b4c04-0d81-4599-b5b9-4d0820dccde8",
+          "id": "5d8eaab9-a580-4247-b6c4-1de18c0bceb7",
+          "position": 0,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"greeting a\",\"greeting b\",\"greeting c\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "db6b4c04-0d81-4599-b5b9-4d0820dccde8",
+          "id": "ba2435a5-2433-461b-ba8f-2e81595f19bd",
+          "position": 1,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 1,
+        "messages": 2,
+        "userMessages": 1,
+        "replies": 1,
+        "swipes": 0,
+        "tokens": 0,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968273,
+          "lastChat": 1791730968273,
+          "messages": 2,
+          "tokens": 0
+        }
+      ],
+      "models": [],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 1
+        },
+        {
+          "personaId": "",
+          "chats": 1,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          2
+        ]
+      ],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 0,
+        "avgUserChars": 2,
+        "avgReplyChars": 10,
+        "longestReplyChars": 10,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "db6b4c04-0d81-4599-b5b9-4d0820dccde8",
+        "title": "New chat",
+        "created": 1791730968273,
+        "modified": 1791730968273,
+        "messages": 2,
+        "tokens": 0
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968273
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "43db5b6d-f5ce-4664-a5c1-cff1a0e4fac1",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968275,
+          "modified": 1791730968275,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "43db5b6d-f5ce-4664-a5c1-cff1a0e4fac1",
+          "id": "afe4d453-11b5-45e0-8af2-8bb889c269ed",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "43db5b6d-f5ce-4664-a5c1-cff1a0e4fac1",
+          "id": "b2b7b3db-e343-4e3b-a845-d7ad6a73a299",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"a\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"openai\",\"model\":\"gpt-4o\",\"token_count\":10}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 1,
+        "messages": 2,
+        "userMessages": 1,
+        "replies": 1,
+        "swipes": 1,
+        "tokens": 10,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968275,
+          "lastChat": 1791730968275,
+          "messages": 2,
+          "tokens": 10
+        }
+      ],
+      "models": [
+        {
+          "model": "gpt-4o",
+          "api": "openai",
+          "swipes": 1,
+          "tokens": 10,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 1
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 1
+        },
+        {
+          "personaId": "",
+          "chats": 1,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          2
+        ]
+      ],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 1,
+        "avgUserChars": 2,
+        "avgReplyChars": 1,
+        "longestReplyChars": 1,
+        "reasoningSwipes": 0,
+        "timedSwipes": 1,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "43db5b6d-f5ce-4664-a5c1-cff1a0e4fac1",
+        "title": "New chat",
+        "created": 1791730968275,
+        "modified": 1791730968275,
+        "messages": 2,
+        "tokens": 10
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968275
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "a4a962a9-ff45-4880-b999-9dd3d9b6c6d4",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968278,
+          "modified": 1791730968278,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "a4a962a9-ff45-4880-b999-9dd3d9b6c6d4",
+          "id": "06cc0bd1-934d-4883-9d8a-5e1154555f4c",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "a4a962a9-ff45-4880-b999-9dd3d9b6c6d4",
+          "id": "fbe3f3fe-e57d-4de0-9f97-e1bb4da3ecf9",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"timed\",\"untimed\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":200}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":999}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 1,
+        "messages": 2,
+        "userMessages": 1,
+        "replies": 1,
+        "swipes": 2,
+        "tokens": 1199,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968278,
+          "lastChat": 1791730968278,
+          "messages": 2,
+          "tokens": 1199
+        }
+      ],
+      "models": [
+        {
+          "model": "glm-5.2",
+          "api": "custom",
+          "swipes": 2,
+          "tokens": 1199,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 20
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 1
+        },
+        {
+          "personaId": "",
+          "chats": 1,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          2
+        ]
+      ],
+      "habits": {
+        "rerolls": 1,
+        "rerolledReplies": 1,
+        "eligibleReplies": 1,
+        "avgUserChars": 2,
+        "avgReplyChars": 5,
+        "longestReplyChars": 5,
+        "reasoningSwipes": 0,
+        "timedSwipes": 1,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "a4a962a9-ff45-4880-b999-9dd3d9b6c6d4",
+        "title": "New chat",
+        "created": 1791730968278,
+        "modified": 1791730968278,
+        "messages": 2,
+        "tokens": 1199
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968278
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "c931ddb7-f142-40a0-a84c-c5a56eda1ba5",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968280,
+          "modified": 1791730968280,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "c931ddb7-f142-40a0-a84c-c5a56eda1ba5",
+          "id": "105e0e4f-048c-4d36-b401-c5a696a550f4",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"a\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"mystery\",\"token_count\":5}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "c931ddb7-f142-40a0-a84c-c5a56eda1ba5",
+          "id": "d447b16f-5542-4d7c-a678-5bf4e2d187d7",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 1,
+        "messages": 2,
+        "userMessages": 1,
+        "replies": 1,
+        "swipes": 1,
+        "tokens": 5,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968280,
+          "lastChat": 1791730968280,
+          "messages": 2,
+          "tokens": 5
+        }
+      ],
+      "models": [
+        {
+          "model": "mystery",
+          "api": "custom",
+          "swipes": 1,
+          "tokens": 5,
+          "avgLatencyMs": null,
+          "tokensPerSecond": null
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 1
+        },
+        {
+          "personaId": "",
+          "chats": 1,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          2
+        ]
+      ],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 1,
+        "avgUserChars": 2,
+        "avgReplyChars": 1,
+        "longestReplyChars": 1,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "c931ddb7-f142-40a0-a84c-c5a56eda1ba5",
+        "title": "New chat",
+        "created": 1791730968280,
+        "modified": 1791730968280,
+        "messages": 2,
+        "tokens": 5
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968280
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "c17537a2-c5a4-4e25-9676-8bd53079cbe6",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968282,
+          "modified": 1791730968282,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "c17537a2-c5a4-4e25-9676-8bd53079cbe6",
+          "id": "4a86fdeb-41fe-4fca-8036-1807bdc4dd61",
+          "position": 3,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"tell me more\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "c17537a2-c5a4-4e25-9676-8bd53079cbe6",
+          "id": "7701b934-b6ec-4928-90bf-9bebc3b5d9c4",
+          "position": 1,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hello\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "c17537a2-c5a4-4e25-9676-8bd53079cbe6",
+          "id": "87dea665-cab0-4d46-9453-73bf2014c3cf",
+          "position": 4,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"thinking take\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"openrouter\",\"model\":\"claude-3-7-sonnet\",\"token_count\":100,\"reasoning\":\"thought...\"}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "c17537a2-c5a4-4e25-9676-8bd53079cbe6",
+          "id": "bd1467c7-3459-423f-ae9f-bdc9c80e54c6",
+          "position": 0,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"greeting a\",\"greeting b\",\"greeting c\",\"greeting d\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "c17537a2-c5a4-4e25-9676-8bd53079cbe6",
+          "id": "c52c5c90-bd8e-4f2e-9bb9-61fa1e1180a5",
+          "position": 2,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"take one\",\"take two\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":50}},{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":60}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 1,
+        "messages": 5,
+        "userMessages": 2,
+        "replies": 3,
+        "swipes": 3,
+        "tokens": 210,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968282,
+          "lastChat": 1791730968282,
+          "messages": 5,
+          "tokens": 210
+        }
+      ],
+      "models": [
+        {
+          "model": "glm-5.2",
+          "api": "custom",
+          "swipes": 2,
+          "tokens": 110,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 5.5
+        },
+        {
+          "model": "claude-3-7-sonnet",
+          "api": "openrouter",
+          "swipes": 1,
+          "tokens": 100,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 10
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 2
+        },
+        {
+          "personaId": "",
+          "chats": 1,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          5
+        ]
+      ],
+      "habits": {
+        "rerolls": 1,
+        "rerolledReplies": 1,
+        "eligibleReplies": 2,
+        "avgUserChars": 9,
+        "avgReplyChars": 10,
+        "longestReplyChars": 13,
+        "reasoningSwipes": 1,
+        "timedSwipes": 3,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "c17537a2-c5a4-4e25-9676-8bd53079cbe6",
+        "title": "New chat",
+        "created": 1791730968282,
+        "modified": 1791730968282,
+        "messages": 5,
+        "tokens": 210
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968283
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "1dc062bc-d15e-46e3-9391-8b5fb06e5382",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968285,
+          "modified": 1791730968285,
+          "revision": 0,
+          "metadata": "{}"
+        },
+        {
+          "id": "f4aa8bcd-be6d-4e14-947b-8205bfd149b0",
+          "character_id": "Mika.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968285,
+          "modified": 1791730968285,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "1dc062bc-d15e-46e3-9391-8b5fb06e5382",
+          "id": "12f8d439-8932-4adf-8651-f3b3b2cd0a86",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "1dc062bc-d15e-46e3-9391-8b5fb06e5382",
+          "id": "704f74fc-0ab3-4b6d-a370-fc16150f3c0f",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"there\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "f4aa8bcd-be6d-4e14-947b-8205bfd149b0",
+          "id": "59f40ace-8df5-4f0e-8b79-41881ee73b2e",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hello\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "f4aa8bcd-be6d-4e14-947b-8205bfd149b0",
+          "id": "70c87d5b-d87a-4e55-a0f3-c2bcb7ba1fa7",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"openrouter\",\"model\":\"other\",\"token_count\":7}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 2,
+        "messages": 4,
+        "userMessages": 2,
+        "replies": 2,
+        "swipes": 2,
+        "tokens": 107,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Mika.png",
+          "chats": 1,
+          "firstChat": 1791730968285,
+          "lastChat": 1791730968285,
+          "messages": 2,
+          "tokens": 7
+        },
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968285,
+          "lastChat": 1791730968285,
+          "messages": 2,
+          "tokens": 100
+        }
+      ],
+      "models": [
+        {
+          "model": "glm-5.2",
+          "api": "custom",
+          "swipes": 1,
+          "tokens": 100,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 10
+        },
+        {
+          "model": "other",
+          "api": "openrouter",
+          "swipes": 1,
+          "tokens": 7,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 0.7
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 2
+        },
+        {
+          "personaId": "",
+          "chats": 2,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          4
+        ]
+      ],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 2,
+        "avgUserChars": 4,
+        "avgReplyChars": 4,
+        "longestReplyChars": 5,
+        "reasoningSwipes": 0,
+        "timedSwipes": 2,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "1dc062bc-d15e-46e3-9391-8b5fb06e5382",
+        "title": "New chat",
+        "created": 1791730968285,
+        "modified": 1791730968285,
+        "messages": 2,
+        "tokens": 100
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968286
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "59662853-9858-4951-a462-abc2f0758d15",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "New chat",
+          "created": 1791730968288,
+          "modified": 1791730968288,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "59662853-9858-4951-a462-abc2f0758d15",
+          "id": "011f4942-b689-4301-89f5-0204a5689f60",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "59662853-9858-4951-a462-abc2f0758d15",
+          "id": "d4647899-6ac9-4d12-ad75-dd4700b1bef3",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"a\",\"b\",\"c\",\"d\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:30:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:30:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}},{\"send_date\":\"2026-01-01T12:30:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 1,
+        "messages": 2,
+        "userMessages": 1,
+        "replies": 1,
+        "swipes": 4,
+        "tokens": 400,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 1,
+          "firstChat": 1791730968288,
+          "lastChat": 1791730968288,
+          "messages": 2,
+          "tokens": 400
+        }
+      ],
+      "models": [
+        {
+          "model": "glm-5.2",
+          "api": "custom",
+          "swipes": 4,
+          "tokens": 400,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 10
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 1
+        },
+        {
+          "personaId": "",
+          "chats": 1,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          2
+        ]
+      ],
+      "habits": {
+        "rerolls": 3,
+        "rerolledReplies": 1,
+        "eligibleReplies": 1,
+        "avgUserChars": 2,
+        "avgReplyChars": 1,
+        "longestReplyChars": 1,
+        "reasoningSwipes": 0,
+        "timedSwipes": 4,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "59662853-9858-4951-a462-abc2f0758d15",
+        "title": "New chat",
+        "created": 1791730968288,
+        "modified": 1791730968288,
+        "messages": 2,
+        "tokens": 400
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968288
+    }
+  },
+  {
+    "tables": {
+      "chats": [],
+      "messages": [],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 0,
+        "messages": 0,
+        "userMessages": 0,
+        "replies": 0,
+        "swipes": 0,
+        "tokens": 0,
+        "activeMinutes": 0
+      },
+      "cast": [],
+      "models": [],
+      "personas": [],
+      "hours": [],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 0,
+        "avgUserChars": 0,
+        "avgReplyChars": 0,
+        "longestReplyChars": 0,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": null,
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968290
+    }
+  },
+  {
+    "tables": {
+      "chats": [],
+      "messages": [],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 0,
+        "messages": 0,
+        "userMessages": 0,
+        "replies": 0,
+        "swipes": 0,
+        "tokens": 0,
+        "activeMinutes": 0
+      },
+      "cast": [],
+      "models": [],
+      "personas": [],
+      "hours": [],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 0,
+        "avgUserChars": 0,
+        "avgReplyChars": 0,
+        "longestReplyChars": 0,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": null,
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968292
+    }
+  },
+  {
+    "tables": {
+      "chats": [],
+      "messages": [],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 0,
+        "messages": 0,
+        "userMessages": 0,
+        "replies": 0,
+        "swipes": 0,
+        "tokens": 0,
+        "activeMinutes": 0
+      },
+      "cast": [],
+      "models": [],
+      "personas": [],
+      "hours": [],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 0,
+        "avgUserChars": 0,
+        "avgReplyChars": 0,
+        "longestReplyChars": 0,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": null,
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968294
+    }
+  },
+  {
+    "tables": {
+      "chats": [],
+      "messages": [],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 0,
+        "messages": 0,
+        "userMessages": 0,
+        "replies": 0,
+        "swipes": 0,
+        "tokens": 0,
+        "activeMinutes": 0
+      },
+      "cast": [],
+      "models": [],
+      "personas": [],
+      "hours": [],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 0,
+        "avgUserChars": 0,
+        "avgReplyChars": 0,
+        "longestReplyChars": 0,
+        "reasoningSwipes": 0,
+        "timedSwipes": 0,
+        "branchedChats": 0,
+        "deletedChats": 0
+      },
+      "longestChat": null,
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968296
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "fee0d7fd-a948-47ff-a5b0-8055895d1aa9",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "Original",
+          "created": 1791730968297,
+          "modified": 1791730968297,
+          "revision": 0,
+          "metadata": "{}"
+        },
+        {
+          "id": "84c69eff-88f7-4a53-a03e-64cf10fdc763",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "A New Timeline",
+          "created": 1791730968298,
+          "modified": 1791730968298,
+          "revision": 1,
+          "metadata": "{\"branchedFrom\":{\"chatId\":\"fee0d7fd-a948-47ff-a5b0-8055895d1aa9\",\"messageId\":\"13520bfd-404a-44b4-8ed8-89c190c89beb\"}}"
+        },
+        {
+          "id": "a7924cb5-6208-4c5a-a2cc-d32e27acd239",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "Fake (branch)",
+          "created": 1791730968298,
+          "modified": 1791730968298,
+          "revision": 0,
+          "metadata": "{}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "84c69eff-88f7-4a53-a03e-64cf10fdc763",
+          "id": "f9f2615e-82c8-4b77-9b10-4ebe9f88bd9d",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "a7924cb5-6208-4c5a-a2cc-d32e27acd239",
+          "id": "0c559b1d-2bd6-42d9-acd2-c8a5ff4025e4",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hey\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "fee0d7fd-a948-47ff-a5b0-8055895d1aa9",
+          "id": "13520bfd-404a-44b4-8ed8-89c190c89beb",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hi\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "fee0d7fd-a948-47ff-a5b0-8055895d1aa9",
+          "id": "17aedcfa-5ab3-493b-b96b-ff7fe436c03e",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"hello\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 3,
+        "messages": 4,
+        "userMessages": 3,
+        "replies": 1,
+        "swipes": 1,
+        "tokens": 100,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 3,
+          "firstChat": 1791730968297,
+          "lastChat": 1791730968298,
+          "messages": 4,
+          "tokens": 100
+        }
+      ],
+      "models": [
+        {
+          "model": "glm-5.2",
+          "api": "custom",
+          "swipes": 1,
+          "tokens": 100,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 10
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 3
+        },
+        {
+          "personaId": "",
+          "chats": 3,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          4
+        ]
+      ],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 1,
+        "avgUserChars": 2,
+        "avgReplyChars": 5,
+        "longestReplyChars": 5,
+        "reasoningSwipes": 0,
+        "timedSwipes": 1,
+        "branchedChats": 1,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "fee0d7fd-a948-47ff-a5b0-8055895d1aa9",
+        "title": "Original",
+        "created": 1791730968297,
+        "modified": 1791730968297,
+        "messages": 2,
+        "tokens": 100
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968298
+    }
+  },
+  {
+    "tables": {
+      "chats": [
+        {
+          "id": "e76bcc57-838b-43c2-8f8a-eb2d89f4f873",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "Root",
+          "created": 1791730968300,
+          "modified": 1791730968300,
+          "revision": 0,
+          "metadata": "{}"
+        },
+        {
+          "id": "ee71a9a7-f34e-424e-89e8-938c9343ce12",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "Root (branch)",
+          "created": 1791730968300,
+          "modified": 1791730968300,
+          "revision": 0,
+          "metadata": "{\"branchedFrom\":{\"chatId\":\"e76bcc57-838b-43c2-8f8a-eb2d89f4f873\",\"messageId\":\"1b3afb24-dcca-4613-b7b9-b365d50ad91b\"}}"
+        },
+        {
+          "id": "479fe6bd-35a4-483e-a740-99b1947add7f",
+          "character_id": "Seraphina.png",
+          "kind": "direct",
+          "title": "Root (branch) (branch)",
+          "created": 1791730968300,
+          "modified": 1791730968300,
+          "revision": 0,
+          "metadata": "{\"branchedFrom\":{\"chatId\":\"ee71a9a7-f34e-424e-89e8-938c9343ce12\",\"messageId\":\"8f48913f-f56c-4a7d-9238-8940dbb08803\"}}"
+        }
+      ],
+      "messages": [
+        {
+          "chat_id": "479fe6bd-35a4-483e-a740-99b1947add7f",
+          "id": "16a144c3-13f3-4718-93dc-fd9139c33d1b",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"first\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "e76bcc57-838b-43c2-8f8a-eb2d89f4f873",
+          "id": "19ca83e3-ca71-48a1-9e63-b7ce7764ebe9",
+          "position": 2,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"second\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "e76bcc57-838b-43c2-8f8a-eb2d89f4f873",
+          "id": "1b3afb24-dcca-4613-b7b9-b365d50ad91b",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"first\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "e76bcc57-838b-43c2-8f8a-eb2d89f4f873",
+          "id": "a8f4d6c3-9301-48ab-9a47-485eab3173d5",
+          "position": 1,
+          "name": "Seraphina",
+          "is_user": 0,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"reply 1\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\",\"gen_started\":\"2026-01-01T12:00:00.000Z\",\"gen_finished\":\"2026-01-01T12:00:10.000Z\",\"extra\":{\"api\":\"custom\",\"model\":\"glm-5.2\",\"token_count\":100}}]",
+          "persona_id": null,
+          "member_id": null,
+          "character_id": null
+        },
+        {
+          "chat_id": "ee71a9a7-f34e-424e-89e8-938c9343ce12",
+          "id": "8f48913f-f56c-4a7d-9238-8940dbb08803",
+          "position": 0,
+          "name": "Jack",
+          "is_user": 1,
+          "is_system": 0,
+          "hidden_by": null,
+          "swipe_id": 0,
+          "swipes": "[\"first\"]",
+          "swipe_info": "[{\"send_date\":\"2026-01-01T12:00:00.000Z\"}]",
+          "persona_id": "persona-1",
+          "member_id": null,
+          "character_id": null
+        }
+      ],
+      "cocreator_sessions": []
+    },
+    "expected": {
+      "totals": {
+        "chats": 3,
+        "messages": 5,
+        "userMessages": 4,
+        "replies": 1,
+        "swipes": 1,
+        "tokens": 100,
+        "activeMinutes": 0
+      },
+      "cast": [
+        {
+          "characterId": "Seraphina.png",
+          "chats": 3,
+          "firstChat": 1791730968300,
+          "lastChat": 1791730968300,
+          "messages": 5,
+          "tokens": 100
+        }
+      ],
+      "models": [
+        {
+          "model": "glm-5.2",
+          "api": "custom",
+          "swipes": 1,
+          "tokens": 100,
+          "avgLatencyMs": 10000,
+          "tokensPerSecond": 10
+        }
+      ],
+      "personas": [
+        {
+          "personaId": "persona-1",
+          "chats": 0,
+          "messages": 4
+        },
+        {
+          "personaId": "",
+          "chats": 3,
+          "messages": 0
+        }
+      ],
+      "hours": [
+        [
+          1767268800000,
+          5
+        ]
+      ],
+      "habits": {
+        "rerolls": 0,
+        "rerolledReplies": 0,
+        "eligibleReplies": 1,
+        "avgUserChars": 5,
+        "avgReplyChars": 7,
+        "longestReplyChars": 7,
+        "reasoningSwipes": 0,
+        "timedSwipes": 1,
+        "branchedChats": 2,
+        "deletedChats": 0
+      },
+      "longestChat": {
+        "id": "e76bcc57-838b-43c2-8f8a-eb2d89f4f873",
+        "title": "Root",
+        "created": 1791730968300,
+        "modified": 1791730968300,
+        "messages": 3,
+        "tokens": 100
+      },
+      "coCreatorSessions": 0,
+      "generatedAt": 1791730968301
+    }
+  }
+]

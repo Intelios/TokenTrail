@@ -427,3 +427,11 @@ export const api = {
   exportWrappedPng: (path: string, dataB64: string) =>
     invoke<string>('export_wrapped_png', { path, dataB64 }),
 };
+
+export const wackchatterApi = {
+  libraries: () => invoke<import('./wackchatter/types').Library[]>('get_wackchatter_libraries'),
+  stats: (libraryId:string, characterId:string|null=null, groupId:string|null=null) => invoke<import('./wackchatter/types').Stats>('get_wackchatter_stats',{libraryId,characterId,groupId}),
+  usage: (libraryId:string|null, days:number, sessionId:string|null=null) => invoke<import('./wackchatter/types').Usage>('get_wackchatter_usage',{libraryId,days,sessionId}),
+  portrait: (libraryId:string,id:string,persona=false) => invoke<string>('get_wackchatter_portrait',{libraryId,id,persona}),
+  open: (libraryId:string,chatId:string|null=null,characterId:string|null=null) => invoke<void>('open_wackchatter',{libraryId,chatId,characterId}),
+};

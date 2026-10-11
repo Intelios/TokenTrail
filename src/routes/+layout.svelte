@@ -11,6 +11,9 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { invoke } from '@tauri-apps/api/core';
+  import { goto } from '$app/navigation';
+  import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
+  import { tokenTrailDestination } from '$lib/wackchatter/navigation';
   import { listen } from '@tauri-apps/api/event';
 
   const links = [
@@ -21,6 +24,7 @@
     { href: '/projects', label: 'Projects' },
     { href: '/activity', label: 'Activity' },
     { href: '/wackcode', label: 'WackCode' },
+    { href: '/wackchatter', label: 'WackChatter' },
     { href: '/settings', label: 'Settings' },
   ];
 
@@ -37,35 +41,37 @@
     return href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
   }
 
-  /* ── Position the pill whenever the route changes ──────────────── */
-  $effect(() => {
-    // subscribe to the reactive pathname
-    const _path = $page.url.pathname;
-
+  function positionNav(ensureVisible = false) {
     if (!navEl) return;
-
-    const idx = links.findIndex((l) => isActive(l.href));
+    const idx = links.findIndex((link) => isActive(link.href));
     const el = idx >= 0 ? linkEls[idx] : undefined;
     if (!el) return;
-
-    const navRect = navEl.getBoundingClientRect();
-    const linkRect = el.getBoundingClientRect();
-    const x = linkRect.left - navRect.left;
-    const w = linkRect.width;
-
+    const x = el.offsetLeft;
+    const w = el.offsetWidth;
+    if (ensureVisible && (x < navEl.scrollLeft || x + w > navEl.scrollLeft + navEl.clientWidth)) {
+      navEl.scrollLeft = Math.max(0, x - (navEl.clientWidth - w) / 2);
+    }
+    if (!pillReady) navEl.classList.add('no-animate');
+    navEl.style.setProperty('--pill-x', `${x}px`);
+    navEl.style.setProperty('--pill-w', `${w}px`);
     if (!pillReady) {
-      // first position — jump without animating
-      navEl.classList.add('no-animate');
-      navEl.style.setProperty('--pill-x', `${x}px`);
-      navEl.style.setProperty('--pill-w', `${w}px`);
-      // force reflow then re-enable transitions
-      navEl.offsetHeight;
+      void navEl.offsetHeight;
       navEl.classList.remove('no-animate');
       pillReady = true;
-    } else {
-      navEl.style.setProperty('--pill-x', `${x}px`);
-      navEl.style.setProperty('--pill-w', `${w}px`);
     }
+  }
+
+  $effect(() => {
+    const pathname = $page.url.pathname;
+    positionNav(true);
+  });
+
+  onMount(() => {
+    // Fonts and minimum-window breakpoints can change link widths after navigation.
+    const observer = new ResizeObserver(() => positionNav());
+    if (navEl) observer.observe(navEl);
+    for (const link of linkEls) if (link) observer.observe(link);
+    return () => observer.disconnect();
   });
 
   async function doSync() {
@@ -91,6 +97,21 @@
     await listen('sync-done', () => touch());
     // the Rust side runs its first sync immediately on launch; refresh shortly after mount
     setTimeout(touch, 1500);
+  });
+
+  onMount(() => {
+    if ($page.url.searchParams.has('mock')) return;
+    let cleanup: (() => void) | undefined;
+    let disposed = false;
+    const navigate = (urls:string[]) => {for (const url of urls) {const path=tokenTrailDestination(url);if(path)void goto(path);}};
+    void (async () => {
+      try {
+        const stop = await onOpenUrl(navigate);
+        if(disposed){stop();return;}cleanup=stop;
+        const urls=await getCurrent();if(!disposed&&urls)navigate(urls);
+      } catch { /* browser preview has no native protocol handler */ }
+    })();
+    return ()=>{disposed=true;cleanup?.();};
   });
 
   let { children } = $props();

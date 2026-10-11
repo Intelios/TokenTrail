@@ -530,3 +530,83 @@ mod tests {
         );
     }
 }
+
+#[tauri::command]
+pub async fn get_wackchatter_libraries(
+    app: AppHandle,
+) -> Result<Vec<crate::wackchatter::Library>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = app.state::<AppState>();
+        crate::wackchatter::libraries(&s.store, &s.home)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub async fn get_wackchatter_stats(
+    app: AppHandle,
+    library_id: String,
+    character_id: Option<String>,
+    group_id: Option<String>,
+) -> Result<crate::wackchatter::Stats, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = app.state::<AppState>();
+        crate::wackchatter::stats(
+            &s.store,
+            &s.home,
+            &library_id,
+            character_id.as_deref(),
+            group_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn get_wackchatter_usage(
+    app: AppHandle,
+    library_id: Option<String>,
+    days: i64,
+    session_id: Option<String>,
+) -> Result<crate::wackchatter::Usage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = app.state::<AppState>();
+        crate::wackchatter::usage(&s.store, library_id.as_deref(), days, session_id.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn get_wackchatter_portrait(
+    app: AppHandle,
+    library_id: String,
+    id: String,
+    persona: bool,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = app.state::<AppState>();
+        crate::wackchatter::portrait(&s.store, &s.home, &library_id, &id, persona)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn open_wackchatter(
+    app: AppHandle,
+    library_id: String,
+    chat_id: Option<String>,
+    character_id: Option<String>,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let home = app.state::<AppState>().home.clone();
+    let url = crate::wackchatter::destination(
+        &home,
+        &library_id,
+        chat_id.as_deref(),
+        character_id.as_deref(),
+    )
+    .await?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}

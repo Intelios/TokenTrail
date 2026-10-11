@@ -35,7 +35,7 @@ TokenTrail is a desktop app that reads the usage logs your AI coding tools alrea
 | OpenCode | Per-project usage |
 | Gemini CLI | Session history |
 | Antigravity | Conversation databases |
-| WackChatter | Roleplay chats — opt-in usage log, plus full transcript history |
+| WackChatter | Dedicated offline Stats, character portraits, groups, and retained generation usage |
 
 If a tool isn't installed, it's simply skipped — TokenTrail shows whatever it finds.
 
@@ -81,3 +81,20 @@ Tauri 2 (Rust backend) · SvelteKit + Svelte 5 frontend · ECharts · SQLite
 ## License
 
 [MIT](LICENSE) — do whatever you want with it.
+
+## WackChatter Stats
+
+Open **WackChatter** in TokenTrail for all-time library statistics: characters, groups,
+conversations, personas, models, activity, and habits. **Usage** adds date-filtered,
+retained generation accounting across chat, Arena, memory, and creation features.
+Measured and estimated tokens remain separate; costs are API-equivalent estimates,
+not actual subscription spend. Library changes update Stats without deleting usage.
+
+WackChatter's **Stats in TokenTrail** action opens the matching library. Stats and
+portraits work with WackChatter closed; opening a chat requires the matching library
+running locally. TokenTrail reads external data read-only and never copies transcripts.
+See the [integration contract](docs/wackchatter-integration.md).
+
+For browser UI previews, open `/wackchatter?mock`. Integration regression tests run with
+`bun test tests`; Rust tests include golden fixtures captured from WackChatter's former
+Stats suite. Test packaged `tokentrail:` links on each target OS before release.

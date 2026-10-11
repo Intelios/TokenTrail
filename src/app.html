@@ -183,8 +183,24 @@
           const totalEvents = MODELS.reduce((s, m) => s + m[4], 0);
           const totalSessions = MODELS.reduce((s, m) => s + m[5], 0);
 
+          const WCHAT_CAST = ['Ayla', 'Seraphina', 'Rowan', 'Mira'].map((name,i)=>({character_id:name+'.png',name,chats:14-i*3,replies:1254-i*285,measured_tokens:480000-i*90000,estimated_tokens:15000,first_chat:Date.now()-200*86400000,last_chat:Date.now()-i*86400000}));
+          const WCHAT_CHATS = WCHAT_CAST.map((c,i)=>({id:'wc-chat-'+i,title:['A night at the observatory','Letters from the coast','The long way home','The midnight train'][i],kind:i===3?'group':'direct',character_id:i===3?null:c.character_id,messages:1200-i*180,replies:590-i*80,measured_tokens:230000-i*20000,estimated_tokens:11000,created:Date.now()-180*86400000,modified:Date.now()-i*86400000}));
+          function chatterStats(args) {
+            const c=WCHAT_CAST.find(c=>c.character_id===args.characterId);
+            return {name:c?.name??'Your library',totals:{chats:c?14:38,messages:c?2300:7284,user_messages:3200,replies:4084,swipes:4521,measured_tokens:1920000,estimated_tokens:145000,active_minutes:1834},habits:{rerolls:437,rerolled_replies:312,eligible_replies:4084,avg_user_chars:143,avg_reply_chars:862,longest_reply_chars:6810,reasoning_swipes:2024,timed_swipes:3981,branched_chats:8,deleted_chats:3},cast:c?[c]:WCHAT_CAST,chats:WCHAT_CHATS,groups:[WCHAT_CHATS[3]],models:[{model:'claude-sonnet-5',provider:'OpenRouter',swipes:3200,measured_tokens:1400000,estimated_tokens:80000,timed_swipes:3100,total_ms:12400000,measured_ms:10000000,measured_timed_tokens:1300000,estimated_ms:2400000,estimated_timed_tokens:80000},{model:'gemini-3-pro',provider:'Google',swipes:1321,measured_tokens:520000,estimated_tokens:65000,timed_swipes:880,total_ms:4400000,measured_ms:3400000,measured_timed_tokens:450000,estimated_ms:1000000,estimated_timed_tokens:50000}],personas:[{persona_id:'traveller',name:'The Traveller',chats:25,messages:2400},{persona_id:'explorer',name:'The Traveller · Explorer',chats:13,messages:800}],hours:Array.from({length:84},(_,i)=>[Math.floor((Date.now()-i*86400000)/3600000)*3600000,Math.round(20+rng()*100)]),co_creator_sessions:12,first_chat:Date.now()-180*86400000,last_chat:Date.now()};
+          }
+          function chatterUsage(args) {
+            const rows=(names)=>names.map((name,i)=>({name,events:420-i*75,measured_tokens:730000-i*135000,estimated_tokens:17000,cost_usd:4.6-i*.8}));
+            return {totals:{events:1428,measured_events:1300,priced_events:1214,input_tokens:2900000,output_tokens:800000,cache_read_tokens:1200000,cache_write_tokens:0,estimated_tokens:52000,cost_usd:24.81,avg_duration_ms:4820,avg_ttft_ms:410},features:rows(['chat','summary','arena','groupDirector','recap']),models:rows(['claude-sonnet-5','gemini-3-pro']),providers:rows(['OpenRouter','Google']),characters:rows(WCHAT_CAST.map(c=>c.character_id)),conversations:rows(WCHAT_CHATS.map(c=>c.id)),outcomes:rows(['completed','cancelled','unknown']),daily:Array.from({length:30},(_,i)=>({name:iso(i),events:44,measured_tokens:Math.round(rng()*180000),estimated_tokens:Math.round(rng()*5000),cost_usd:.7})),calls:args.sessionId?[{id:'demo-generation',ts:Date.now(),model:'claude-sonnet-5',purpose:'chat',outcome:'completed',measured_tokens:14200,estimated_tokens:0,cost_usd:.08,duration_ms:4500,ttft_ms:300}]:[]};
+          }
+
           function mockData(cmd, args) {
             switch (cmd) {
+              case 'get_wackchatter_libraries': return [{id:'demo-library',name:'Story library',available:true,current:true}];
+              case 'get_wackchatter_stats': return chatterStats(args);
+              case 'get_wackchatter_usage': return chatterUsage(args);
+              case 'get_wackchatter_portrait': return '';
+              case 'open_wackchatter': return null;
               case 'get_wackcode_detail': return wcDetail(args.days ?? 90);
               case 'get_wackcode_session_calls':
                 const session = WC_SESSIONS.find((s) => s.id === args.sessionId);

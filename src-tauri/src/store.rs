@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -14,6 +14,15 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Read connections kept alive between queries; beyond this they are opened
 /// per call and dropped when their guard goes out of scope.
 const MAX_POOLED_READERS: usize = 4;
+
+/// WackChatter delivery provenance: transcript rank 1, retained ledger rank 2.
+#[derive(Default)]
+pub struct WackContext {
+    pub rank: i64,
+    pub library_id: Option<String>,
+    pub character_id: Option<String>,
+    pub legacy_id: Option<String>,
+}
 
 /// TokenTrail's own long-term store. Append-mostly: rows are keyed by
 /// (source, source_event_id) so re-ingesting harness data is always safe,
@@ -61,6 +70,17 @@ CREATE INDEX IF NOT EXISTS idx_usage_source_ts ON usage_event(source, ts);
 CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_event(source, session_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_event(model, ts);
 CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_event(project, ts);
+CREATE TABLE IF NOT EXISTS wackchatter_library (
+    path TEXT PRIMARY KEY, library_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wackchatter_provenance (
+    event_id TEXT PRIMARY KEY, rank INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wackchatter_membership (
+    event_id TEXT NOT NULL, library_id TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '',
+    character_id TEXT NOT NULL DEFAULT '', rank INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY(event_id, library_id, session_id, character_id)
+);
 CREATE TABLE IF NOT EXISTS ingest_state (
     source TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -96,10 +116,23 @@ impl Store {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
-        for column in ["purpose", "outcome", "workspace", "subagent_id", "provider_name", "mode"] {
-            let exists = conn.prepare("SELECT name FROM pragma_table_info('usage_event') WHERE name=?1")?
+        for column in [
+            "purpose",
+            "outcome",
+            "workspace",
+            "subagent_id",
+            "provider_name",
+            "mode",
+        ] {
+            let exists = conn
+                .prepare("SELECT name FROM pragma_table_info('usage_event') WHERE name=?1")?
                 .exists([column])?;
-            if !exists { conn.execute(&format!("ALTER TABLE usage_event ADD COLUMN {column} TEXT"), [])?; }
+            if !exists {
+                conn.execute(
+                    &format!("ALTER TABLE usage_event ADD COLUMN {column} TEXT"),
+                    [],
+                )?;
+            }
         }
         // CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a column added
         // after a release has to be added here too. Errors are ignored on purpose: the
@@ -108,6 +141,23 @@ impl Store {
             "ALTER TABLE usage_event ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        if !conn
+            .prepare(
+                "SELECT name FROM pragma_table_info('wackchatter_membership') WHERE name='rank'",
+            )?
+            .exists([])?
+        {
+            conn.execute(
+                "ALTER TABLE wackchatter_membership ADD COLUMN rank INTEGER NOT NULL DEFAULT 1",
+                [],
+            )?;
+        }
+        // Repair estimates priced by an older reprice_all implementation. Idempotent,
+        // and independent of whether the bundled pricing fingerprint changed.
+        conn.execute(
+            "UPDATE usage_event SET cost_usd=NULL WHERE estimated=1 AND cost_usd IS NOT NULL",
+            [],
+        )?;
         // Ensure new indexes exist on databases created before they were added to SCHEMA.
         let _ = conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_event(model, ts);
@@ -155,9 +205,15 @@ impl Store {
         }
         let pooled = self.readers.lock().unwrap_or_else(|p| p.into_inner()).pop();
         match pooled {
-            Some(conn) => ReadConn::Pooled(PooledRead { conn: Some(conn), pool: &self.readers }),
+            Some(conn) => ReadConn::Pooled(PooledRead {
+                conn: Some(conn),
+                pool: &self.readers,
+            }),
             None => match open_reader(&self.path) {
-                Ok(conn) => ReadConn::Pooled(PooledRead { conn: Some(conn), pool: &self.readers }),
+                Ok(conn) => ReadConn::Pooled(PooledRead {
+                    conn: Some(conn),
+                    pool: &self.readers,
+                }),
                 // Unreachable in practice (Store::open created the file), but a
                 // query should degrade to the writer rather than fail outright.
                 Err(_) => ReadConn::Writer(self.writer()),
@@ -165,7 +221,37 @@ impl Store {
         }
     }
 
+    pub fn remember_wackchatter_library(&self, path: &str, id: &str) -> rusqlite::Result<()> {
+        self.writer().execute("INSERT INTO wackchatter_library(path,library_id) VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET library_id=excluded.library_id", params![path,id])?;
+        Ok(())
+    }
+    pub fn wackchatter_library_id(&self, path: &str) -> Option<String> {
+        self.read_conn()
+            .query_row(
+                "SELECT library_id FROM wackchatter_library WHERE path=?1",
+                [path],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+
     pub fn insert_events(&self, events: &[UsageEvent]) -> rusqlite::Result<usize> {
+        self.insert_with_context(events, &[])
+    }
+
+    pub fn insert_wackchatter(
+        &self,
+        events: &[UsageEvent],
+        contexts: &[WackContext],
+    ) -> rusqlite::Result<usize> {
+        self.insert_with_context(events, contexts)
+    }
+
+    fn insert_with_context(
+        &self,
+        events: &[UsageEvent],
+        contexts: &[WackContext],
+    ) -> rusqlite::Result<usize> {
         if events.is_empty() {
             return Ok(0);
         }
@@ -191,7 +277,47 @@ impl Store {
                     estimated=excluded.estimated, purpose=excluded.purpose, outcome=excluded.outcome,
                     workspace=excluded.workspace, subagent_id=excluded.subagent_id, mode=excluded.mode",
             )?;
-            for e in events {
+            for (index, incoming) in events.iter().enumerate() {
+                let mut merged = incoming.clone();
+                if let Some(ctx) = contexts.get(index) {
+                    // Repair pre-library fallback identities in place, never duplicate them.
+                    if let Some(old) = &ctx.legacy_id {
+                        tx.execute("UPDATE OR IGNORE usage_event SET source_event_id=?1 WHERE source='wackchatter' AND source_event_id=?2", params![incoming.source_event_id, old])?;
+                        tx.execute("DELETE FROM usage_event WHERE source='wackchatter' AND source_event_id=?1 AND EXISTS(SELECT 1 FROM usage_event WHERE source='wackchatter' AND source_event_id=?2)", params![old, incoming.source_event_id])?;
+                    }
+                    let previous = tx.query_row("SELECT ts,session_id,project,provider,provider_name,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,estimated,purpose,outcome,COALESCE((SELECT rank FROM wackchatter_provenance WHERE event_id=u.source_event_id),0) FROM usage_event u WHERE source='wackchatter' AND source_event_id=?1", [&incoming.source_event_id], |r| {
+                        Ok((UsageEvent { source: Source::WackChatter, source_event_id: incoming.source_event_id.clone(), ts:r.get(0)?,session_id:r.get(1)?,project:r.get(2)?,provider:r.get(3)?,provider_name:r.get(4)?,model:r.get(5)?,input_tokens:r.get(6)?,output_tokens:r.get(7)?,reasoning_tokens:r.get(8)?,cache_read_tokens:r.get(9)?,cache_write_tokens:r.get(10)?,duration_ms:r.get(11)?,ttft_ms:r.get(12)?,is_subagent:r.get(13)?,estimated:r.get(14)?,purpose:r.get(15)?,outcome:r.get(16)?,workspace:None,subagent_id:None,mode:None },r.get::<_,i64>(17)?))
+                    }).optional()?;
+                    let mut rank = ctx.rank;
+                    if let Some((old, old_rank)) = previous {
+                        let keep_old = (!old.estimated && incoming.estimated)
+                            || (old.estimated == incoming.estimated && old_rank > ctx.rank);
+                        let (winner, loser) = if keep_old {
+                            rank = old_rank;
+                            (old, incoming.clone())
+                        } else {
+                            (incoming.clone(), old)
+                        };
+                        merged = winner;
+                        merged.session_id = merged.session_id.or(loser.session_id);
+                        merged.provider = merged.provider.or(loser.provider);
+                        merged.provider_name = merged.provider_name.or(loser.provider_name);
+                        merged.model = merged.model.or(loser.model);
+                        merged.purpose = merged.purpose.or(loser.purpose);
+                        merged.outcome = merged.outcome.or(loser.outcome);
+                        merged.duration_ms = merged.duration_ms.or(loser.duration_ms);
+                        merged.ttft_ms = merged.ttft_ms.or(loser.ttft_ms);
+                        if merged.estimated == loser.estimated {
+                            merged.reasoning_tokens =
+                                merged.reasoning_tokens.or(loser.reasoning_tokens);
+                        }
+                    }
+                    tx.execute("INSERT INTO wackchatter_provenance(event_id,rank) VALUES(?1,?2) ON CONFLICT(event_id) DO UPDATE SET rank=excluded.rank", params![incoming.source_event_id,rank])?;
+                    if let Some(library) = &ctx.library_id {
+                        tx.execute("INSERT INTO wackchatter_membership(event_id,library_id,session_id,character_id,rank) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(event_id,library_id,session_id,character_id) DO UPDATE SET rank=MAX(rank,excluded.rank)",params![incoming.source_event_id,library,incoming.session_id.as_deref().unwrap_or(""),ctx.character_id.as_deref().unwrap_or(""),ctx.rank])?;
+                    }
+                }
+                let e = &merged;
                 let cost = pricing::cost_usd(e.model.as_deref(), e);
                 n += stmt.execute(params![
                     e.source.as_str(),
@@ -212,7 +338,11 @@ impl Store {
                     e.is_subagent as i64,
                     cost,
                     e.estimated as i64,
-                    e.purpose, e.outcome, e.workspace, e.subagent_id, e.mode,
+                    e.purpose,
+                    e.outcome,
+                    e.workspace,
+                    e.subagent_id,
+                    e.mode,
                 ])?;
             }
         }
@@ -267,7 +397,7 @@ impl Store {
             let cost =
                 pricing::cost_for(source, model.as_deref(), input, output, reasoning, cr, cw);
             n += tx.execute(
-                "UPDATE usage_event SET cost_usd = ?2 WHERE id = ?1",
+                "UPDATE usage_event SET cost_usd = CASE WHEN estimated=0 THEN ?2 END WHERE id = ?1",
                 params![id, cost],
             )?;
         }
@@ -315,8 +445,8 @@ impl Store {
 
     pub fn known_paths(&self, source: &str) -> Vec<String> {
         let conn = self.writer();
-        let Ok(mut stmt) =
-            conn.prepare("SELECT path FROM ingest_state WHERE source=?1 AND path<>'' ORDER BY path")
+        let Ok(mut stmt) = conn
+            .prepare("SELECT path FROM ingest_state WHERE source=?1 AND path<>'' ORDER BY path")
         else {
             return Vec::new();
         };
@@ -380,8 +510,8 @@ impl Store {
 
     pub fn get_model_aliases(&self) -> rusqlite::Result<Vec<ModelAlias>> {
         let conn = self.read_conn();
-        let mut stmt =
-            conn.prepare_cached("SELECT alias, canonical FROM model_alias ORDER BY canonical, alias")?;
+        let mut stmt = conn
+            .prepare_cached("SELECT alias, canonical FROM model_alias ORDER BY canonical, alias")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(ModelAlias {
@@ -408,8 +538,11 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| format!("begin merge transaction: {e}"))?;
         // A canonical that was previously an alias must not keep its own row.
-        tx.execute("DELETE FROM model_alias WHERE alias = ?1", params![canonical])
-            .map_err(|e| format!("clear canonical self-alias: {e}"))?;
+        tx.execute(
+            "DELETE FROM model_alias WHERE alias = ?1",
+            params![canonical],
+        )
+        .map_err(|e| format!("clear canonical self-alias: {e}"))?;
         let mut n = 0usize;
         let mut seen = std::collections::HashSet::new();
         for name in names.iter().filter(|n| *n != canonical) {
@@ -442,7 +575,10 @@ impl Store {
 
     pub fn remove_aliases_for(&self, canonical: &str) -> rusqlite::Result<usize> {
         let conn = self.writer();
-        conn.execute("DELETE FROM model_alias WHERE canonical = ?1", params![canonical])
+        conn.execute(
+            "DELETE FROM model_alias WHERE canonical = ?1",
+            params![canonical],
+        )
     }
 
     /// Rename a model display name: sets `current_name` to display as `new_name`.
@@ -532,7 +668,8 @@ impl Store {
 
     pub fn get_project_colors(&self) -> rusqlite::Result<Vec<ProjectColor>> {
         let conn = self.read_conn();
-        let mut stmt = conn.prepare_cached("SELECT project, color FROM project_color ORDER BY project")?;
+        let mut stmt =
+            conn.prepare_cached("SELECT project, color FROM project_color ORDER BY project")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(ProjectColor {
@@ -565,7 +702,10 @@ impl Store {
 
     pub fn clear_project_color(&self, project: &str) -> rusqlite::Result<usize> {
         let conn = self.writer();
-        conn.execute("DELETE FROM project_color WHERE project = ?1", params![project.trim()])
+        conn.execute(
+            "DELETE FROM project_color WHERE project = ?1",
+            params![project.trim()],
+        )
     }
 
     /// The project a recorded folder counts under: its mapped target if one exists,
@@ -596,8 +736,9 @@ impl Store {
 
     pub fn get_project_aliases(&self) -> rusqlite::Result<Vec<ProjectAlias>> {
         let conn = self.read_conn();
-        let mut stmt =
-            conn.prepare_cached("SELECT alias, canonical FROM project_alias ORDER BY canonical, alias")?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT alias, canonical FROM project_alias ORDER BY canonical, alias",
+        )?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(ProjectAlias {
@@ -630,8 +771,11 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| format!("begin merge transaction: {e}"))?;
         // A canonical kept separate from its own root must not keep that row.
-        tx.execute("DELETE FROM project_alias WHERE alias = ?1", params![canonical])
-            .map_err(|e| format!("clear canonical mapping: {e}"))?;
+        tx.execute(
+            "DELETE FROM project_alias WHERE alias = ?1",
+            params![canonical],
+        )
+        .map_err(|e| format!("clear canonical mapping: {e}"))?;
         let mut n = 0usize;
         let mut seen = std::collections::HashSet::new();
         for name in names.iter().filter(|n| *n != canonical) {
@@ -840,7 +984,9 @@ pub fn open_readonly(path: &Path) -> rusqlite::Result<Connection> {
         | OpenFlags::SQLITE_OPEN_URI;
     match Connection::open_with_flags(path, flags) {
         Ok(c) => Ok(c),
-        Err(_) => Connection::open_with_flags(format!("file:{}?immutable=1", path.display()), flags),
+        Err(_) => {
+            Connection::open_with_flags(format!("file:{}?immutable=1", path.display()), flags)
+        }
     }
 }
 
@@ -860,14 +1006,21 @@ mod tests {
             .unwrap();
         let aliases = store.get_model_aliases().unwrap();
         assert_eq!(aliases.len(), 1);
-        assert_eq!(aliases[0], ModelAlias { alias: "glm-5.3".into(), canonical: "GLM-5.3".into() });
+        assert_eq!(
+            aliases[0],
+            ModelAlias {
+                alias: "glm-5.3".into(),
+                canonical: "GLM-5.3".into()
+            }
+        );
 
         store.remove_aliases_for("GLM-5.3").unwrap();
         assert!(store.get_model_aliases().unwrap().is_empty());
     }
 
     fn tmp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("tokentrail-test-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("tokentrail-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -892,7 +1045,11 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
+            purpose: None,
+            outcome: None,
+            workspace: None,
+            subagent_id: None,
+            mode: None,
         }
     }
 
@@ -932,7 +1089,10 @@ mod tests {
         );
 
         // synthetic non-path names are never rewritten
-        assert_eq!(resolve_project_root("WackChatter · Lyra"), "WackChatter · Lyra");
+        assert_eq!(
+            resolve_project_root("WackChatter · Lyra"),
+            "WackChatter · Lyra"
+        );
     }
 
     #[test]
@@ -963,16 +1123,22 @@ mod tests {
     #[test]
     fn merged_projects_stay_flat() {
         let store = test_store();
-        store.merge_projects(&["/a".into(), "/b".into()], "/a").unwrap();
+        store
+            .merge_projects(&["/a".into(), "/b".into()], "/a")
+            .unwrap();
         assert_eq!(store.project_canonical("/b"), "/a");
 
         // absorbing a project carries its folded folders along, no chains
-        store.merge_projects(&["/a".into(), "/c".into()], "/c").unwrap();
+        store
+            .merge_projects(&["/a".into(), "/c".into()], "/c")
+            .unwrap();
         assert_eq!(store.project_canonical("/a"), "/c");
         assert_eq!(store.project_canonical("/b"), "/c");
 
         // the unknown bucket is not a project and cannot be merged
-        assert!(store.merge_projects(&["/c".into(), "unknown".into()], "/c").is_err());
+        assert!(store
+            .merge_projects(&["/c".into(), "unknown".into()], "/c")
+            .is_err());
 
         store.unmerge_projects(&["/b".into()]).unwrap();
         assert_eq!(store.project_canonical("/b"), "/b");
@@ -987,7 +1153,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             store.get_project_colors().unwrap(),
-            vec![ProjectColor { project: "/repo".into(), color: "#ff0000".into() }]
+            vec![ProjectColor {
+                project: "/repo".into(),
+                color: "#ff0000".into()
+            }]
         );
     }
 
@@ -1031,7 +1200,9 @@ mod tests {
     #[test]
     fn remove_single_alias() {
         let store = test_store();
-        store.merge_models(&["A".into(), "B".into(), "C".into()], "A").unwrap();
+        store
+            .merge_models(&["A".into(), "B".into(), "C".into()], "A")
+            .unwrap();
         store.remove_model_alias("B").unwrap();
         let aliases = store.get_model_aliases().unwrap();
         assert_eq!(aliases.len(), 1);
@@ -1045,10 +1216,15 @@ mod tests {
         assert!(store.get_hidden_models().unwrap().is_empty());
 
         store.hide_models(&["codex-auto-review".into()]).unwrap();
-        assert_eq!(store.get_hidden_models().unwrap(), vec!["codex-auto-review"]);
+        assert_eq!(
+            store.get_hidden_models().unwrap(),
+            vec!["codex-auto-review"]
+        );
 
         // Re-hiding is a no-op, and multiple names are kept sorted.
-        store.hide_models(&["codex-auto-review".into(), "gpt-5".into()]).unwrap();
+        store
+            .hide_models(&["codex-auto-review".into(), "gpt-5".into()])
+            .unwrap();
         assert_eq!(
             store.get_hidden_models().unwrap(),
             vec!["codex-auto-review", "gpt-5"]
@@ -1069,8 +1245,14 @@ mod tests {
         assert_eq!(
             store.get_project_colors().unwrap(),
             vec![
-                ProjectColor { project: "/code/alpha".into(), color: "#00c2c2".into() },
-                ProjectColor { project: "/code/beta".into(), color: "#ff4d00".into() },
+                ProjectColor {
+                    project: "/code/alpha".into(),
+                    color: "#00c2c2".into()
+                },
+                ProjectColor {
+                    project: "/code/beta".into(),
+                    color: "#ff4d00".into()
+                },
             ]
         );
 
@@ -1083,15 +1265,30 @@ mod tests {
         store.clear_project_color("/code/alpha").unwrap();
         assert_eq!(
             store.get_project_colors().unwrap(),
-            vec![ProjectColor { project: "/code/beta".into(), color: "#7c5cff".into() }]
+            vec![ProjectColor {
+                project: "/code/beta".into(),
+                color: "#7c5cff".into()
+            }]
         );
     }
 
     #[test]
     fn project_color_validates_input() {
         let store = test_store();
-        for bad in ["", "ff4d00", "#f40", "#ff4d0", "#ff4d00aa", "#gg4d00", "red", "rgba(0,0,0,1)"] {
-            assert!(store.set_project_color("/code/a", bad).is_err(), "accepted {bad:?}");
+        for bad in [
+            "",
+            "ff4d00",
+            "#f40",
+            "#ff4d0",
+            "#ff4d00aa",
+            "#gg4d00",
+            "red",
+            "rgba(0,0,0,1)",
+        ] {
+            assert!(
+                store.set_project_color("/code/a", bad).is_err(),
+                "accepted {bad:?}"
+            );
         }
         assert!(store.set_project_color("unknown", "#ff4d00").is_err());
         assert!(store.set_project_color("  ", "#ff4d00").is_err());
@@ -1119,7 +1316,11 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
+            purpose: None,
+            outcome: None,
+            workspace: None,
+            subagent_id: None,
+            mode: None,
         };
         store.insert_events(&[e]).unwrap();
         // Insert priced it at $18 (1M in + 1M out at $3/$15).
@@ -1130,7 +1331,10 @@ mod tests {
         assert!((before - 18.0).abs() < 1e-9);
 
         // Sabotage the stored cost, then reprice_all restores it.
-        store.read_conn().execute("UPDATE usage_event SET cost_usd = 1.0", []).unwrap();
+        store
+            .read_conn()
+            .execute("UPDATE usage_event SET cost_usd = 1.0", [])
+            .unwrap();
         assert_eq!(store.reprice_all().unwrap(), 1);
         let after: f64 = store
             .read_conn()
@@ -1225,7 +1429,11 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
+            purpose: None,
+            outcome: None,
+            workspace: None,
+            subagent_id: None,
+            mode: None,
         };
         let e2 = UsageEvent {
             source: Source::Zcode,
@@ -1245,7 +1453,11 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
+            purpose: None,
+            outcome: None,
+            workspace: None,
+            subagent_id: None,
+            mode: None,
         };
         let e3 = UsageEvent {
             source: Source::Zcode,
@@ -1265,7 +1477,11 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
+            purpose: None,
+            outcome: None,
+            workspace: None,
+            subagent_id: None,
+            mode: None,
         };
         let e4 = UsageEvent {
             source: Source::Zcode,
@@ -1285,7 +1501,11 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
+            purpose: None,
+            outcome: None,
+            workspace: None,
+            subagent_id: None,
+            mode: None,
         };
         store.insert_events(&[e1, e2, e3, e4]).unwrap();
 

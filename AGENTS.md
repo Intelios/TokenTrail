@@ -2,7 +2,7 @@
 
 TokenTrail is a Tauri desktop app that aggregates AI usage across local tools (ZCode, Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, Devin CLI, WackChatter) and shows it in a SvelteKit + ECharts dashboard.
 
-WackChatter note: its collector is the only one that reads two places for one source, and the only one that reads more than one origin. `~/.wackchatter/usage.jsonl` is a live log the app writes when the user opts in — the only record of generations that never become a stored message (Arena rounds, rolling summaries, memory extraction, persona derivation). `<library>/chats.db` holds the transcripts, which carry per-swipe counts going back years; `~/.wackchatter/library.json` is how it is found, because the library moves. The two overlap for ordinary replies and dedupe on the generation id WackChatter mints per request, so `wackchatter.rs` is also the worked example of why event identity has to be stable.
+WackChatter note: its collector is the only one that reads two places for one source, and the only one that reads more than one origin. `~/.wackchatter/usage/v2/*/*.jsonl` is a retained ledger the app writes by default (explicit off choices survive); legacy `usage.jsonl` and its `.1` rotation are also read — the only record of generations that never become a stored message (Arena rounds, rolling summaries, memory extraction, persona derivation). `<library>/chats.db` holds the transcripts, which carry per-swipe counts going back years; `~/.wackchatter/library.json` is how it is found, because the library moves. The two overlap for ordinary replies and dedupe on the generation id WackChatter mints per request, so `wackchatter.rs` is also the worked example of why event identity has to be stable.
 
 Antigravity note: its collector reads `~/.gemini/antigravity/conversations/*.db` — per-conversation SQLite files whose `gen_metadata` rows are protobuf blobs (ChatModelMetadata wire layout, hand-parsed in `antigravity.rs`). The internal format is undocumented and may change between Antigravity releases; the wire reader is deliberately tolerant and skips unparseable rows.
 
@@ -107,3 +107,17 @@ bun run tauri build  # production build
 - New aggregate metric → read `aggregate.rs` and mirror types in both `commands.rs` and `src/lib/api.ts`.
 - New UI route/page → read `src/routes/+layout.svelte` and `src/app.css` first.
 - Pricing model support → read `src-tauri/src/pricing.rs` and `src-tauri/pricing/pricing.json`.
+
+## WackChatter Stats ownership
+
+TokenTrail owns the WackChatter Stats destination. `src-tauri/src/wackchatter.rs` queries
+libraries read-only and returns typed statistics, never transcript bodies. Library
+inventories are all-time and unfiltered; usage analytics honor aliases/hidden models.
+Character Stats separate direct chats from per-speaker group participation. Portraits
+are decoded/re-encoded to strip embedded card metadata before IPC.
+
+`wackchatter_provenance` protects measured/ledger data from weaker transcript imports;
+`wackchatter_membership` separates generation identity from library/chat membership.
+Keep both sides of the contract in `docs/wackchatter-integration.md` in sync with
+WackChatter. Local handoffs must validate library identity and cannot create chats.
+Calendar and protocol regression tests run with `bun test tests`.

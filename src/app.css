@@ -530,3 +530,9 @@ tbody tr:hover td { background: var(--hair); }
   main.edge { padding: 0; }
   h1 { font-size: 30px; }
 }
+
+/* All harness destinations remain accessible at the desktop minimum width. */
+.topnav nav { min-width:0; overflow-x:auto; flex:1; }
+.topnav nav a { flex:none; }
+.topnav .sy { flex:none; }
+@media(max-width:1100px){.topnav nav a{padding-left:10px;padding-right:10px}.topnav nav a u{display:none}.topnav .sy{font-size:10px}}

@@ -6,6 +6,7 @@ mod models;
 mod pricing;
 mod state;
 mod store;
+mod wackchatter;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -22,13 +23,20 @@ const SYNC_INTERVAL: Duration = Duration::from_secs(30);
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let base_data_dir = app.path().data_dir()?;
             let new_data_dir = base_data_dir.join("TokenTrail");
             let old_data_dir = app.path().app_data_dir()?;
-            
+
             if old_data_dir.exists() && !new_data_dir.exists() {
                 if let Err(e) = std::fs::rename(&old_data_dir, &new_data_dir) {
                     println!("Failed to rename data dir: {}", e);
@@ -37,9 +45,9 @@ pub fn run() {
             } else if !new_data_dir.exists() {
                 let _ = std::fs::create_dir_all(&new_data_dir);
             }
-            
+
             let data_dir = new_data_dir;
-            
+
             let store = store::Store::open(&data_dir.join("usage.db"))
                 .map_err(|e| format!("open usage store: {e}"))?;
 
@@ -89,6 +97,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::sync_now,
             commands::get_overview,
+            commands::get_wackchatter_libraries,
+            commands::get_wackchatter_stats,
+            commands::get_wackchatter_usage,
+            commands::get_wackchatter_portrait,
+            commands::open_wackchatter,
             commands::get_wackcode_detail,
             commands::get_wackcode_session_calls,
             commands::get_daily,

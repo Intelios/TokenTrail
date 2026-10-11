@@ -45,8 +45,8 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
         (Source::Gemini, home.join(".gemini/tmp")),
         (Source::Antigravity, home.join(".gemini/antigravity/conversations")),
         (Source::Devin, home.join(".local/share/devin/cli/sessions.db")),
-        // The log, not the library: the library moves, and this path never does.
-        (Source::WackChatter, home.join(".wackchatter/usage.jsonl")),
+        // Discovery and retained usage live here; the library itself can move.
+        (Source::WackChatter, home.join(".wackchatter")),
         (Source::WackCode, wackcode::root(home)),
     ];
     paths
