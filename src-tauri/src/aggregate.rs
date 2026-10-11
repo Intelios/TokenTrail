@@ -11,6 +11,19 @@ use crate::store::Store;
 /// are a subset of output on both Anthropic and OpenAI and never added.
 const TOKENS: &str = "(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)";
 
+/// The key the WackCode page groups calls by. A main-thread call in code mode
+/// ({purpose: 'chat'} with no mode — every record written before Chat mode shipped —
+/// or mode 'code') is the coding agent and surfaces as 'code'; only a chat-mode
+/// main-thread call keeps the 'chat' key, which renders as Chat mode. Every
+/// other purpose is mode-independent. Column references are qualified for the
+/// `u` alias used by the WackCode queries.
+const WC_KEY: &str = "CASE WHEN COALESCE(u.purpose,'chat')='chat' AND COALESCE(u.mode,'code')='code' \
+                      THEN 'code' ELSE COALESCE(u.purpose,'chat') END";
+
+/// Housekeeping purposes support the chat rather than do its work; a session's
+/// headline model list is built from everything else (main thread, sub-agents).
+const WC_WORK: &str = "COALESCE(u.purpose,'chat') NOT IN ('title','compaction','branch_summary','goal_verification','commit_message')";
+
 #[derive(Debug, Serialize)]
 pub struct UsagePurposeRow {
     pub purpose: String,
@@ -55,6 +68,9 @@ pub struct WackCodeSessionRow {
     pub cancelled: i64,
     pub first_ts: i64,
     pub last_ts: i64,
+    /// 'code' or 'chat'; a WackCode chat belongs to one mode for life. `models`
+    /// covers work purposes only (housekeeping stays in the expanded timeline).
+    pub mode: String,
 }
 
 /// One WackCode model call inside a chat, in timeline order. `purpose` and
@@ -85,10 +101,10 @@ pub struct WackCodeDetail {
     pub last_ts: Option<i64>,
     pub subagent_events: i64,
     pub subagent_tokens: i64,
-    pub avg_duration_ms: i64,
-    pub p50_duration_ms: i64,
     pub by_purpose: Vec<UsagePurposeRow>,
     pub by_outcome: Vec<WackCodeOutcomeRow>,
+    /// Tokens/calls split by app mode ('code' covers rows with no mode stamp).
+    pub by_mode: Vec<WackCodeBreakdownRow>,
     pub by_model: Vec<WackCodeBreakdownRow>,
     pub by_provider: Vec<WackCodeBreakdownRow>,
     pub by_project: Vec<WackCodeBreakdownRow>,
@@ -106,7 +122,6 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
                 COUNT(DISTINCT session_id), SUM(cost_usd), MIN(ts), MAX(ts),
                 COALESCE(SUM(CASE WHEN u.is_subagent=1 THEN 1 ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN u.is_subagent=1 THEN {T} ELSE 0 END),0),
-                CAST(COALESCE(AVG(duration_ms),0) AS INTEGER),
                 COUNT(DISTINCT date(ts/1000,'unixepoch'))
          FROM usage_event u WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}",
         T = TOKENS,
@@ -117,32 +132,19 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
             r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?,
             r.get::<_, i64>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, Option<f64>>(7)?,
             r.get::<_, Option<i64>>(8)?, r.get::<_, Option<i64>>(9)?, r.get::<_, i64>(10)?,
-            r.get::<_, i64>(11)?, r.get::<_, i64>(12)?, r.get::<_, i64>(13)?,
+            r.get::<_, i64>(11)?, r.get::<_, i64>(12)?,
         ))
     })?;
 
-    // Median duration: the OFFSET half-way point of the sorted durations. The
-    // inner `u` alias shadows the outer one, so the fragment reads correctly
-    // in both scopes.
-    let p50_sql = format!(
-        "SELECT duration_ms FROM usage_event u
-         WHERE u.ts >= ?1 AND u.source='wackcode' AND duration_ms IS NOT NULL AND {H}
-         ORDER BY duration_ms
-         LIMIT 1 OFFSET (SELECT (COUNT(*)-1)/2 FROM usage_event u
-                         WHERE u.ts >= ?1 AND u.source='wackcode' AND duration_ms IS NOT NULL AND {H})",
-        H = NOT_HIDDEN
-    );
-    let p50_duration_ms: i64 = conn
-        .query_row(&p50_sql, [cut], |r| r.get(0))
-        .unwrap_or(0);
-
     // by_purpose runs on the connection already held here — asking the store
-    // for a second one deadlocks a :memory: database (see read_conn).
+    // for a second one deadlocks a :memory: database (see read_conn). Rows are
+    // grouped by the derived key so code-mode and chat-mode main calls split.
     let by_purpose = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT COALESCE(purpose, 'chat'), COUNT(*), SUM({T}), SUM(cost_usd)
+            "SELECT {K}, COUNT(*), SUM({T}), SUM(cost_usd)
              FROM usage_event u WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
-             GROUP BY purpose ORDER BY SUM({T}) DESC",
+             GROUP BY 1 ORDER BY SUM({T}) DESC",
+            K = WC_KEY,
             T = TOKENS,
             H = NOT_HIDDEN
         ))?;
@@ -207,6 +209,15 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
         T = TOKENS,
         H = NOT_HIDDEN
     ))?;
+    // the mode split includes housekeeping: the panel divides the whole window
+    let by_mode = breakdown(format!(
+        "SELECT COALESCE(u.mode, 'code'), COUNT(*), COALESCE(SUM({T}),0), SUM(u.cost_usd)
+         FROM usage_event u
+         WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
+         GROUP BY 1 ORDER BY 3 DESC",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    ))?;
     let by_project = breakdown(format!(
         "SELECT {P}, COUNT(*), COALESCE(SUM({T}),0), SUM(u.cost_usd)
          FROM usage_event u LEFT JOIN project_alias pj ON pj.alias = u.project
@@ -219,9 +230,10 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
 
     let daily = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(purpose,'chat'), COALESCE(SUM({T}),0)
+            "SELECT date(ts/1000,'unixepoch') AS d, {K}, COALESCE(SUM({T}),0)
              FROM usage_event u WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
              GROUP BY d, 2 ORDER BY d",
+            K = WC_KEY,
             T = TOKENS,
             H = NOT_HIDDEN
         ))?;
@@ -234,13 +246,16 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
     };
 
     // One row per WackCode chat. SQLite's bare-column rule makes the project
-    // and models come from the row that satisfied MAX(u.ts) — the chat's most
-    // recent call — so a project switched mid-chat shows the current one.
+    // come from the row that satisfied MAX(u.ts) — the chat's most recent call
+    // — so a project switched mid-chat shows the current one. The model chips
+    // name the models that did the work: housekeeping calls (the auto-titler
+    // above all) stay visible in the expanded timeline only. A chat belongs to
+    // one mode for life, so any chat-mode row settles it.
     let sessions_list = {
         let mut stmt = conn.prepare(&format!(
             "SELECT COALESCE(u.session_id, 'unknown'),
                     {P},
-                    GROUP_CONCAT(DISTINCT COALESCE(a.canonical, u.model, 'unknown')),
+                    GROUP_CONCAT(DISTINCT CASE WHEN {W} THEN COALESCE(a.canonical, u.model, 'unknown') END),
                     COUNT(*),
                     COALESCE(SUM(u.is_subagent), 0),
                     COALESCE(SUM({T}), 0),
@@ -249,7 +264,8 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
                     COALESCE(SUM(outcome='failed'), 0),
                     COALESCE(SUM(outcome='cancelled'), 0),
                     MIN(u.ts),
-                    MAX(u.ts)
+                    MAX(u.ts),
+                    CASE WHEN MAX(u.mode='chat') = 1 THEN 'chat' ELSE 'code' END
              FROM usage_event u
              LEFT JOIN model_alias a ON a.alias = u.model
              LEFT JOIN project_alias pj ON pj.alias = u.project
@@ -257,6 +273,7 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
              GROUP BY 1
              ORDER BY MAX(u.ts) DESC",
             P = PROJECT,
+            W = WC_WORK,
             T = TOKENS,
             H = NOT_HIDDEN
         ))?;
@@ -280,6 +297,7 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
                     cancelled: r.get(9)?,
                     first_ts: r.get(10)?,
                     last_ts: r.get(11)?,
+                    mode: r.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -294,16 +312,15 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
         cache_write_tokens: t.4,
         events: t.5,
         sessions: t.6,
-        active_days: t.13,
+        active_days: t.12,
         cost_usd: t.7,
         first_ts: t.8,
         last_ts: t.9,
         subagent_events: t.10,
         subagent_tokens: t.11,
-        avg_duration_ms: t.12,
-        p50_duration_ms,
         by_purpose,
         by_outcome,
+        by_mode,
         by_model,
         by_provider,
         by_project,
@@ -317,13 +334,14 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
 pub fn wackcode_session_calls(store: &Store, session_id: &str) -> DbResult<Vec<WackCodeCallRow>> {
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&format!(
-        "SELECT u.ts, COALESCE(u.purpose, 'chat'), u.subagent_id,
+        "SELECT u.ts, {K}, u.subagent_id,
                 COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(u.outcome, 'completed'),
                 COALESCE({T}, 0), COALESCE(u.duration_ms, 0)
          FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
          WHERE u.source='wackcode' AND u.session_id = ?1 AND {H}
          ORDER BY u.ts",
+        K = WC_KEY,
         T = TOKENS,
         H = NOT_HIDDEN
     ))?;
@@ -2440,7 +2458,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         }
     }
 
@@ -2635,6 +2653,7 @@ mod tests {
             outcome: Some("completed".to_string()),
             workspace: None,
             subagent_id: None,
+            mode: None,
         }
     }
 
@@ -2671,12 +2690,11 @@ mod tests {
         assert_eq!(d.total_tokens, 155);
         assert_eq!(d.subagent_events, 1);
         assert_eq!(d.subagent_tokens, 50);
-        // avg (1000+4000+200+300)/4 = 1375; the median lands on the lower
-        // middle of {200,300,1000,4000} — element (n-1)/2 of the sorted run
-        assert_eq!(d.avg_duration_ms, 1375);
-        assert_eq!(d.p50_duration_ms, 300);
         let purposes: Vec<&str> = d.by_purpose.iter().map(|p| p.purpose.as_str()).collect();
-        assert_eq!(purposes, vec!["chat", "subagent", "title"]);
+        // pre-mode records: the main thread surfaces as 'code'
+        assert_eq!(purposes, vec!["code", "subagent", "title"]);
+        assert_eq!(d.by_mode.len(), 1);
+        assert_eq!(d.by_mode[0].name, "code");
         assert_eq!(
             d.by_outcome
                 .iter()
@@ -2694,7 +2712,10 @@ mod tests {
         let s = &d.sessions_list[0];
         assert_eq!(s.session_id, "chat-1");
         assert_eq!(s.project, "/repo");
-        assert_eq!(s.models, vec!["claude-sonnet-4-5", "gpt-5-mini"]);
+        // housekeeping calls stay out of the headline models: the title call's
+        // gpt-5-mini shows in the expanded timeline only
+        assert_eq!(s.models, vec!["claude-sonnet-4-5"]);
+        assert_eq!(s.mode, "code");
         assert_eq!(s.events, 4);
         assert_eq!(s.subagents, 1);
         assert_eq!(s.completed, 3);
@@ -2703,11 +2724,45 @@ mod tests {
 
         let calls = wackcode_session_calls(&store, "chat-1").unwrap();
         assert_eq!(calls.len(), 4);
-        assert_eq!(calls.iter().map(|c| c.purpose.as_str()).collect::<Vec<_>>(), vec!["chat", "subagent", "title", "chat"]);
+        assert_eq!(calls.iter().map(|c| c.purpose.as_str()).collect::<Vec<_>>(), vec!["code", "subagent", "title", "code"]);
 
         // the window respects the days cutoff
         let d7 = wackcode_detail(&store, 7).unwrap();
         assert_eq!(d7.events, 0);
+    }
+
+    #[test]
+    fn wackcode_chat_mode_splits_from_code() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let base = 1_760_000_000_000_i64;
+        // a chat-mode session: main call and its title call carry mode 'chat'
+        let mut main = wackcode_event("m1", base, 100);
+        main.session_id = Some("chat-9".to_string());
+        main.mode = Some("chat".into());
+        let mut title = wackcode_event("m2", base + 1000, 5);
+        title.session_id = Some("chat-9".to_string());
+        title.purpose = Some("title".into());
+        title.model = Some("gpt-5-mini".into());
+        title.mode = Some("chat".into());
+        // a code-mode session in the same window
+        store.insert_events(&[wackcode_event("m3", base + 500, 40), main, title]).unwrap();
+
+        let d = wackcode_detail(&store, 3650).unwrap();
+        let purposes: Vec<(&str, i64)> =
+            d.by_purpose.iter().map(|p| (p.purpose.as_str(), p.tokens)).collect();
+        assert_eq!(purposes, vec![("chat", 100), ("code", 40), ("title", 5)]);
+        let modes: Vec<(&str, i64, i64)> =
+            d.by_mode.iter().map(|m| (m.name.as_str(), m.events, m.tokens)).collect();
+        assert_eq!(modes, vec![("chat", 2, 105), ("code", 1, 40)]);
+
+        let chat = d.sessions_list.iter().find(|s| s.session_id == "chat-9").unwrap();
+        assert_eq!(chat.mode, "chat");
+        assert_eq!(chat.models, vec!["claude-sonnet-4-5"]);
+        let code = d.sessions_list.iter().find(|s| s.session_id == "chat-1").unwrap();
+        assert_eq!(code.mode, "code");
+
+        let calls = wackcode_session_calls(&store, "chat-9").unwrap();
+        assert_eq!(calls.iter().map(|c| c.purpose.as_str()).collect::<Vec<_>>(), vec!["chat", "title"]);
     }
 
     #[test]

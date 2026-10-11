@@ -30,8 +30,11 @@
   const RANGE_LABEL: Record<number, string> = { 7: '7 days', 30: '30 days', 90: '90 days', 3650: 'all time' };
   const PREF_DAYS = 'tt.wackcode.days';
 
-  // stack order for the daily chart; unknown purposes ride on top
+  // stack order for the daily chart; unknown purposes ride on top. `code` is
+  // the coding agent's main thread (what the ledger recorded as purpose 'chat'
+  // before — and still does, with mode 'code'); `chat` is real Chat mode.
   const PURPOSE_ORDER = [
+    'code',
     'chat',
     'subagent',
     'compaction',
@@ -41,6 +44,7 @@
     'commit_message',
   ];
   const PURPOSE_LABELS: Record<string, string> = {
+    code: 'Code',
     chat: 'Chat',
     subagent: 'Sub-agents',
     title: 'Titles',
@@ -50,6 +54,7 @@
     commit_message: 'Commit messages',
   };
   const PURPOSE_TAGS: Record<string, string> = {
+    code: 'CODE',
     chat: 'CHAT',
     subagent: 'SUB',
     title: 'TITLE',
@@ -59,7 +64,8 @@
     commit_message: 'COMMIT',
   };
   const PURPOSE_COLORS: Record<string, string> = {
-    chat: '#00c2c2', // cyn — the WackCode signature
+    code: '#00c2c2', // cyn — the WackCode signature
+    chat: '#ffb000',
     subagent: '#3d8eff',
     compaction: '#7c5cff',
     title: '#c8e600',
@@ -67,12 +73,6 @@
     goal_verification: '#ff4d00',
     commit_message: '#8a8578',
   };
-  const OUTCOME_COLORS: Record<string, string> = {
-    completed: '#00c2c2',
-    failed: '#ff1f6f',
-    cancelled: 'rgba(13,13,11,0.35)',
-  };
-  const OUTCOME_ORDER = ['completed', 'failed', 'cancelled'];
   const HOUSEKEEPING = ['title', 'compaction', 'branch_summary', 'goal_verification', 'commit_message'];
 
   let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
@@ -170,10 +170,13 @@
   const successPct = $derived(detail && detail.events ? (completed / detail.events) * 100 : 0);
   const subShare = $derived(detail && detail.total_tokens ? (detail.subagent_tokens / detail.total_tokens) * 100 : 0);
 
-  const outcomeRows = $derived.by(() => {
+  const modeRows = $derived.by(() => {
     if (!detail) return [];
-    const counts: Record<string, number> = Object.fromEntries(detail.by_outcome.map((o) => [o.outcome, o.events]));
-    return OUTCOME_ORDER.map((o) => ({ outcome: o, events: counts[o] ?? 0 })).filter((r) => r.events > 0);
+    // Modes panel: code first even when chat out-tokens it in a window
+    const order = ['code', 'chat'];
+    return [...detail.by_mode].sort(
+      (a, b) => (order.indexOf(a.name) + 1 || order.length + 1) - (order.indexOf(b.name) + 1 || order.length + 1),
+    );
   });
 
   // ── rank bars ──
@@ -314,7 +317,7 @@
       </div>
     </section>
 
-    <!-- work mix + reliability -->
+    <!-- work mix + modes -->
     <section class="mid">
       <div class="bars">
         <h3><span>Work mix</span><span class="cnt">{detail.by_purpose.length} purposes</span></h3>
@@ -334,34 +337,31 @@
         {/each}
       </div>
       <div class="rel">
-        <h3><span>Reliability</span></h3>
+        <h3><span>Modes</span><span class="cnt">{detail.by_mode.length} in use</span></h3>
         <div class="obar up" style="animation-delay:160ms">
-          {#each outcomeRows as o, i}
+          {#each modeRows as m, i}
             <div
               class="gw seg"
-              style="width:{(o.events / detail.events) * 100}%;background:{OUTCOME_COLORS[o.outcome]};animation-delay:{220 + i * 60}ms"
+              style="width:{(m.tokens / Math.max(1, detail.total_tokens)) * 100}%;background:{PURPOSE_COLORS[m.name] ?? '#8a8578'};animation-delay:{220 + i * 60}ms"
             ></div>
           {/each}
         </div>
         <div class="oleg">
-          {#each outcomeRows as o, i}
-            <div class="row up" style="animation-delay:{240 + i * 60}ms">
-              <i style="background:{OUTCOME_COLORS[o.outcome]}"></i>
-              <span class="onm">{o.outcome}</span>
-              <span class="ov"><AnimatedNumber value={o.events} duration={1000} /></span>
-              <span class="op">{Math.round((o.events / detail.events) * 100)}%</span>
+          {#each modeRows as m, i}
+            <div
+              class="row up"
+              style="animation-delay:{240 + i * 60}ms"
+              title="{PURPOSE_LABELS[m.name] ?? m.name} mode · {m.events.toLocaleString()} calls"
+            >
+              <i style="background:{PURPOSE_COLORS[m.name] ?? '#8a8578'}"></i>
+              <span class="onm">{PURPOSE_LABELS[m.name] ?? m.name}</span>
+              <span class="ov"><AnimatedNumber value={m.tokens} format={fmtTokens} duration={1000} /></span>
+              <span class="op">{Math.round((m.tokens / Math.max(1, detail.total_tokens)) * 100)}%</span>
             </div>
           {/each}
         </div>
-        <div class="lat">
-          <div class="cell up" style="animation-delay:360ms">
-            <div class="k">Avg call</div>
-            <div class="v"><AnimatedNumber value={detail.avg_duration_ms} format={fmtDuration} /></div>
-          </div>
-          <div class="cell up" style="animation-delay:430ms">
-            <div class="k">Median call</div>
-            <div class="v"><AnimatedNumber value={detail.p50_duration_ms} format={fmtDuration} /></div>
-          </div>
+        <div class="rel-note up" style="animation-delay:340ms">
+          Chat mode never spawns sub-agents; code covers every history row before Chat mode shipped.
         </div>
       </div>
     </section>
@@ -464,6 +464,13 @@
                 <td>
                   <div class="sid-wrap">
                     <span class="tri" class:open={expanded[s.session_id]}>▸</span>
+                    <span
+                      class="modechip"
+                      style="background:{PURPOSE_COLORS[s.mode] ?? '#8a8578'}"
+                      title={s.mode === 'chat' ? 'Chat mode chat' : 'Code mode chat'}
+                    >
+                      {PURPOSE_TAGS[s.mode] ?? s.mode.toUpperCase()}
+                    </span>
                     <span class="sid" title={s.session_id}>{s.session_id.slice(0, 8)}</span>
                     <button
                       class="copy-btn"
@@ -493,6 +500,8 @@
                     {/each}
                     {#if s.models.length > 3}
                       <span class="modtag more">+{s.models.length - 3}</span>
+                    {:else if s.models.length === 0}
+                      <span class="modtag more" title="Only housekeeping calls in this window">—</span>
                     {/if}
                   </div>
                 </td>
@@ -837,30 +846,12 @@
     width: 4ch;
     text-align: right;
   }
-  .lat {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
+  .rel-note {
     margin-top: auto;
     padding-top: 16px;
-  }
-  .lat .cell {
-    border: 2px solid var(--ink);
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .lat .k {
-    font: 600 9px / 1 var(--font-ui);
-    letter-spacing: 1.4px;
-    text-transform: uppercase;
-    opacity: 0.6;
-  }
-  .lat .v {
-    font: 400 clamp(20px, 1.7vw, 34px) / 1 var(--font-disp);
-    letter-spacing: -0.5px;
-    font-variant-numeric: tabular-nums;
+    font: 400 10px / 1.5 var(--font-mono);
+    letter-spacing: 0.4px;
+    opacity: 0.45;
   }
 
   .side {
@@ -960,6 +951,14 @@
   }
   .tri.open {
     transform: rotate(90deg);
+  }
+  .modechip {
+    font: 600 8px / 1 var(--font-mono);
+    letter-spacing: 1px;
+    color: #fff;
+    padding: 2px 4px;
+    cursor: default;
+    flex: none;
   }
   .sid {
     font-family: var(--font-mono);

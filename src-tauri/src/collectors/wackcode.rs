@@ -41,6 +41,10 @@ struct Record {
     subagent_id: Option<String>,
     outcome: String,
     tokens: Option<Tokens>,
+    /// Additive v1 field: the app mode that made the call. Absent on every
+    /// record written before Chat mode shipped; those read as `code`.
+    #[serde(default)]
+    mode: Option<String>,
 }
 fn parse(line: &str) -> Result<Option<UsageEvent>, String> {
     let r: Record = serde_json::from_str(line).map_err(|_| "Malformed usage record.")?;
@@ -64,6 +68,9 @@ fn parse(line: &str) -> Result<Option<UsageEvent>, String> {
         ]
         .contains(&r.purpose.as_str())
         || !["completed", "failed", "cancelled"].contains(&r.outcome.as_str())
+        || r.mode
+            .as_ref()
+            .is_some_and(|m| !["code", "chat"].contains(&m.as_str()))
     {
         return Err("Invalid usage metadata.".into());
     }
@@ -96,6 +103,7 @@ fn parse(line: &str) -> Result<Option<UsageEvent>, String> {
         outcome: Some(r.outcome),
         workspace: r.workspace,
         subagent_id: r.subagent_id,
+        mode: r.mode,
     }))
 }
 
@@ -228,8 +236,13 @@ mod tests {
         let rows = crate::aggregate::wackcode_detail(&store, 3650).unwrap().by_purpose;
         assert_eq!(rows.len(), 7);
         assert_eq!(rows.iter().map(|r| r.tokens).sum::<i64>(), 140);
-        // The provider split shows the display name from the ledger, not the raw id.
+        // The mode-stamped chat call keeps the 'chat' key; unmarked rows read as code.
         let detail = crate::aggregate::wackcode_detail(&store, 3650).unwrap();
+        assert!(rows.iter().any(|r| r.purpose == "chat"));
+        let mode = |n: &str| detail.by_mode.iter().find(|m| m.name == n).map(|m| (m.events, m.tokens));
+        assert_eq!(mode("chat"), Some((1, 20)));
+        assert_eq!(mode("code"), Some((6, 120)));
+        // The provider split shows the display name from the ledger, not the raw id.
         assert_eq!(detail.by_provider.len(), 1);
         assert_eq!(detail.by_provider[0].name, "Fixture Provider");
         let children: i64 = store
@@ -279,6 +292,14 @@ mod tests {
         value["v"] = 1.into();
         value["tokens"] = serde_json::json!({"input":-1,"output":0,"cache_read":0,"cache_write":0});
         assert!(parse(&value.to_string()).is_err());
+        value["tokens"] = serde_json::json!({"input":1,"output":0,"cache_read":0,"cache_write":0});
+        // A record stamped chat mode parses; an unknown mode is rejected.
+        value["mode"] = "chat".into();
+        assert_eq!(parse(&value.to_string()).unwrap().unwrap().mode.as_deref(), Some("chat"));
+        value["mode"] = "plan".into();
+        assert!(parse(&value.to_string()).is_err());
+        value["mode"] = serde_json::Value::Null;
+        assert!(parse(&value.to_string()).unwrap().is_some());
         let (home, store, file) = setup("wackcode-invalid");
         fs::write(&file, "{broken}\n").unwrap();
         fs::write(file.with_file_name("b.jsonl"), FIXTURE).unwrap();
@@ -293,7 +314,7 @@ mod tests {
         store
             .insert_events(&[parse(FIXTURE.lines().next().unwrap()).unwrap().unwrap()])
             .unwrap();
-        for col in ["purpose", "outcome", "workspace", "subagent_id", "provider_name"] {
+        for col in ["purpose", "outcome", "workspace", "subagent_id", "provider_name", "mode"] {
             store
                 .read_conn()
                 .execute(&format!("ALTER TABLE usage_event DROP COLUMN {col}"), [])

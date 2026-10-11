@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS usage_event (
     outcome TEXT,
     workspace TEXT,
     subagent_id TEXT,
+    mode TEXT,
     UNIQUE(source, source_event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_event(ts);
@@ -95,7 +96,7 @@ impl Store {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
-        for column in ["purpose", "outcome", "workspace", "subagent_id", "provider_name"] {
+        for column in ["purpose", "outcome", "workspace", "subagent_id", "provider_name", "mode"] {
             let exists = conn.prepare("SELECT name FROM pragma_table_info('usage_event') WHERE name=?1")?
                 .exists([column])?;
             if !exists { conn.execute(&format!("ALTER TABLE usage_event ADD COLUMN {column} TEXT"), [])?; }
@@ -177,8 +178,8 @@ impl Store {
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO usage_event (source, source_event_id, ts, session_id, project, provider, provider_name, model,
                     input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens,
-                    duration_ms, ttft_ms, is_subagent, cost_usd, estimated, purpose, outcome, workspace, subagent_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
+                    duration_ms, ttft_ms, is_subagent, cost_usd, estimated, purpose, outcome, workspace, subagent_id, mode)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
                  ON CONFLICT(source, source_event_id) DO UPDATE SET
                     ts=excluded.ts, session_id=excluded.session_id, project=excluded.project,
                     provider=excluded.provider, provider_name=excluded.provider_name, model=excluded.model,
@@ -188,7 +189,7 @@ impl Store {
                     duration_ms=excluded.duration_ms, ttft_ms=excluded.ttft_ms,
                     is_subagent=excluded.is_subagent, cost_usd=excluded.cost_usd,
                     estimated=excluded.estimated, purpose=excluded.purpose, outcome=excluded.outcome,
-                    workspace=excluded.workspace, subagent_id=excluded.subagent_id",
+                    workspace=excluded.workspace, subagent_id=excluded.subagent_id, mode=excluded.mode",
             )?;
             for e in events {
                 let cost = pricing::cost_usd(e.model.as_deref(), e);
@@ -211,7 +212,7 @@ impl Store {
                     e.is_subagent as i64,
                     cost,
                     e.estimated as i64,
-                    e.purpose, e.outcome, e.workspace, e.subagent_id,
+                    e.purpose, e.outcome, e.workspace, e.subagent_id, e.mode,
                 ])?;
             }
         }
@@ -891,7 +892,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         }
     }
 
@@ -1118,7 +1119,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         };
         store.insert_events(&[e]).unwrap();
         // Insert priced it at $18 (1M in + 1M out at $3/$15).
@@ -1224,7 +1225,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         };
         let e2 = UsageEvent {
             source: Source::Zcode,
@@ -1244,7 +1245,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         };
         let e3 = UsageEvent {
             source: Source::Zcode,
@@ -1264,7 +1265,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         };
         let e4 = UsageEvent {
             source: Source::Zcode,
@@ -1284,7 +1285,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         };
         store.insert_events(&[e1, e2, e3, e4]).unwrap();
 

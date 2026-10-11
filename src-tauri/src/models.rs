@@ -94,6 +94,10 @@ pub struct UsageEvent {
     pub outcome: Option<String>,
     pub workspace: Option<String>,
     pub subagent_id: Option<String>,
+    /// The WackCode app mode that produced the call: `code` (the coding agent)
+    /// or `chat` (Chat mode). WackCode-only: NULL for every other source and
+    /// for WackCode rows written before Chat mode shipped, which read as code.
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

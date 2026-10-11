@@ -300,7 +300,7 @@ pub fn export_data(
         .prepare(
             "SELECT source, ts, session_id, project, model, input_tokens, output_tokens,
                     reasoning_tokens, cache_read_tokens, cache_write_tokens, duration_ms, ttft_ms,
-                    is_subagent, cost_usd, estimated, purpose, outcome, workspace, subagent_id
+                    is_subagent, cost_usd, estimated, purpose, outcome, workspace, subagent_id, mode
              FROM usage_event ORDER BY ts",
         )
         .map_err(|e| e.to_string())?;
@@ -326,6 +326,7 @@ pub fn export_data(
                 r.get::<_, Option<String>>(16)?,
                 r.get::<_, Option<String>>(17)?,
                 r.get::<_, Option<String>>(18)?,
+                r.get::<_, Option<String>>(19)?,
             ))
         })
         .map_err(|e| e.to_string())?
@@ -351,6 +352,7 @@ pub fn export_data(
                         "is_subagent": r.12 != 0, "cost_usd": r.13,
                         "estimated": r.14 != 0,
                         "purpose": r.15, "outcome": r.16, "workspace": r.17, "subagent_id": r.18,
+                        "mode": r.19,
                     })
                 })
                 .collect();
@@ -366,13 +368,13 @@ pub fn export_data(
             };
             writeln!(
                 out,
-                "source,ts,session_id,project,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,cost_usd,estimated,purpose,outcome,workspace,subagent_id"
+                "source,ts,session_id,project,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,cost_usd,estimated,purpose,outcome,workspace,subagent_id,mode"
             )
             .map_err(|e| e.to_string())?;
             for r in &rows {
                 writeln!(
                     out,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     esc(&r.0), r.1, esc(r.2.as_deref().unwrap_or("")),
                     esc(r.3.as_deref().unwrap_or("")), esc(r.4.as_deref().unwrap_or("")),
                     r.5, r.6, r.7.unwrap_or(0), r.8, r.9,
@@ -383,6 +385,7 @@ pub fn export_data(
                     r.14,
                     esc(r.15.as_deref().unwrap_or("")), esc(r.16.as_deref().unwrap_or("")),
                     esc(r.17.as_deref().unwrap_or("")), esc(r.18.as_deref().unwrap_or("")),
+                    esc(r.19.as_deref().unwrap_or("")),
                 )
                 .map_err(|e| e.to_string())?;
             }

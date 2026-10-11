@@ -65,7 +65,14 @@
             ['chat', 0.62], ['subagent', 0.21], ['compaction', 0.05], ['title', 0.05],
             ['branch_summary', 0.03], ['goal_verification', 0.025], ['commit_message', 0.015],
           ];
+          // Chat mode never touches coding features: main calls and titles only
+          const WC_CHAT_PURPOSES = [['chat', 0.88], ['title', 0.12]];
+          const WC_HK = new Set(['title', 'compaction', 'branch_summary', 'goal_verification', 'commit_message']);
+          // mirrors the backend's derived key: a main-thread call is Code work
+          // unless it came from a real Chat mode session
+          const wcKey = (purpose, mode) => (purpose === 'chat' ? mode : purpose);
           const WC_MODELS = [['claude-sonnet-4-5', 0.55], ['glm-5.3', 0.25], ['gpt-5-codex', 0.2]];
+          const WC_TITLE_MODEL = 'deepseek-v4.1-flash';
           const WC_PROJECTS = ['~/dev/TokenTrail', '~/dev/aurora-api', '~/work/billing-svc', '~/notes/scripts'];
           const wcPick = (r, pairs) => {
             const x = r();
@@ -79,15 +86,17 @@
             const hex = (n) => Array.from({ length: n }, () => '0123456789abcdef'[Math.floor(r() * 16)]).join('');
             return Array.from({ length: 26 }, (_, i) => {
               const id = hex(24) + i; // uniqueness guard on top of the rng
-              const project = WC_PROJECTS[Math.floor(r() * WC_PROJECTS.length)];
+              const mode = r() < 0.18 ? 'chat' : 'code'; // ~1 in 5 sessions are Chat mode
+              const project = mode === 'chat' ? 'unknown' : WC_PROJECTS[Math.floor(r() * WC_PROJECTS.length)];
               const lastTs = Date.now() - Math.floor(r() * 150) * 86400000 - Math.floor(r() * 86400000);
               const spanMs = (2 + r() * 26) * 3600000;
               const nCalls = 5 + Math.floor(r() * 34);
               let cs = 9000 + i * 131;
               const cr = () => ((cs = (cs * 1664525 + 1013904223) >>> 0), cs / 4294967296);
+              const mix = mode === 'chat' ? WC_CHAT_PURPOSES : WC_PURPOSES;
               const calls = Array.from({ length: nCalls }, (_, k) => {
-                const purpose = wcPick(cr, WC_PURPOSES);
-                const model = wcPick(cr, WC_MODELS);
+                const purpose = wcPick(cr, mix);
+                const model = purpose === 'title' ? WC_TITLE_MODEL : wcPick(cr, WC_MODELS);
                 const big = purpose === 'chat' || purpose === 'subagent';
                 const isSub = purpose === 'subagent' || (purpose !== 'chat' && cr() < 0.15);
                 const roll = cr();
@@ -104,7 +113,7 @@
                 };
               });
               calls.sort((a, b) => a.ts - b.ts);
-              return { id, project, calls };
+              return { id, project, mode, calls };
             });
           })();
           function wcDetail(days) {
@@ -114,12 +123,11 @@
               return {
                 total_tokens: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
                 events: 0, sessions: 0, active_days: 0, cost_usd: 0, first_ts: null, last_ts: null,
-                subagent_events: 0, subagent_tokens: 0, avg_duration_ms: 0, p50_duration_ms: 0,
-                by_purpose: [], by_outcome: [], by_model: [], by_provider: [], by_project: [], daily: [], sessions_list: [],
+                subagent_events: 0, subagent_tokens: 0,
+                by_purpose: [], by_outcome: [], by_mode: [], by_model: [], by_provider: [], by_project: [], daily: [], sessions_list: [],
               };
             }
             const total = rows.reduce((a, c) => a + c.tokens, 0);
-            const durations = rows.map((c) => c.duration_ms).sort((a, b) => a - b);
             const group = (keyFn) => {
               const m = new Map();
               for (const c of rows) {
@@ -142,15 +150,14 @@
               cost_usd: total * 0.000012,
               first_ts: Math.min(...rows.map((c) => c.ts)), last_ts: Math.max(...rows.map((c) => c.ts)),
               subagent_events: subs.length, subagent_tokens: subs.reduce((a, c) => a + c.tokens, 0),
-              avg_duration_ms: Math.round(durations.reduce((a, b) => a + b, 0) / durations.length),
-              p50_duration_ms: durations[Math.floor((durations.length - 1) / 2)],
-              by_purpose: group((c) => c.purpose).map((g) => ({ purpose: g.name, requests: g.events, tokens: g.tokens, cost_usd: g.cost_usd })),
+              by_purpose: group((c) => wcKey(c.purpose, c.session.mode)).map((g) => ({ purpose: g.name, requests: g.events, tokens: g.tokens, cost_usd: g.cost_usd })),
               by_outcome: outcomes,
+              by_mode: group((c) => c.session.mode),
               by_model: group((c) => c.model),
               by_provider: group((c) => (c.model.startsWith('claude') ? 'anthropic' : c.model.startsWith('glm') ? 'zai' : 'openai')),
               by_project: group((c) => c.session.project),
               daily: Object.entries(rows.reduce((m, c) => {
-                const k = new Date(c.ts).toISOString().slice(0, 10) + '|' + c.purpose;
+                const k = new Date(c.ts).toISOString().slice(0, 10) + '|' + wcKey(c.purpose, c.session.mode);
                 m[k] = (m[k] ?? 0) + c.tokens;
                 return m;
               }, {})).map(([k, tokens]) => { const [date, purpose] = k.split('|'); return { date, purpose, tokens }; }),
@@ -159,12 +166,13 @@
                 const done = cs.filter((c) => c.outcome === 'completed').length;
                 return {
                   session_id: s.id, project: s.project,
-                  models: [...new Set(cs.map((c) => c.model))].sort(),
+                  models: [...new Set(cs.filter((c) => !WC_HK.has(c.purpose)).map((c) => c.model))].sort(),
                   events: cs.length, subagents: cs.filter((c) => c.subagent_id).length,
                   tokens: cs.reduce((a, c) => a + c.tokens, 0), cost_usd: cs.reduce((a, c) => a + c.tokens, 0) * 0.000012,
                   completed: done, failed: cs.filter((c) => c.outcome === 'failed').length,
                   cancelled: cs.filter((c) => c.outcome === 'cancelled').length,
                   first_ts: cs[0].ts, last_ts: cs[cs.length - 1].ts,
+                  mode: s.mode,
                 };
               }).sort((a, b) => b.last_ts - a.last_ts),
             };
@@ -179,7 +187,8 @@
             switch (cmd) {
               case 'get_wackcode_detail': return wcDetail(args.days ?? 90);
               case 'get_wackcode_session_calls':
-                return (WC_SESSIONS.find((s) => s.id === args.sessionId) ?? { calls: [] }).calls;
+                const session = WC_SESSIONS.find((s) => s.id === args.sessionId);
+            return (session?.calls ?? []).map((c) => ({ ...c, purpose: wcKey(c.purpose, session.mode) }));
               case 'get_overview':
                 return {
                   total_tokens: totalTokens, input_tokens: totalTokens * 0.62, output_tokens: totalTokens * 0.31,

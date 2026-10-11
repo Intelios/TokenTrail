@@ -36,6 +36,7 @@ export interface DailyPurposeRow {
 export interface WackCodeSessionRow {
   session_id: string;
   project: string;
+  /** Work-purpose models only; housekeeping models stay in the call timeline. */
   models: string[];
   events: number;
   subagents: number;
@@ -46,6 +47,8 @@ export interface WackCodeSessionRow {
   cancelled: number;
   first_ts: number;
   last_ts: number;
+  /** 'code' or 'chat'; rows written before Chat mode shipped read as 'code'. */
+  mode: string;
 }
 
 /** One WackCode model call inside a chat, in timeline order. */
@@ -73,10 +76,10 @@ export interface WackCodeDetail {
   last_ts: number | null;
   subagent_events: number;
   subagent_tokens: number;
-  avg_duration_ms: number;
-  p50_duration_ms: number;
   by_purpose: UsagePurposeRow[];
   by_outcome: WackCodeOutcomeRow[];
+  /** Tokens/calls split by app mode ('code' covers rows with no mode stamp). */
+  by_mode: WackCodeBreakdownRow[];
   by_model: WackCodeBreakdownRow[];
   by_provider: WackCodeBreakdownRow[];
   by_project: WackCodeBreakdownRow[];

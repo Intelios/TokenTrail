@@ -153,7 +153,7 @@ mod tests {
             ttft_ms: None,
             is_subagent: false,
             estimated: false,
-            purpose: None, outcome: None, workspace: None, subagent_id: None,
+            purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
         }
     }
 
