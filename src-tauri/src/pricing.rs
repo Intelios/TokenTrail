@@ -244,6 +244,26 @@ mod tests {
     }
 
     #[test]
+    fn gemini_4_argon_prices() {
+        // Gemini 4 Argon (the only Gemini 4 model) lists at $2/$10 with $0.10
+        // implicitly-cached input through November 30, 2026, doubling to
+        // $4/$20/$0.20 from December 1, 2026; the table carries the current
+        // rates. Explicit caching is unsupported and cache writes bill at
+        // the uncached input rate, as for the other Gemini families.
+        assert_eq!(rates_for("gemini-4-argon").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("gemini-4-argon").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("gemini-4-argon").map(|r| r.cache_read), Some(0.1));
+        assert_eq!(rates_for("gemini-4-argon").map(|r| r.cache_write), Some(2.0));
+        // Dated snapshots and provider-prefixed spellings resolve via the family.
+        assert_eq!(rates_for("gemini-4-argon-2026-10-13").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("google/gemini-4-argon").map(|r| r.input), Some(2.0));
+        // The entry outranks the generic gemini catch-all ($0.30/$2.50),
+        // and older Gemini generations keep their own rates.
+        assert_eq!(rates_for("gemini-3.7-flash").map(|r| r.input), Some(0.75));
+        assert_eq!(rates_for("gemini-2.5-pro").map(|r| r.input), Some(1.25));
+    }
+
+    #[test]
     fn muse_spark_prices() {
         // Muse Spark 1.2 (and the identically-priced 1.1) via the family prefix.
         assert_eq!(rates_for("muse-spark-1.2").map(|r| r.input), Some(1.25));
