@@ -211,6 +211,12 @@ export interface ProjectColor {
   color: string;
 }
 
+/** User-assigned tech stack tags for a project, in display order. */
+export interface ProjectStack {
+  project: string;
+  stack: string[];
+}
+
 /**
  * A folder → project mapping: events recorded under `alias` count as `canonical`.
  * Filled automatically from the nearest enclosing git root, and adjustable by hand.
@@ -412,6 +418,10 @@ export const api = {
   /** `null` clears the color and hands the project back to the auto palette. */
   setProjectColor: (project: string, color: string | null) =>
     invoke<void>('set_project_color', { project, color }),
+  projectStacks: () => invoke<ProjectStack[]>('get_project_stacks'),
+  /** An empty `stack` clears all tech stack tags for the project. */
+  setProjectStack: (project: string, stack: string[]) =>
+    invoke<void>('set_project_stack', { project, stack }),
   projectAliases: () => invoke<ProjectAlias[]>('get_project_aliases'),
   mergeProjects: (names: string[], canonical: string) =>
     invoke<void>('merge_projects', { names, canonical }),

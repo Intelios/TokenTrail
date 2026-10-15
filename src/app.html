@@ -55,8 +55,13 @@
             return rows;
           };
 
-          // in-memory project colors so the picker round-trips in ?mock mode
+          // in-memory project colors and tech stacks so pickers round-trip in ?mock mode
           const PROJECT_COLORS = {};
+          const PROJECT_STACKS = {
+            '~/dev/TokenTrail': ['Tauri', 'SvelteKit', 'Rust'],
+            '~/dev/aurora-api': ['Rust', 'Axum', 'PostgreSQL'],
+            '~/dev/website': ['SvelteKit', 'TypeScript'],
+          };
 
           // ── WackCode synthetic ledger ──────────────────────────────────
           // Deterministic per seed: chats, their call timelines and every
@@ -299,6 +304,14 @@
               case 'set_project_color': {
                 if (args.color == null) delete PROJECT_COLORS[args.project];
                 else PROJECT_COLORS[args.project] = String(args.color).toLowerCase();
+                return null;
+              }
+              case 'get_project_stacks':
+                return Object.entries(PROJECT_STACKS).map(([project, stack]) => ({ project, stack })).sort((a, b) => a.project.localeCompare(b.project));
+              case 'set_project_stack': {
+                const cleaned = (args.stack ?? []).map((t) => String(t).trim()).filter(Boolean);
+                if (!cleaned.length) delete PROJECT_STACKS[args.project];
+                else PROJECT_STACKS[args.project] = cleaned;
                 return null;
               }
               case 'get_project_detail': {

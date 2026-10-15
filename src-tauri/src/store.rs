@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::models::{ModelAlias, ProjectAlias, ProjectColor, Source, UsageEvent};
+use crate::models::{ModelAlias, ProjectAlias, ProjectColor, ProjectStack, Source, UsageEvent};
 use crate::pricing;
 
 /// How long a connection waits for a locked database before giving up. With
@@ -103,6 +103,12 @@ CREATE TABLE IF NOT EXISTS project_color (
 CREATE TABLE IF NOT EXISTS project_alias (
     alias TEXT PRIMARY KEY,
     canonical TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_stack (
+    project TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    ord INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(project, tag)
 );
 "#;
 
@@ -708,6 +714,69 @@ impl Store {
         )
     }
 
+    pub fn get_project_stacks(&self) -> rusqlite::Result<Vec<ProjectStack>> {
+        let conn = self.read_conn();
+        let mut stmt = conn.prepare_cached(
+            "SELECT project, tag FROM project_stack ORDER BY project, ord, tag",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut out: Vec<ProjectStack> = Vec::new();
+        for (project, tag) in rows {
+            if let Some(last) = out.last_mut().filter(|p| p.project == project) {
+                if !last.stack.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+                    last.stack.push(tag);
+                }
+            } else {
+                out.push(ProjectStack {
+                    project,
+                    stack: vec![tag],
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Replace a project's tech stack tags (preserving order, deduplicated
+    /// case-insensitively). Passing an empty list clears the project's stack.
+    pub fn set_project_stack(&self, project: &str, stack: &[String]) -> Result<(), String> {
+        let project = project.trim();
+        if project.is_empty() || project == "unknown" {
+            return Err(format!("cannot tag project {project:?}"));
+        }
+        let mut cleaned: Vec<String> = Vec::new();
+        for raw in stack {
+            let tag = raw.trim();
+            if tag.is_empty() {
+                continue;
+            }
+            if !cleaned.iter().any(|t| t.eq_ignore_ascii_case(tag)) {
+                cleaned.push(tag.to_string());
+            }
+        }
+        let conn = self.writer();
+        let canonical = project_canonical(&conn, project);
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin project stack transaction: {e}"))?;
+        tx.execute(
+            "DELETE FROM project_stack WHERE project = ?1",
+            params![canonical],
+        )
+        .map_err(|e| format!("clear project stack: {e}"))?;
+        for (ord, tag) in cleaned.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO project_stack(project, tag, ord) VALUES(?1, ?2, ?3)",
+                params![canonical, tag, ord as i64],
+            )
+            .map_err(|e| format!("insert project stack tag: {e}"))?;
+        }
+        tx.commit()
+            .map_err(|e| format!("commit project stack: {e}"))?;
+        Ok(())
+    }
+
     /// The project a recorded folder counts under: its mapped target if one exists,
     /// else the folder itself. Flat by construction — writers never map a folder
     /// onto another mapped folder, so one join is always enough.
@@ -731,6 +800,7 @@ impl Store {
             n += fold_project_alias(&conn, p)?;
         }
         remap_project_colors(&conn)?;
+        remap_project_stacks(&conn)?;
         Ok(n)
     }
 
@@ -797,9 +867,10 @@ impl Store {
                 )
                 .map_err(|e| format!("set mapping: {e}"))?;
         }
-        // Re-key pinned colors inside the transaction so a merge either moves
-        // folders and their colors together or not at all.
+        // Re-key pinned colors and tech stacks inside the transaction so a merge
+        // moves folders and their annotations together or not at all.
         remap_project_colors(&tx).map_err(|e| format!("remap project colors: {e}"))?;
+        remap_project_stacks(&tx).map_err(|e| format!("remap project stacks: {e}"))?;
         tx.commit().map_err(|e| format!("commit merge: {e}"))?;
         Ok(n)
     }
@@ -883,6 +954,21 @@ fn remap_project_colors(conn: &Connection) -> rusqlite::Result<usize> {
          WHERE project IN (SELECT alias FROM project_alias)",
         [],
     )
+}
+
+fn remap_project_stacks(conn: &Connection) -> rusqlite::Result<usize> {
+    let n = conn.execute(
+        "UPDATE OR IGNORE project_stack
+         SET project = (SELECT canonical FROM project_alias WHERE alias = project_stack.project)
+         WHERE project IN (SELECT alias FROM project_alias WHERE alias != canonical)",
+        [],
+    )?;
+    conn.execute(
+        "DELETE FROM project_stack
+         WHERE project IN (SELECT alias FROM project_alias WHERE alias != canonical)",
+        [],
+    )?;
+    Ok(n)
 }
 
 /// `#RRGGBB` → `#rrggbb`; anything else (short hex, names, rgba) → None.
@@ -1293,6 +1379,92 @@ mod tests {
         assert!(store.set_project_color("unknown", "#ff4d00").is_err());
         assert!(store.set_project_color("  ", "#ff4d00").is_err());
         assert!(store.get_project_colors().unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_stack_round_trip() {
+        let store = test_store();
+        assert!(store.get_project_stacks().unwrap().is_empty());
+
+        store
+            .set_project_stack(
+                "/code/beta",
+                &[
+                    "Tauri".into(),
+                    "SvelteKit".into(),
+                    "tauri".into(),
+                    "  ".into(),
+                    "Rust".into(),
+                ],
+            )
+            .unwrap();
+        store
+            .set_project_stack("/code/alpha", &["Electron".into(), "React".into()])
+            .unwrap();
+
+        assert_eq!(
+            store.get_project_stacks().unwrap(),
+            vec![
+                ProjectStack {
+                    project: "/code/alpha".into(),
+                    stack: vec!["Electron".into(), "React".into()],
+                },
+                ProjectStack {
+                    project: "/code/beta".into(),
+                    stack: vec!["Tauri".into(), "SvelteKit".into(), "Rust".into()],
+                },
+            ]
+        );
+
+        // Updating replaces the list in the new order
+        store
+            .set_project_stack("/code/beta", &["Rust".into(), "SQLite".into()])
+            .unwrap();
+        assert_eq!(
+            store.get_project_stacks().unwrap()[1].stack,
+            vec!["Rust".to_string(), "SQLite".to_string()]
+        );
+
+        // Empty list clears the project's stack
+        store.set_project_stack("/code/alpha", &[]).unwrap();
+        assert_eq!(
+            store.get_project_stacks().unwrap(),
+            vec![ProjectStack {
+                project: "/code/beta".into(),
+                stack: vec!["Rust".into(), "SQLite".into()],
+            }]
+        );
+    }
+
+    #[test]
+    fn project_stack_validates_input() {
+        let store = test_store();
+        assert!(store
+            .set_project_stack("unknown", &["Tauri".into()])
+            .is_err());
+        assert!(store.set_project_stack("   ", &["Tauri".into()]).is_err());
+        assert!(store.get_project_stacks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn project_stacks_follow_merged_folders() {
+        let store = test_store();
+        store
+            .set_project_stack("/repo/sub", &["Rust".into(), "Tauri".into()])
+            .unwrap();
+        store
+            .set_project_stack("/repo", &["SvelteKit".into(), "Rust".into()])
+            .unwrap();
+        store
+            .merge_projects(&["/repo/sub".into(), "/repo".into()], "/repo")
+            .unwrap();
+        assert_eq!(
+            store.get_project_stacks().unwrap(),
+            vec![ProjectStack {
+                project: "/repo".into(),
+                stack: vec!["SvelteKit".into(), "Rust".into(), "Tauri".into()],
+            }]
+        );
     }
 
     #[test]

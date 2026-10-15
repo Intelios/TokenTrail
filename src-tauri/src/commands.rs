@@ -5,7 +5,7 @@ use crate::aggregate::{
     WrappedSummary,
 };
 use crate::collectors;
-use crate::models::{IngestStats, ModelAlias, ProjectAlias, ProjectColor, SourceStatus};
+use crate::models::{IngestStats, ModelAlias, ProjectAlias, ProjectColor, ProjectStack, SourceStatus};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, State};
 
@@ -229,6 +229,22 @@ pub fn set_project_color(
             .map(|_| ())
             .map_err(|e| format!("clear project color: {e}")),
     }
+}
+
+#[tauri::command]
+pub fn get_project_stacks(state: State<AppState>) -> Vec<ProjectStack> {
+    state.store.get_project_stacks().unwrap_or_default()
+}
+
+/// Replace `project`'s tech stack tags; an empty `stack` clears all tags for the project.
+#[tauri::command]
+pub fn set_project_stack(
+    state: State<AppState>,
+    project: String,
+    stack: Vec<String>,
+) -> Result<(), String> {
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.set_project_stack(&project, &stack)
 }
 
 #[tauri::command]

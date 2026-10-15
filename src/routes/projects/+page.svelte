@@ -10,6 +10,7 @@
     fmtDate,
     fmtTokens,
     markedColors,
+    projectStacksMap,
     resolveProjectColors,
     MUTED_PROJECT,
   } from '$lib/format';
@@ -36,6 +37,8 @@
   let projects = $state<ProjectRow[]>([]);
   let dailyProjectRows = $state<DailyProjectRow[]>([]);
   let marked = $state<Record<string, string>>({});
+  let stacks = $state<Record<string, string[]>>({});
+  let stackFilter = $state<string | null>(null);
   let error = $state('');
 
   function projectUrl(p: string): string {
@@ -44,14 +47,16 @@
 
   async function load() {
     try {
-      const [p, d, c] = await Promise.all([
+      const [p, d, c, s] = await Promise.all([
         api.byProject(days),
         api.dailyByProject(days),
         api.projectColors(),
+        api.projectStacks(),
       ]);
       projects = p;
       dailyProjectRows = d;
       marked = markedColors(c);
+      stacks = projectStacksMap(s);
       error = '';
     } catch (e) {
       error = String(e);
@@ -77,12 +82,44 @@
     return () => window.removeEventListener('tt-sync', h);
   });
 
+  const hasProjectTag = (proj: string, tag: string) =>
+    (stacks[proj] ?? []).some((t) => t.toLowerCase() === tag.toLowerCase());
+
+  const availableStackTags = $derived.by(() => {
+    const counts = new Map<string, { tag: string; count: number }>();
+    for (const p of projects) {
+      for (const t of stacks[p.project] ?? []) {
+        const k = t.toLowerCase();
+        const cur = counts.get(k);
+        if (cur) cur.count++;
+        else counts.set(k, { tag: t, count: 1 });
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  });
+
+  const activeFilter = $derived(
+    stackFilter && availableStackTags.some((t) => t.tag.toLowerCase() === stackFilter!.toLowerCase())
+      ? stackFilter
+      : null,
+  );
+
+  const visibleProjects = $derived(
+    activeFilter ? projects.filter((p) => hasProjectTag(p.project, activeFilter)) : projects,
+  );
+
+  const visibleDailyRows = $derived(
+    activeFilter
+      ? dailyProjectRows.filter((r) => hasProjectTag(r.project, activeFilter))
+      : dailyProjectRows,
+  );
+
   // ── daily stacked columns ──
   // Pinned projects sort to the front so they sit on the chart's baseline,
   // where their band is a clean silhouette rather than riding an offset.
   const dailyProjects = $derived.by(() => {
     const totals = new Map<string, number>();
-    for (const r of dailyProjectRows) {
+    for (const r of visibleDailyRows) {
       totals.set(r.project, (totals.get(r.project) ?? 0) + r.tokens);
     }
     const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
@@ -99,7 +136,7 @@
     ),
   );
 
-  const dayCols = $derived(projectDailyColumns(dailyProjectRows, dailyProjects));
+  const dayCols = $derived(projectDailyColumns(visibleDailyRows, dailyProjects));
   const dayOption = $derived(projectDailyOption(dayCols, dailyProjects, dayColors));
   const dayRangeStr = $derived(dailyRange(dayCols));
 
@@ -126,7 +163,14 @@
   <div class="thd">
     <div class="up">
       <h1>Projects</h1>
-      <div class="sub">Where your tokens actually go — ranked by usage · {projects.length} tracked</div>
+      <div class="sub">
+        Where your tokens actually go — ranked by usage ·
+        {#if activeFilter}
+          {visibleProjects.length} of {projects.length} matching {activeFilter}
+        {:else}
+          {projects.length} tracked
+        {/if}
+      </div>
     </div>
     <div class="pills up">
       {#each RANGES as [d, label]}
@@ -135,13 +179,40 @@
     </div>
   </div>
 
+  {#if availableStackTags.length > 0}
+    <div class="stack-filter-bar up">
+      <span class="sf-lbl">Stack</span>
+      <div class="sf-pills">
+        <button
+          class="sf-pill"
+          class:on={!activeFilter}
+          onclick={() => (stackFilter = null)}
+        >
+          All
+        </button>
+        {#each availableStackTags as item (item.tag)}
+          <button
+            class="sf-pill"
+            class:on={activeFilter?.toLowerCase() === item.tag.toLowerCase()}
+            onclick={() =>
+              (stackFilter =
+                activeFilter?.toLowerCase() === item.tag.toLowerCase() ? null : item.tag)}
+          >
+            {item.tag}
+            <span class="sf-cnt">{item.count}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   {#if error}
     <div class="errpad"><p class="error">{error}</p></div>
   {:else if !projects.length}
     <div class="loading">no projects recorded yet</div>
   {:else}
     <!-- daily stacked columns -->
-    {#if dailyProjectRows.length > 0 && dayOption}
+    {#if visibleDailyRows.length > 0 && dayOption}
       <section class="daily">
         <div class="hd">
           <h3>Daily tokens by project{dayRangeStr ? ` — ${dayRangeStr}` : ''}</h3>
@@ -180,7 +251,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each projects as p, i}
+          {#each visibleProjects as p, i}
             <tr
               class="up projrow"
               style="animation-delay:{Math.min(i, 14) * 35}ms; cursor:pointer"
@@ -199,13 +270,33 @@
                     <span class="pcell-gap"></span>
                   {/if}
                   <div class="pcell-txt">
-                    <a
-                      class="projectlink"
-                      href={projectUrl(p.project)}
-                      onclick={(e) => e.stopPropagation()}
-                    >
-                      {p.project === 'unknown' ? 'Unknown' : basename(p.project)}
-                    </a>
+                    <div class="pcell-title">
+                      <a
+                        class="projectlink"
+                        href={projectUrl(p.project)}
+                        onclick={(e) => e.stopPropagation()}
+                      >
+                        {p.project === 'unknown' ? 'Unknown' : basename(p.project)}
+                      </a>
+                      {#if stacks[p.project]?.length}
+                        <div class="pstack-chips">
+                          {#each stacks[p.project] as tag (tag)}
+                            <button
+                              class="pstack-chip"
+                              class:on={activeFilter?.toLowerCase() === tag.toLowerCase()}
+                              title="Filter by {tag}"
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                stackFilter =
+                                  activeFilter?.toLowerCase() === tag.toLowerCase() ? null : tag;
+                              }}
+                            >
+                              {tag}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
                     {#if p.project !== 'unknown'}
                       <div class="path">{p.project}</div>
                     {/if}
@@ -284,6 +375,12 @@
   .pcell { display: flex; align-items: flex-start; gap: 11px; }
   .pcell-gap { width: 14px; flex: none; }
   .pcell-txt { min-width: 0; }
+  .pcell-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
   .projectlink {
     font-weight: 600;
     font-size: 13.5px;
@@ -292,6 +389,77 @@
   }
   .projectlink:hover {
     color: var(--org);
+  }
+  .pstack-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .pstack-chip {
+    font: 600 9px/1 var(--font-mono);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 2px 5px;
+    border: 1px solid rgba(13, 13, 11, 0.35);
+    background: rgba(13, 13, 11, 0.04);
+    color: var(--ink);
+  }
+  .pstack-chip:hover {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--bone);
+  }
+  .pstack-chip.on {
+    border-color: var(--ink);
+    background: var(--org);
+    color: #fff;
+  }
+  .stack-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px clamp(22px, 1.8vw, 40px);
+    border-bottom: 2px solid var(--ink);
+    flex-wrap: wrap;
+  }
+  .sf-lbl {
+    font: 600 9.5px/1 var(--font-mono);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    opacity: 0.55;
+  }
+  .sf-pills {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .sf-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    font: 600 9.5px/1 var(--font-mono);
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    border: 1.5px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    opacity: 0.65;
+  }
+  .sf-pill:hover {
+    opacity: 1;
+    background: var(--hair);
+  }
+  .sf-pill.on {
+    opacity: 1;
+    background: var(--ink);
+    color: var(--bone);
+  }
+  .sf-cnt {
+    opacity: 0.6;
+    font-weight: 400;
   }
   .path {
     font: 400 10.5px/1.3 var(--font-mono);

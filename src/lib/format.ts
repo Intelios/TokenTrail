@@ -1,5 +1,5 @@
 import { linearGrad, cssColor, flatColor, type ChartColor } from './chartTheme';
-import type { ProjectColor } from './api';
+import type { ProjectColor, ProjectStack } from './api';
 
 /// Brand-locked palettes — each harness and model family wears its maker's
 /// actual brand color. Flat values are hex strings; gradients (Gemini) are
@@ -78,6 +78,69 @@ export const MUTED_PROJECT = 'rgba(13,13,11,0.14)';
 export function markedColors(rows: ProjectColor[]): Record<string, string> {
   return Object.fromEntries(rows.map((r) => [r.project, r.color]));
 }
+
+/** Project tech stacks as a project → `string[]` lookup. */
+export function projectStacksMap(rows: ProjectStack[]): Record<string, string[]> {
+  return Object.fromEntries(rows.map((r) => [r.project, r.stack]));
+}
+
+/** Curated tech stack suggestions offered alongside user-entered tags. */
+export const STACK_PRESETS: readonly string[] = [
+  'Tauri',
+  'Electron',
+  'SvelteKit',
+  'Svelte',
+  'React',
+  'Next.js',
+  'Vue',
+  'Nuxt',
+  'Astro',
+  'Solid',
+  'Angular',
+  'TypeScript',
+  'JavaScript',
+  'Rust',
+  'Python',
+  'Go',
+  'Swift',
+  'Kotlin',
+  'C++',
+  'C',
+  'C#',
+  'Zig',
+  'Java',
+  'Ruby',
+  'PHP',
+  'Node.js',
+  'Bun',
+  'Deno',
+  'Vite',
+  'Tailwind',
+  'Flutter',
+  'React Native',
+  'FastAPI',
+  'Django',
+  'Flask',
+  'Axum',
+  'Actix',
+  'Hono',
+  'Express',
+  'Rails',
+  'Laravel',
+  '.NET',
+  'SQLite',
+  'PostgreSQL',
+  'MySQL',
+  'Redis',
+  'MongoDB',
+  'DuckDB',
+  'Supabase',
+  'Firebase',
+  'GraphQL',
+  'gRPC',
+  'Docker',
+  'Cloudflare',
+];
 
 const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 

@@ -6,7 +6,8 @@
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
   import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
-  import { api, type ProjectAlias, type ProjectDetail } from '$lib/api';
+  import ProjectStackEditor from '$lib/ProjectStackEditor.svelte';
+  import { api, type ProjectAlias, type ProjectDetail, type ProjectStack } from '$lib/api';
   import {
     fmtCost,
     fmtDate,
@@ -43,6 +44,8 @@
   let detail = $state<ProjectDetail | null>(null);
   let aliases = $state<ProjectAlias[]>([]);
   let color = $state<string | null>(null);
+  let stack = $state<string[]>([]);
+  let allStacks = $state<ProjectStack[]>([]);
   let error = $state('');
   let loading = $state(true);
   let showAllSessions = $state(false);
@@ -63,10 +66,11 @@
     if (!projectName) return;
     if (!detail) loading = true;
     try {
-      const [dInit, colors, aliasRows] = await Promise.all([
+      const [dInit, colors, aliasRows, stackRows] = await Promise.all([
         api.projectDetail(projectName, days),
         api.projectColors(),
         api.projectAliases(),
+        api.projectStacks(),
       ]);
       let d = dInit;
       if (!d && !projectName.startsWith('/') && projectName !== 'unknown') {
@@ -74,9 +78,11 @@
       }
       detail = d;
       aliases = aliasRows;
-      // key the color off the path the detail actually resolved to, so the
-      // '/'-prefixed fallback and the picker agree on one project string
+      allStacks = stackRows;
+      // key the color and stack off the path the detail actually resolved to, so the
+      // '/'-prefixed fallback and the pickers agree on one project string
       color = d ? (colors.find((c) => c.project === d.project)?.color ?? null) : null;
+      stack = d ? (stackRows.find((s) => s.project === d.project)?.stack ?? []) : [];
       error = '';
     } catch (e) {
       error = String(e);
@@ -164,6 +170,21 @@
       .sort();
   });
 
+  const knownTags = $derived.by(() => {
+    const counts = new Map<string, { display: string; count: number }>();
+    for (const row of allStacks) {
+      for (const t of row.stack) {
+        const k = t.toLowerCase();
+        const cur = counts.get(k);
+        if (cur) cur.count++;
+        else counts.set(k, { display: t, count: 1 });
+      }
+    }
+    return [...counts.values()]
+      .sort((a, b) => b.count - a.count || a.display.localeCompare(b.display))
+      .map((x) => x.display);
+  });
+
   const dayCols = $derived(singleDailyColumns(detail?.daily ?? []));
   const dailyOption = $derived(singleDailyOption(dayCols, color ?? '#ff6b35'));
 
@@ -236,6 +257,16 @@
               </button>
             </div>
           </div>
+          <ProjectStackEditor
+            project={detail.project}
+            {stack}
+            {knownTags}
+            onchange={(next) => {
+              stack = next;
+              const others = allStacks.filter((s) => s.project !== detail!.project);
+              allStacks = next.length ? [...others, { project: detail!.project, stack: next }] : others;
+            }}
+          />
           {#if foldedFolders.length}
             <div class="folded">
               <span class="folded-lbl">

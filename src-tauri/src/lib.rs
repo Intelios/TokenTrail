@@ -130,6 +130,8 @@ pub fn run() {
             commands::unhide_model,
             commands::get_project_colors,
             commands::set_project_color,
+            commands::get_project_stacks,
+            commands::set_project_stack,
             commands::get_project_aliases,
             commands::merge_projects,
             commands::unmerge_projects,

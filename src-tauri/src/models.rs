@@ -137,3 +137,11 @@ pub struct ProjectAlias {
     pub alias: String,
     pub canonical: String,
 }
+
+/// User-assigned tech stack tags for a project, in display order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectStack {
+    pub project: String,
+    pub stack: Vec<String>,
+}
+
