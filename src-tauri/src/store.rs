@@ -37,6 +37,21 @@ pub struct Store {
     readers: Mutex<Vec<Connection>>,
 }
 
+/// Open end of a `model_alias` segment. A sentinel rather than NULL so the
+/// join stays a plain half-open range test.
+pub const ALIAS_OPEN_END: i64 = i64::MAX;
+
+/// Resolve `u.model` to its display name *at the time of the event*. A raw
+/// name can map to different display names over time (a floating API name like
+/// `deepseek-flash` that silently moves to each new release), so `model_alias`
+/// rows are half-open `[from_ts, until_ts)` segments that never overlap for one
+/// alias. Every query that displays model names joins exactly this (spelled
+/// out inline in `aggregate.rs`; a test there holds every join to it), so the
+/// non-overlap invariant is what keeps the join from duplicating rows.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const MODEL_ALIAS_JOIN: &str =
+    "LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts";
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS usage_event (
     id INTEGER PRIMARY KEY,
@@ -90,8 +105,11 @@ CREATE TABLE IF NOT EXISTS ingest_state (
     PRIMARY KEY(source, path)
 );
 CREATE TABLE IF NOT EXISTS model_alias (
-    alias TEXT PRIMARY KEY,
-    canonical TEXT NOT NULL
+    alias TEXT NOT NULL,
+    canonical TEXT NOT NULL,
+    from_ts INTEGER NOT NULL DEFAULT 0,
+    until_ts INTEGER NOT NULL DEFAULT 9223372036854775807,
+    PRIMARY KEY(alias, from_ts)
 );
 CREATE TABLE IF NOT EXISTS hidden_model (
     name TEXT PRIMARY KEY
@@ -122,6 +140,7 @@ impl Store {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
+        migrate_model_alias_segments(&conn)?;
         for column in [
             "purpose",
             "outcome",
@@ -374,11 +393,11 @@ impl Store {
     /// changes so history reflects updated list prices.
     pub fn reprice_all(&self) -> rusqlite::Result<usize> {
         let conn = self.writer();
-        // (id, source, model, input, output, reasoning, cache_read, cache_write)
-        type Row = (i64, String, Option<String>, i64, i64, Option<i64>, i64, i64);
+        // (id, source, model, ts, input, output, reasoning, cache_read, cache_write)
+        type Row = (i64, String, Option<String>, i64, i64, i64, Option<i64>, i64, i64);
         let rows: Vec<Row> = {
             let mut stmt = conn.prepare_cached(
-                "SELECT id, source, model, input_tokens, output_tokens, reasoning_tokens,
+                "SELECT id, source, model, ts, input_tokens, output_tokens, reasoning_tokens,
                         cache_read_tokens, cache_write_tokens FROM usage_event",
             )?;
             let q = stmt.query_map([], |r| {
@@ -391,17 +410,18 @@ impl Store {
                     r.get(5)?,
                     r.get(6)?,
                     r.get(7)?,
+                    r.get(8)?,
                 ))
             })?;
             q.collect::<Result<Vec<_>, _>>()?
         };
         let tx = conn.unchecked_transaction()?;
         let mut n = 0usize;
-        for (id, source_s, model, input, output, reasoning, cr, cw) in rows {
+        for (id, source_s, model, ts, input, output, reasoning, cr, cw) in rows {
             // Unknown sources behave like ZCode: no reasoning-token surcharge.
             let source = Source::from_str(&source_s).unwrap_or(Source::Zcode);
             let cost =
-                pricing::cost_for(source, model.as_deref(), input, output, reasoning, cr, cw);
+                pricing::cost_for(source, model.as_deref(), ts, input, output, reasoning, cr, cw);
             n += tx.execute(
                 "UPDATE usage_event SET cost_usd = CASE WHEN estimated=0 THEN ?2 END WHERE id = ?1",
                 params![id, cost],
@@ -516,13 +536,17 @@ impl Store {
 
     pub fn get_model_aliases(&self) -> rusqlite::Result<Vec<ModelAlias>> {
         let conn = self.read_conn();
-        let mut stmt = conn
-            .prepare_cached("SELECT alias, canonical FROM model_alias ORDER BY canonical, alias")?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT alias, canonical, from_ts, until_ts FROM model_alias
+             ORDER BY canonical, alias, from_ts",
+        )?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(ModelAlias {
                     alias: r.get(0)?,
                     canonical: r.get(1)?,
+                    from_ts: r.get(2)?,
+                    until_ts: r.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -532,6 +556,10 @@ impl Store {
     /// Merge `names` into one display name `canonical` (which must be one of the
     /// names). Existing aliases whose canonical is being absorbed are repointed to
     /// `canonical` so the table never forms alias -> alias chains. Idempotent.
+    ///
+    /// An absorbed raw name with dated segments keeps them: only the time it
+    /// still displays under its own name is folded in, which is exactly what the
+    /// user saw listed under that name.
     pub fn merge_models(&self, names: &[String], canonical: &str) -> Result<usize, String> {
         if names.len() < 2 {
             return Err("merge needs at least two model names".to_string());
@@ -544,11 +572,7 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| format!("begin merge transaction: {e}"))?;
         // A canonical that was previously an alias must not keep its own row.
-        tx.execute(
-            "DELETE FROM model_alias WHERE alias = ?1",
-            params![canonical],
-        )
-        .map_err(|e| format!("clear canonical self-alias: {e}"))?;
+        clear_plain_self_alias(&tx, canonical)?;
         let mut n = 0usize;
         let mut seen = std::collections::HashSet::new();
         for name in names.iter().filter(|n| *n != canonical) {
@@ -562,18 +586,14 @@ impl Store {
                     params![canonical, name],
                 )
                 .map_err(|e| format!("repoint aliases: {e}"))?;
-            n += tx
-                .execute(
-                    "INSERT INTO model_alias(alias, canonical) VALUES(?1, ?2)
-                     ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
-                    params![name, canonical],
-                )
-                .map_err(|e| format!("set alias: {e}"))?;
+            n += fill_alias_gaps(&tx, name, canonical)?;
         }
         tx.commit().map_err(|e| format!("commit merge: {e}"))?;
         Ok(n)
     }
 
+    /// Reset a raw name entirely: every segment goes, all of its history
+    /// displays under its own name again.
     pub fn remove_model_alias(&self, alias: &str) -> rusqlite::Result<usize> {
         let conn = self.writer();
         conn.execute("DELETE FROM model_alias WHERE alias = ?1", params![alias])
@@ -587,10 +607,89 @@ impl Store {
         )
     }
 
+    /// From `at_ms` onward, show raw model `alias` as `canonical`. Cuts the
+    /// segment (or the unaliased gap) covering `at_ms` in two; the earlier half
+    /// keeps its name. The new segment ends where the covering one ended, so a
+    /// later cutover the user already made is left alone. `canonical == alias`
+    /// means "from here on, back to the raw name".
+    pub fn split_model_alias(&self, alias: &str, at_ms: i64, canonical: &str) -> Result<(), String> {
+        let alias = alias.trim();
+        let canonical = canonical.trim();
+        if alias.is_empty() {
+            return Err("model name cannot be empty".to_string());
+        }
+        if canonical.is_empty() {
+            return Err("new model name cannot be empty".to_string());
+        }
+        if at_ms < 0 {
+            return Err("cutover must not be before 1970".to_string());
+        }
+        let conn = self.writer();
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin split transaction: {e}"))?;
+        let segs = read_segments(&tx, alias)?;
+        let after = if canonical == alias { None } else { Some(canonical.to_string()) };
+        let mut out: Vec<Segment> = Vec::new();
+        let mut placed = false;
+        for s in &segs {
+            if s.from <= at_ms && at_ms < s.until {
+                if s.from < at_ms {
+                    out.push(Segment { until: at_ms, ..s.clone() });
+                }
+                if let Some(c) = &after {
+                    out.push(Segment { from: at_ms, until: s.until, canonical: c.clone() });
+                }
+                placed = true;
+            } else {
+                out.push(s.clone());
+            }
+        }
+        if !placed {
+            // `at_ms` falls in a gap: the new name runs until the next segment.
+            if let Some(c) = after {
+                let until = segs
+                    .iter()
+                    .map(|s| s.from)
+                    .filter(|&f| f > at_ms)
+                    .min()
+                    .unwrap_or(ALIAS_OPEN_END);
+                out.push(Segment { from: at_ms, until, canonical: c });
+            }
+        }
+        write_segments(&tx, alias, out)?;
+        tx.commit().map_err(|e| format!("commit split: {e}"))?;
+        Ok(())
+    }
+
+    /// Remove one dated segment of `alias`. The segment just before it, when
+    /// they touch, grows over the freed range, so removing a cutover rejoins the
+    /// two halves under the earlier name; with nothing before it the range goes
+    /// back to the raw name.
+    pub fn remove_model_alias_segment(&self, alias: &str, from_ts: i64) -> Result<(), String> {
+        let conn = self.writer();
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin segment removal: {e}"))?;
+        let mut segs = read_segments(&tx, alias)?;
+        let Some(i) = segs.iter().position(|s| s.from == from_ts) else {
+            return Err(format!("no alias segment for {alias} starting at {from_ts}"));
+        };
+        let removed = segs.remove(i);
+        if i > 0 && segs[i - 1].until == removed.from {
+            segs[i - 1].until = removed.until;
+        }
+        write_segments(&tx, alias, segs)?;
+        tx.commit().map_err(|e| format!("commit segment removal: {e}"))?;
+        Ok(())
+    }
+
     /// Rename a model display name: sets `current_name` to display as `new_name`.
     /// Pure query-time alias; raw `usage_event` rows are completely untouched.
     /// If `current_name == new_name`, removes any existing alias (reverting to default).
     /// If `current_name` was previously a canonical name for other aliases, repoints them to `new_name`.
+    /// A raw name with dated segments keeps them: only the time still shown
+    /// under `current_name` itself is renamed.
     pub fn rename_model(&self, current_name: &str, new_name: &str) -> Result<(), String> {
         let current = current_name.trim();
         let target = new_name.trim();
@@ -611,8 +710,7 @@ impl Store {
                 .map_err(|e| format!("remove alias: {e}"))?;
         } else {
             // Target must not have a self-alias
-            tx.execute("DELETE FROM model_alias WHERE alias = ?1", params![target])
-                .map_err(|e| format!("clear target self-alias: {e}"))?;
+            clear_plain_self_alias(&tx, target)?;
 
             // If `current` was a canonical name for other aliases, repoint them to `target`
             tx.execute(
@@ -621,13 +719,8 @@ impl Store {
             )
             .map_err(|e| format!("repoint aliases: {e}"))?;
 
-            // Set current -> target
-            tx.execute(
-                "INSERT INTO model_alias(alias, canonical) VALUES(?1, ?2)
-                 ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
-                params![current, target],
-            )
-            .map_err(|e| format!("set alias: {e}"))?;
+            // Set current -> target wherever current still shows as itself
+            fill_alias_gaps(&tx, current, target)?;
         }
 
         tx.commit().map_err(|e| format!("commit rename: {e}"))?;
@@ -1050,6 +1143,129 @@ impl std::ops::Deref for ReadConn<'_> {
     }
 }
 
+/// One `model_alias` row: `[from, until)` of a raw name shown as `canonical`.
+#[derive(Debug, Clone)]
+struct Segment {
+    from: i64,
+    until: i64,
+    canonical: String,
+}
+
+fn read_segments(conn: &Connection, alias: &str) -> Result<Vec<Segment>, String> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT from_ts, until_ts, canonical FROM model_alias WHERE alias = ?1 ORDER BY from_ts",
+        )
+        .map_err(|e| format!("read alias segments: {e}"))?;
+    let rows = stmt
+        .query_map(params![alias], |r| {
+            Ok(Segment { from: r.get(0)?, until: r.get(1)?, canonical: r.get(2)? })
+        })
+        .map_err(|e| format!("read alias segments: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read alias segments: {e}"))?;
+    Ok(rows)
+}
+
+/// Replace every segment of `alias` with `segs`, sorted, dropping empty ranges
+/// and joining touching neighbours that share a name. The one writer of
+/// segment layout, so the non-overlap invariant `MODEL_ALIAS_JOIN` relies on
+/// is enforced in one place.
+fn write_segments(conn: &Connection, alias: &str, mut segs: Vec<Segment>) -> Result<(), String> {
+    segs.retain(|s| s.from < s.until);
+    segs.sort_by_key(|s| s.from);
+    let mut out: Vec<Segment> = Vec::with_capacity(segs.len());
+    for s in segs {
+        if let Some(last) = out.last_mut() {
+            if s.from < last.until {
+                return Err(format!("overlapping alias segments for {alias}"));
+            }
+            if last.until == s.from && last.canonical == s.canonical {
+                last.until = s.until;
+                continue;
+            }
+        }
+        out.push(s);
+    }
+    conn.execute("DELETE FROM model_alias WHERE alias = ?1", params![alias])
+        .map_err(|e| format!("clear alias segments: {e}"))?;
+    for s in out {
+        conn.execute(
+            "INSERT INTO model_alias(alias, canonical, from_ts, until_ts) VALUES(?1, ?2, ?3, ?4)",
+            params![alias, s.canonical, s.from, s.until],
+        )
+        .map_err(|e| format!("write alias segment: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Point every stretch of time where `alias` still displays as itself at
+/// `canonical`. With no dated segments that is all of time — the plain rename,
+/// which also replaces an earlier plain rename the way it always has.
+fn fill_alias_gaps(conn: &Connection, alias: &str, canonical: &str) -> Result<usize, String> {
+    let mut segs = read_segments(conn, alias)?;
+    if let [only] = segs.as_slice() {
+        if only.from == 0 && only.until == ALIAS_OPEN_END {
+            segs.clear();
+        }
+    }
+    let mut out = segs.clone();
+    let mut cursor = 0i64;
+    let mut filled = 0usize;
+    for s in &segs {
+        if s.from > cursor {
+            out.push(Segment { from: cursor, until: s.from, canonical: canonical.to_string() });
+            filled += 1;
+        }
+        cursor = cursor.max(s.until);
+    }
+    if cursor < ALIAS_OPEN_END {
+        out.push(Segment { from: cursor, until: ALIAS_OPEN_END, canonical: canonical.to_string() });
+        filled += 1;
+    }
+    write_segments(conn, alias, out)?;
+    Ok(filled)
+}
+
+/// A name about to become a display target must not stay renamed itself for
+/// all time (the old alias -> alias chain). Dated segments are the user's
+/// cutovers and stay: the join is single-level, so they cannot chain.
+fn clear_plain_self_alias(conn: &Connection, name: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM model_alias WHERE alias = ?1 AND from_ts = 0 AND until_ts = ?2",
+        params![name, ALIAS_OPEN_END],
+    )
+    .map_err(|e| format!("clear canonical self-alias: {e}"))?;
+    Ok(())
+}
+
+/// Databases from before dated aliases keyed `model_alias` on `alias` alone.
+/// The primary key changes, so `ALTER TABLE` cannot do it: rebuild the table,
+/// turning every existing rename into one all-time segment. Idempotent.
+fn migrate_model_alias_segments(conn: &Connection) -> rusqlite::Result<()> {
+    let migrated = conn
+        .prepare("SELECT name FROM pragma_table_info('model_alias') WHERE name='from_ts'")?
+        .exists([])?;
+    if migrated {
+        return Ok(());
+    }
+    conn.execute_batch(&format!(
+        "BEGIN;
+         CREATE TABLE model_alias_new (
+             alias TEXT NOT NULL,
+             canonical TEXT NOT NULL,
+             from_ts INTEGER NOT NULL DEFAULT 0,
+             until_ts INTEGER NOT NULL DEFAULT {ALIAS_OPEN_END},
+             PRIMARY KEY(alias, from_ts)
+         );
+         INSERT INTO model_alias_new(alias, canonical, from_ts, until_ts)
+             SELECT alias, canonical, 0, {ALIAS_OPEN_END} FROM model_alias;
+         DROP TABLE model_alias;
+         ALTER TABLE model_alias_new RENAME TO model_alias;
+         COMMIT;"
+    ))
+}
+
 /// Open an additional read connection to TokenTrail's own store. WAL mode is a
 /// persistent property of the database file, so this reader never blocks the
 /// writer and vice versa. Plain read-write flags on purpose: a read-only
@@ -1084,6 +1300,111 @@ mod tests {
         Store::open(std::path::Path::new(":memory:")).unwrap()
     }
 
+    fn segs(store: &Store, alias: &str) -> Vec<(i64, i64, String)> {
+        store
+            .get_model_aliases()
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.alias == alias)
+            .map(|a| (a.from_ts, a.until_ts, a.canonical))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn split_keeps_earlier_name_and_remove_rejoins() {
+        let store = test_store();
+        store.rename_model("deepseek-flash", "V4.1").unwrap();
+        store.split_model_alias("deepseek-flash", 1000, "V4.2").unwrap();
+        assert_eq!(
+            segs(&store, "deepseek-flash"),
+            vec![(0, 1000, "V4.1".into()), (1000, ALIAS_OPEN_END, "V4.2".into())]
+        );
+        // A second split inside the open segment leaves the first cutover alone.
+        store.split_model_alias("deepseek-flash", 2000, "V4.3").unwrap();
+        assert_eq!(
+            segs(&store, "deepseek-flash"),
+            vec![
+                (0, 1000, "V4.1".into()),
+                (1000, 2000, "V4.2".into()),
+                (2000, ALIAS_OPEN_END, "V4.3".into())
+            ]
+        );
+        // Splitting at an existing boundary relabels that segment.
+        store.split_model_alias("deepseek-flash", 2000, "V4.2").unwrap();
+        assert_eq!(
+            segs(&store, "deepseek-flash"),
+            vec![(0, 1000, "V4.1".into()), (1000, ALIAS_OPEN_END, "V4.2".into())]
+        );
+        store.remove_model_alias_segment("deepseek-flash", 1000).unwrap();
+        assert_eq!(segs(&store, "deepseek-flash"), vec![(0, ALIAS_OPEN_END, "V4.1".into())]);
+        assert!(store.remove_model_alias_segment("deepseek-flash", 1000).is_err());
+    }
+
+    #[test]
+    fn split_without_rename_leaves_earlier_history_raw() {
+        let store = test_store();
+        store.split_model_alias("deepseek-flash", 1000, "V4.2").unwrap();
+        assert_eq!(segs(&store, "deepseek-flash"), vec![(1000, ALIAS_OPEN_END, "V4.2".into())]);
+        // Renaming what still shows as the raw name fills only that gap.
+        store.rename_model("deepseek-flash", "V4.1").unwrap();
+        assert_eq!(
+            segs(&store, "deepseek-flash"),
+            vec![(0, 1000, "V4.1".into()), (1000, ALIAS_OPEN_END, "V4.2".into())]
+        );
+        // Removing the first segment hands its range back to the raw name.
+        store.remove_model_alias_segment("deepseek-flash", 0).unwrap();
+        assert_eq!(segs(&store, "deepseek-flash"), vec![(1000, ALIAS_OPEN_END, "V4.2".into())]);
+        // Splitting back to the raw name truncates without a new row.
+        store.split_model_alias("deepseek-flash", 1500, "deepseek-flash").unwrap();
+        assert_eq!(segs(&store, "deepseek-flash"), vec![(1000, 1500, "V4.2".into())]);
+    }
+
+    #[test]
+    fn renaming_display_name_touches_only_its_segments() {
+        let store = test_store();
+        store.rename_model("deepseek-flash", "V4.1").unwrap();
+        store.split_model_alias("deepseek-flash", 1000, "V4.2").unwrap();
+        store.rename_model("V4.1", "DeepSeek V4.1 Flash").unwrap();
+        assert_eq!(
+            segs(&store, "deepseek-flash"),
+            vec![(0, 1000, "DeepSeek V4.1 Flash".into()), (1000, ALIAS_OPEN_END, "V4.2".into())]
+        );
+        // Merging into the floating raw name keeps its dated segments.
+        store
+            .merge_models(&["deepseek-flash".into(), "deepseek-v4.2-flash".into()], "deepseek-flash")
+            .unwrap();
+        assert_eq!(segs(&store, "deepseek-flash").len(), 2);
+        assert_eq!(
+            segs(&store, "deepseek-v4.2-flash"),
+            vec![(0, ALIAS_OPEN_END, "deepseek-flash".into())]
+        );
+    }
+
+    #[test]
+    fn open_migrates_single_key_model_alias() {
+        let dir = tmp_dir("alias-migrate");
+        let path = dir.join("usage.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE model_alias (alias TEXT PRIMARY KEY, canonical TEXT NOT NULL);
+                 INSERT INTO model_alias VALUES ('glm-5.3', 'GLM-5.3');",
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(segs(&store, "glm-5.3"), vec![(0, ALIAS_OPEN_END, "GLM-5.3".into())]);
+        store.split_model_alias("glm-5.3", 5, "GLM-5.4").unwrap();
+        drop(store);
+        // Reopening is a no-op for an already migrated table.
+        let store = Store::open(&path).unwrap();
+        assert_eq!(segs(&store, "glm-5.3").len(), 2);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn merge_round_trip() {
         let store = test_store();
@@ -1096,7 +1417,9 @@ mod tests {
             aliases[0],
             ModelAlias {
                 alias: "glm-5.3".into(),
-                canonical: "GLM-5.3".into()
+                canonical: "GLM-5.3".into(),
+                from_ts: 0,
+                until_ts: ALIAS_OPEN_END,
             }
         );
 

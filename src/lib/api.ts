@@ -200,10 +200,21 @@ export interface IngestStats {
   error: string | null;
 }
 
+/**
+ * Events recorded as `alias` in `[from_ts, until_ts)` (epoch ms) display as
+ * `canonical`. One raw name can have several segments — a floating API name
+ * like `deepseek-flash` split at each release. `until_ts` is `ALIAS_OPEN_END`
+ * when the segment has no end.
+ */
 export interface ModelAlias {
   alias: string;
   canonical: string;
+  from_ts: number;
+  until_ts: number;
 }
+
+/** Rust's `i64::MAX`, rounded by JSON into a float; compare with `>=`. */
+export const ALIAS_OPEN_END = 9223372036854775807;
 
 /** A user-pinned chart color; `color` is lowercase `#rrggbb`. */
 export interface ProjectColor {
@@ -410,6 +421,10 @@ export const api = {
   unmergeModels: (canonical: string) => invoke<void>('unmerge_models', { canonical }),
   renameModel: (currentName: string, newName: string) =>
     invoke<void>('rename_model', { currentName, newName }),
+  splitModelAlias: (alias: string, atMs: number, canonical: string) =>
+    invoke<void>('split_model_alias', { alias, atMs, canonical }),
+  removeModelAliasSegment: (alias: string, fromTs: number) =>
+    invoke<void>('remove_model_alias_segment', { alias, fromTs }),
   hiddenModels: () => invoke<string[]>('get_hidden_models'),
   hideModels: (names: string[]) => invoke<void>('hide_models', { names }),
   unhideModel: (name: string) => invoke<void>('unhide_model', { name }),

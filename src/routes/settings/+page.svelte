@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectAlias, type ProjectColor, type SourceStatus } from '$lib/api';
+  import { ALIAS_OPEN_END, api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectAlias, type ProjectColor, type SourceStatus } from '$lib/api';
   import { basename, normalizeModelName, sourceSwatch } from '$lib/format';
   import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
   import WrappedCard from '$lib/WrappedCard.svelte';
@@ -25,6 +25,11 @@
   let canonical = $state('');
   let renameTarget = $state('');
   let renameNewName = $state('');
+
+  // dated names: a raw name that silently moves to each new release
+  let splitTarget = $state('');
+  let splitAt = $state('');
+  let splitName = $state('');
 
   // hidden models
   let hidden = $state<string[]>([]);
@@ -155,16 +160,36 @@
 
   const rawModelSet = $derived(new Set(rawModels));
 
+  const isAllTime = (a: ModelAlias) => a.from_ts <= 0 && a.until_ts >= ALIAS_OPEN_END;
+
+  // Raw names whose display name changes over time. Their segments are listed
+  // as a timeline of their own, not as renames or merges.
+  const datedAliases = $derived.by(() => {
+    const map = new Map<string, ModelAlias[]>();
+    for (const a of aliases) {
+      const list = map.get(a.alias);
+      if (list) list.push(a);
+      else map.set(a.alias, [a]);
+    }
+    return [...map.entries()]
+      .filter(([, segs]) => !(segs.length === 1 && isAllTime(segs[0])))
+      .map(([alias, segs]) => ({ alias, segments: [...segs].sort((x, y) => x.from_ts - y.from_ts) }))
+      .sort((a, b) => a.alias.localeCompare(b.alias));
+  });
+
+  const datedSet = $derived(new Set(datedAliases.map((d) => d.alias)));
+  const plainAliases = $derived(aliases.filter((a) => !datedSet.has(a.alias)));
+
   const customRenames = $derived.by(() => {
-    return aliases.filter((a) => {
-      const allForCanon = aliases.filter((x) => x.canonical === a.canonical);
+    return plainAliases.filter((a) => {
+      const allForCanon = plainAliases.filter((x) => x.canonical === a.canonical);
       return allForCanon.length === 1 && !rawModelSet.has(a.canonical);
     });
   });
 
   const mergedGroups = $derived.by(() => {
     const map = new Map<string, string[]>();
-    for (const a of aliases) {
+    for (const a of plainAliases) {
       const list = map.get(a.canonical);
       if (list) list.push(a.alias);
       else map.set(a.canonical, [a.alias]);
@@ -264,6 +289,65 @@
   async function removeAlias(alias: string) {
     try {
       await api.removeModelAlias(alias);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  // `datetime-local` value for a moment, in local time.
+  function localInput(ms: number): string {
+    const d = new Date(ms);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  function fmtCutover(ms: number): string {
+    return new Date(ms).toLocaleString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  function segmentLabel(seg: ModelAlias): string {
+    const from = seg.from_ts > 0 ? fmtCutover(seg.from_ts) : '';
+    const until = seg.until_ts < ALIAS_OPEN_END ? fmtCutover(seg.until_ts) : '';
+    if (from && until) return `${from} – ${until}`;
+    if (from) return `from ${from}`;
+    if (until) return `before ${until}`;
+    return 'all time';
+  }
+
+  function pickSplitTarget(name: string) {
+    splitTarget = name;
+    splitAt = localInput(Date.now());
+    splitName = '';
+  }
+
+  async function doSplit() {
+    const at = new Date(splitAt).getTime();
+    if (!splitTarget || !splitName.trim() || Number.isNaN(at)) return;
+    try {
+      await api.splitModelAlias(splitTarget, at, splitName.trim());
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      splitTarget = '';
+      splitAt = '';
+      splitName = '';
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function removeSegment(alias: string, fromTs: number) {
+    try {
+      await api.removeModelAliasSegment(alias, fromTs);
       window.dispatchEvent(new CustomEvent('tt-sync'));
       await loadMerges();
       error = '';
@@ -607,11 +691,98 @@
               <span class="note-inline">into “<b>{canonical}</b>”</span>
             {/if}
           </div>
+
+          <!-- SECTION C: SPLIT A FLOATING NAME BY DATE -->
+          <div class="col-hd" style="margin-top:28px">
+            <h2>Split Name By Date</h2>
+          </div>
+          <p class="note">
+            For API names that always point at the newest release, like <code>deepseek-flash</code>. Usage from the
+            cutover onward gets the new name; everything before keeps the name it had.
+          </p>
+          <div class="tool-card">
+            <div class="form-group">
+              <label class="field-lbl" for="split-select">Raw Model Name:</label>
+              <select
+                id="split-select"
+                class="styled-select"
+                value={splitTarget}
+                onchange={(e) => pickSplitTarget((e.currentTarget as HTMLSelectElement).value)}
+              >
+                <option value="">Choose a model…</option>
+                {#each rawModels as name}
+                  <option value={name}>{name}</option>
+                {/each}
+              </select>
+            </div>
+
+            {#if splitTarget}
+              <div class="form-group" style="margin-top:10px">
+                <label class="field-lbl" for="split-at">Cutover (local time):</label>
+                <input id="split-at" type="datetime-local" bind:value={splitAt} />
+              </div>
+              <div class="form-group" style="margin-top:10px">
+                <label class="field-lbl" for="split-name">Name From Cutover Onward:</label>
+                <input id="split-name" type="text" placeholder="e.g. DeepSeek V4.2 Flash" bind:value={splitName} />
+              </div>
+
+              {#if splitName.trim() && splitAt}
+                <div class="preview-box">
+                  <span class="p-lbl">From {fmtCutover(new Date(splitAt).getTime())}:</span>
+                  <code class="p-raw">{splitTarget}</code>
+                  <span class="p-arr">→</span>
+                  <b class="p-new">{splitName.trim()}</b>
+                </div>
+              {/if}
+
+              <div class="btn-row" style="margin-top:12px">
+                <button class="primary" disabled={!splitName.trim() || !splitAt} onclick={doSplit}>
+                  Split At Cutover
+                </button>
+              </div>
+            {/if}
+          </div>
         </div>
 
         <div class="col">
-          <!-- Active Custom Renames -->
+          <!-- Dated names -->
           <div class="col-hd">
+            <h2>Names By Date ({datedAliases.length})</h2>
+          </div>
+          <p class="note">
+            Raw names shown under different names over time. Removing a cutover gives its range back to the name
+            before it.
+          </p>
+          <div class="active-merges-list">
+            {#each datedAliases as d}
+              <div class="merge-group-card">
+                <div class="grp-header">
+                  <code class="grp-canon">{d.alias}</code>
+                  <button class="unmerge-btn" onclick={() => resetRename(d.alias)}>Reset</button>
+                </div>
+                <div class="seg-list">
+                  {#each d.segments as seg}
+                    <div class="seg-row">
+                      <span class="seg-when">{segmentLabel(seg)}</span>
+                      <span class="p-arr">→</span>
+                      <b class="seg-name">{seg.canonical}</b>
+                      <button
+                        class="x-btn"
+                        aria-label="Remove {seg.canonical} for {d.alias}"
+                        onclick={() => removeSegment(d.alias, seg.from_ts)}>×</button
+                      >
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+            {#if !datedAliases.length}
+              <div class="empty-state">No dated names yet</div>
+            {/if}
+          </div>
+
+          <!-- Active Custom Renames -->
+          <div class="col-hd" style="margin-top:28px">
             <h2>Custom Display Names ({customRenames.length})</h2>
           </div>
           <p class="note">
@@ -1180,7 +1351,8 @@
     outline: none;
     border-color: var(--org);
   }
-  .tool-card input[type='text'] {
+  .tool-card input[type='text'],
+  .tool-card input[type='datetime-local'] {
     width: 100%;
     padding: 8px 10px;
     font: 400 11px/1 var(--font-mono);
@@ -1189,7 +1361,8 @@
     color: var(--ink);
     border-radius: 0;
   }
-  .tool-card input[type='text']:focus {
+  .tool-card input[type='text']:focus,
+  .tool-card input[type='datetime-local']:focus {
     outline: none;
     border-color: var(--org);
   }
@@ -1424,6 +1597,28 @@
   }
   .x-btn:hover {
     color: var(--org);
+  }
+  .seg-list {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--hair);
+  }
+  .seg-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .seg-when {
+    font: 400 10px/1.3 var(--font-mono);
+    color: var(--dim);
+  }
+  .seg-name {
+    font: 600 11px/1.3 var(--font-ui);
+    color: var(--ink);
+    overflow-wrap: anywhere;
   }
 
   /* Hidden Tab */

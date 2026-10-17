@@ -172,6 +172,29 @@ pub fn remove_model_alias(state: State<AppState>, alias: String) -> Result<(), S
         .map_err(|e| format!("remove model alias: {e}"))
 }
 
+/// From `at_ms` onward, show raw model `alias` as `canonical`; earlier usage
+/// keeps the name it had. For floating API names that move to each new release.
+#[tauri::command]
+pub fn split_model_alias(
+    state: State<AppState>,
+    alias: String,
+    at_ms: i64,
+    canonical: String,
+) -> Result<(), String> {
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.split_model_alias(&alias, at_ms, &canonical)
+}
+
+#[tauri::command]
+pub fn remove_model_alias_segment(
+    state: State<AppState>,
+    alias: String,
+    from_ts: i64,
+) -> Result<(), String> {
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.remove_model_alias_segment(&alias, from_ts)
+}
+
 #[tauri::command]
 pub fn rename_model(
     state: State<AppState>,

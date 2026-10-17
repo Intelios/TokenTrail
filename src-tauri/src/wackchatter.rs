@@ -150,6 +150,30 @@ pub fn libraries(store: &Store, home: &Path) -> Vec<Library> {
 fn root(store: &Store, home: &Path, id: &str) -> Result<PathBuf> {
     paths(store,home).into_iter().filter(|p|library_key(p)==id).find(|p|p.join("chats.db").exists()).ok_or_else(||"This WackChatter library is unavailable. Reconnect its drive or start WackChatter with this library.".into())
 }
+/// SQL resolving `model` at epoch-ms `ts` through `aliases`, for databases
+/// that cannot join TokenTrail's `model_alias` (the counterpart of
+/// `store::MODEL_ALIAS_JOIN`). Values are user-chosen names, so they are
+/// quoted as SQL literals rather than trusted.
+fn alias_case_sql(aliases: &[crate::models::ModelAlias], model: &str, ts: &str) -> String {
+    if aliases.is_empty() {
+        return model.to_string();
+    }
+    let q = |v: &str| format!("'{}'", v.replace('\'', "''"));
+    let arms: String = aliases
+        .iter()
+        .map(|a| {
+            format!(
+                " WHEN m.v={} AND t.v>={} AND t.v<{} THEN {}",
+                q(&a.alias),
+                a.from_ts,
+                a.until_ts,
+                q(&a.canonical)
+            )
+        })
+        .collect();
+    format!("(SELECT CASE{arms} ELSE m.v END FROM (SELECT {model} AS v) m, (SELECT {ts} AS v) t)")
+}
+
 fn rows<T: serde::de::DeserializeOwned>(
     db: &Connection,
     sql: &str,
@@ -382,13 +406,15 @@ pub fn stats(
             }
         }
     }
-    let mut models:Vec<Model>=rows(&db,&format!("{base} SELECT COALESCE(json_extract(info,'$.extra.model'),'unknown') AS model,COALESCE(json_extract(info,'$.extra.api'),'unknown') AS provider,COUNT(*) AS swipes,SUM(CASE WHEN measured=1 THEN tokens ELSE 0 END) AS measured_tokens,SUM(CASE WHEN measured=0 THEN tokens ELSE 0 END) AS estimated_tokens,COALESCE(SUM(elapsed>0),0) AS timed_swipes,COALESCE(SUM(CASE WHEN elapsed>0 THEN elapsed ELSE 0 END),0) AS total_ms,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=1 THEN elapsed ELSE 0 END),0) AS measured_ms,SUM(CASE WHEN elapsed>0 AND measured=1 THEN tokens ELSE 0 END) AS measured_timed_tokens,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=0 THEN elapsed ELSE 0 END),0) AS estimated_ms,SUM(CASE WHEN elapsed>0 AND measured=0 THEN tokens ELSE 0 END) AS estimated_timed_tokens FROM swipe GROUP BY model,provider ORDER BY swipes DESC"),&args)?;
+    // chats.db cannot join TokenTrail's model_alias, so the alias segments are
+    // inlined: each swipe resolves to the name its model had when it finished.
     let aliases = store.get_model_aliases().map_err(|e| e.to_string())?;
-    for m in &mut models {
-        if let Some(a) = aliases.iter().find(|a| a.alias == m.model) {
-            m.model = a.canonical.clone();
-        }
-    }
+    let display = alias_case_sql(
+        &aliases,
+        "COALESCE(json_extract(info,'$.extra.model'),'unknown')",
+        "CAST((julianday(COALESCE(json_extract(info,'$.gen_finished'),sent,'now'))-2440587.5)*86400000 AS INTEGER)",
+    );
+    let models:Vec<Model>=rows(&db,&format!("{base} SELECT {display} AS model,COALESCE(json_extract(info,'$.extra.api'),'unknown') AS provider,COUNT(*) AS swipes,SUM(CASE WHEN measured=1 THEN tokens ELSE 0 END) AS measured_tokens,SUM(CASE WHEN measured=0 THEN tokens ELSE 0 END) AS estimated_tokens,COALESCE(SUM(elapsed>0),0) AS timed_swipes,COALESCE(SUM(CASE WHEN elapsed>0 THEN elapsed ELSE 0 END),0) AS total_ms,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=1 THEN elapsed ELSE 0 END),0) AS measured_ms,SUM(CASE WHEN elapsed>0 AND measured=1 THEN tokens ELSE 0 END) AS measured_timed_tokens,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=0 THEN elapsed ELSE 0 END),0) AS estimated_ms,SUM(CASE WHEN elapsed>0 AND measured=0 THEN tokens ELSE 0 END) AS estimated_timed_tokens FROM swipe GROUP BY 1,2 ORDER BY swipes DESC"),&args)?;
     let mut merged: BTreeMap<(String, String), Model> = BTreeMap::new();
     for m in models {
         let key = (m.model.clone(), m.provider.clone());
@@ -556,7 +582,7 @@ pub fn usage(
     };
     let db = store.read_conn();
     let args: [&dyn rusqlite::ToSql; 3] = [&library, &since, &session];
-    let base="WITH filtered AS (SELECT u.*,COALESCE(a.canonical,u.model,'unknown') AS display_model FROM usage_event u LEFT JOIN model_alias a ON a.alias=u.model WHERE u.source='wackchatter' AND u.ts>=?2 AND (?1 IS NULL OR EXISTS(SELECT 1 FROM wackchatter_membership m WHERE m.event_id=u.source_event_id AND m.library_id=?1)) AND (?3 IS NULL OR EXISTS(SELECT 1 FROM wackchatter_membership m WHERE m.event_id=u.source_event_id AND m.session_id=?3 AND (?1 IS NULL OR m.library_id=?1)) OR (?1 IS NULL AND u.session_id=?3) OR (?3='unknown' AND u.session_id IS NULL)) AND COALESCE(a.canonical,u.model,'unknown') NOT IN (SELECT name FROM hidden_model))";
+    let base="WITH filtered AS (SELECT u.*,COALESCE(a.canonical,u.model,'unknown') AS display_model FROM usage_event u LEFT JOIN model_alias a ON a.alias=u.model AND u.ts>=a.from_ts AND u.ts<a.until_ts WHERE u.source='wackchatter' AND u.ts>=?2 AND (?1 IS NULL OR EXISTS(SELECT 1 FROM wackchatter_membership m WHERE m.event_id=u.source_event_id AND m.library_id=?1)) AND (?3 IS NULL OR EXISTS(SELECT 1 FROM wackchatter_membership m WHERE m.event_id=u.source_event_id AND m.session_id=?3 AND (?1 IS NULL OR m.library_id=?1)) OR (?1 IS NULL AND u.session_id=?3) OR (?3='unknown' AND u.session_id IS NULL)) AND COALESCE(a.canonical,u.model,'unknown') NOT IN (SELECT name FROM hidden_model))";
     let measured="CASE WHEN estimated=0 THEN input_tokens+output_tokens+cache_read_tokens+cache_write_tokens ELSE 0 END";
     let estimated = "CASE WHEN estimated=1 THEN output_tokens ELSE 0 END";
     let totals:UsageTotal=rows(&db,&format!("{base} SELECT COUNT(*) AS events,COALESCE(SUM(estimated=0),0) AS measured_events,COALESCE(SUM(estimated=0 AND cost_usd IS NOT NULL),0) AS priced_events,COALESCE(SUM(CASE WHEN estimated=0 THEN input_tokens ELSE 0 END),0) AS input_tokens,COALESCE(SUM(CASE WHEN estimated=0 THEN output_tokens ELSE 0 END),0) AS output_tokens,COALESCE(SUM(CASE WHEN estimated=0 THEN cache_read_tokens ELSE 0 END),0) AS cache_read_tokens,COALESCE(SUM(CASE WHEN estimated=0 THEN cache_write_tokens ELSE 0 END),0) AS cache_write_tokens,COALESCE(SUM({estimated}),0) AS estimated_tokens,SUM(CASE WHEN estimated=0 THEN cost_usd END) AS cost_usd,AVG(duration_ms) AS avg_duration_ms,AVG(ttft_ms) AS avg_ttft_ms FROM filtered"),&args)?.remove(0);
@@ -649,6 +675,26 @@ pub async fn destination(
 mod tests {
     use super::*;
     use crate::collectors::{test_home, test_store};
+
+    #[test]
+    fn alias_case_resolves_by_time_and_quotes_names() {
+        use crate::models::ModelAlias;
+        let a = |from_ts, until_ts, canonical: &str| ModelAlias {
+            alias: "deepseek-flash".into(),
+            canonical: canonical.into(),
+            from_ts,
+            until_ts,
+        };
+        let aliases = [a(0, 1000, "V4.1"), a(1000, i64::MAX, "Jack's V4.2")];
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let at = |model: &str, ts: i64| -> String {
+            let sql = alias_case_sql(&aliases, &format!("'{model}'"), &ts.to_string());
+            db.query_row(&format!("SELECT {sql}"), [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(at("deepseek-flash", 999), "V4.1");
+        assert_eq!(at("deepseek-flash", 1000), "Jack's V4.2");
+        assert_eq!(at("other", 1000), "other");
+    }
     fn fixture() -> (PathBuf, Store, Connection) {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let tag = format!(

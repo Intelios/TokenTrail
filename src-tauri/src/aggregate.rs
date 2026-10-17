@@ -193,7 +193,7 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
     };
     let by_model = breakdown(format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown'), COUNT(*), COALESCE(SUM({T}),0), SUM(u.cost_usd)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
          GROUP BY 1 ORDER BY 3 DESC",
         T = TOKENS,
@@ -267,7 +267,7 @@ pub fn wackcode_detail(store: &Store, days: i64) -> DbResult<WackCodeDetail> {
                     MAX(u.ts),
                     CASE WHEN MAX(u.mode='chat') = 1 THEN 'chat' ELSE 'code' END
              FROM usage_event u
-             LEFT JOIN model_alias a ON a.alias = u.model
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              LEFT JOIN project_alias pj ON pj.alias = u.project
              WHERE u.ts >= ?1 AND u.source='wackcode' AND {H}
              GROUP BY 1
@@ -338,7 +338,7 @@ pub fn wackcode_session_calls(store: &Store, session_id: &str) -> DbResult<Vec<W
                 COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(u.outcome, 'completed'),
                 COALESCE({T}, 0), COALESCE(u.duration_ms, 0)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.source='wackcode' AND u.session_id = ?1 AND {H}
          ORDER BY u.ts",
         K = WC_KEY,
@@ -367,11 +367,14 @@ pub fn wackcode_session_calls(store: &Store, session_id: &str) -> DbResult<Vec<W
 /// name compared here is the one the UI displays: NULL-model rows render as
 /// 'unknown' everywhere, so they hide when the user hides 'unknown' — a
 /// fragment over the raw name (COALESCE(u.model,'')) can never match it.
-const NOT_HIDDEN: &str = "COALESCE(u.model, 'unknown') NOT IN (
-    SELECT name FROM hidden_model
-    UNION
-    SELECT alias FROM model_alias WHERE canonical IN (SELECT name FROM hidden_model)
-)";
+/// The alias check is per event time: hiding the name a floating API model
+/// had before a cutover must not hide what it became after. Correlated rather
+/// than using the outer `a` join, so it works in queries without one.
+const NOT_HIDDEN: &str = "(COALESCE(u.model, 'unknown') NOT IN (SELECT name FROM hidden_model)
+    AND NOT EXISTS (
+        SELECT 1 FROM model_alias x JOIN hidden_model h ON h.name = x.canonical
+        WHERE x.alias = u.model AND u.ts >= x.from_ts AND u.ts < x.until_ts
+    ))";
 
 /// The project a row counts under: its folder resolved through `project_alias`
 /// (folded to its project root at ingest, or folded/kept separate by hand), with
@@ -804,7 +807,7 @@ pub fn daily_by_model(store: &Store, days: i64) -> DbResult<Vec<DailyModelRow>> 
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(SUM({T}),0)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND {H} GROUP BY 1, 2 ORDER BY d",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -840,7 +843,7 @@ pub fn by_model(store: &Store, days: i64) -> DbResult<Vec<ModelRow>> {
     let sql = format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
                 SUM(cost_usd), MAX(ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -863,7 +866,7 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
                 COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
                 SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source),
                 COUNT(DISTINCT date(u.ts/1000, 'unixepoch'))
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 6 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -901,7 +904,7 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
 pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<ModelDetail>> {
     let exists_sql = format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown')
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
          LIMIT 1",
         H = NOT_HIDDEN
@@ -924,7 +927,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
                 COALESCE(SUM(u.reasoning_tokens),0),
                 COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
                 SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY 1",
         T = TOKENS,
@@ -959,7 +962,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
     // by source
     let sql_src = format!(
         "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY u.source ORDER BY 2 DESC",
         T = TOKENS,
@@ -983,7 +986,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
                 COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
          FROM usage_event u
-         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY 1 ORDER BY 2 DESC",
@@ -1009,7 +1012,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
     // daily series → active days, streaks, peak day
     let sql_daily = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
          GROUP BY d ORDER BY d",
         T = TOKENS,
@@ -1087,7 +1090,7 @@ fn format_tokens(n: i64) -> String {
 pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievement>> {
     let exists_sql = format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown')
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
          LIMIT 1",
         H = NOT_HIDDEN
@@ -1105,7 +1108,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     // 1. Daily usage for Peak Day and Longest Streak
     let sql_daily = format!(
         "SELECT date(ts/1000, 'unixepoch') AS d, COALESCE(SUM({T}), 0), MIN(ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
          GROUP BY d ORDER BY d",
         T = TOKENS,
@@ -1169,7 +1172,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     // 2. Multi-Harness
     let sql_sources = format!(
         "SELECT u.source, MIN(u.ts) as first_ts
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
          GROUP BY u.source
          ORDER BY first_ts ASC",
@@ -1197,7 +1200,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     if fam != "Other" {
         let sql_models = format!(
             "SELECT COALESCE(a.canonical, u.model, 'unknown') as m, COALESCE(SUM({T}), 0) as tok
-             FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+             FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              WHERE {H}
              GROUP BY m
              ORDER BY tok DESC",
@@ -1231,7 +1234,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     // 4. Token Milestones & Big Spender (scanned in chronological order)
     let sql_events = format!(
         "SELECT u.ts, {T}, COALESCE(u.cost_usd, 0.0)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
          ORDER BY u.ts ASC",
         T = TOKENS,
@@ -1303,7 +1306,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     let sql_projects = format!(
         "SELECT {P} as p, MIN(u.ts) as first_ts
          FROM usage_event u
-         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
            AND u.project IS NOT NULL AND u.project != '' AND u.project != 'unknown'
@@ -1571,7 +1574,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
                 MIN(u.ts),
                 MAX(u.ts)
          FROM usage_event u
-         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {proj_filter} AND {H}
          GROUP BY 1 ORDER BY 2 DESC",
@@ -1660,7 +1663,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
                 MAX(u.ts),
                 GROUP_CONCAT(DISTINCT COALESCE(a.canonical, u.model, 'unknown'))
          FROM usage_event u
-         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE u.ts >= ?1 AND {proj_filter} AND {H}
          GROUP BY COALESCE(u.session_id, 'unknown'), u.source
@@ -1766,7 +1769,7 @@ pub fn peak_days(store: &Store, days: i64) -> DbResult<Vec<PeakDayRow>> {
                 COALESCE(SUM({T}), 0) AS tokens,
                 COALESCE(SUM(u.cost_usd), 0.0) AS cost
          FROM usage_event u
-         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE u.ts >= ?1 AND {H}
          GROUP BY 1, 2
          HAVING SUM({T}) > 0
@@ -1825,7 +1828,7 @@ pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
     let top_models = {
         let mut stmt = conn.prepare(&format!(
             "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*)
-             FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model
+             FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              WHERE {w} GROUP BY 1 ORDER BY 2 DESC LIMIT 6",
             T = TOKENS
         ))?;
@@ -1983,7 +1986,7 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
                 COALESCE(a.canonical, u.model, 'unknown') AS model,
                 COALESCE(SUM({T}),0) AS tokens
          FROM usage_event u
-         LEFT JOIN model_alias a ON a.alias = u.model
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE {H}
          GROUP BY 1, 2
          ORDER BY d ASC",
@@ -2459,6 +2462,50 @@ mod tests {
             is_subagent: false,
             estimated: false,
             purpose: None, outcome: None, workspace: None, subagent_id: None, mode: None,
+        }
+    }
+
+    #[test]
+    fn dated_alias_splits_floating_model_at_cutover() {
+        // deepseek-flash always names the newest Flash: renamed to V4.1, then
+        // split when V4.2 ships, history before the cutover stays V4.1.
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let cut = now - 10_000;
+        store
+            .insert_events(&[
+                test_event("deepseek-flash", cut - 5_000, 100),
+                test_event("deepseek-flash", cut + 5_000, 40),
+            ])
+            .unwrap();
+        store.rename_model("deepseek-flash", "DeepSeek V4.1 Flash").unwrap();
+        store.split_model_alias("deepseek-flash", cut, "DeepSeek V4.2 Flash").unwrap();
+
+        let rows = by_model(&store, 3650).unwrap();
+        let tok = |m: &str| rows.iter().find(|r| r.model == m).map(|r| r.tokens);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(tok("DeepSeek V4.1 Flash"), Some(100));
+        assert_eq!(tok("DeepSeek V4.2 Flash"), Some(40));
+        let detail = model_detail(&store, "DeepSeek V4.1 Flash", 3650).unwrap().unwrap();
+        assert_eq!(detail.tokens, 100);
+
+        // Hiding the old name hides only the old range.
+        store.hide_models(&["DeepSeek V4.1 Flash".into()]).unwrap();
+        let rows = by_model(&store, 3650).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "DeepSeek V4.2 Flash");
+        assert_eq!(rows[0].tokens, 40);
+    }
+
+    #[test]
+    fn every_alias_join_is_time_ranged() {
+        // A bare `ON a.alias = u.model` would apply one segment's name to all
+        // time and, with several segments, count an event once per segment.
+        let src = include_str!("aggregate.rs");
+        let want = crate::store::MODEL_ALIAS_JOIN;
+        // Split so this test's own source does not match itself.
+        for (i, _) in src.match_indices(concat!("LEFT JOIN ", "model_alias a ON")) {
+            assert!(src[i..].starts_with(want), "un-ranged alias join at byte {i}");
         }
     }
 

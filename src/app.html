@@ -439,7 +439,14 @@
               // Only WackChatter ever reports estimates; the harnesses are all measured.
               case 'get_estimated_share':
                 return [{ source: 'wackchatter', events: 1400, estimated: 874 }];
-              case 'get_model_aliases': return [];
+              // One floating API name split at a release: earlier usage keeps its name.
+              case 'get_model_aliases': {
+                const cut = Date.UTC(2026, 9, 17);
+                return [
+                  { alias: 'deepseek-flash', canonical: 'DeepSeek V4.1 Flash', from_ts: 0, until_ts: cut },
+                  { alias: 'deepseek-flash', canonical: 'DeepSeek V4.2 Flash', from_ts: cut, until_ts: 9223372036854775807 },
+                ];
+              }
               case 'get_raw_models': return MODELS.map((m) => m[0]);
               case 'get_hidden_models': return ['codex-auto-review'];
               case 'sync_now': return SOURCES.map((s) => ({ source: s, processed: Math.round(rng() * 400), error: null }));

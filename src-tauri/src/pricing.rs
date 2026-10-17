@@ -25,12 +25,59 @@ struct Table {
 #[derive(Debug, serde::Deserialize)]
 struct Family {
     prefix: String,
+    /// Current list price, open-ended.
     rates: Rates,
+    /// Earlier prices of a floating API name (`deepseek-flash` moves to each
+    /// new release, and its price moves with it). When a floating name's price
+    /// changes, the old `rates` move here with `until` set to the release date
+    /// rather than being overwritten, so history keeps the price it ran at.
+    #[serde(default)]
+    history: Vec<Dated>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Dated {
+    /// Exclusive end, UTC: `YYYY-MM-DD` (midnight) or RFC 3339.
+    until: String,
+    rates: Rates,
+    #[serde(skip)]
+    until_ms: i64,
+}
+
+impl Family {
+    fn rates_at(&self, ts_ms: i64) -> Rates {
+        self.history
+            .iter()
+            .find(|d| ts_ms < d.until_ms)
+            .map_or(self.rates, |d| d.rates)
+    }
+}
+
+/// Epoch ms of a pricing `until` date; `None` when it is neither form.
+fn parse_until(s: &str) -> Option<i64> {
+    use time::format_description::well_known::Rfc3339;
+    if let Ok(t) = time::OffsetDateTime::parse(s, &Rfc3339) {
+        return Some((t.unix_timestamp_nanos() / 1_000_000) as i64);
+    }
+    let day = time::macros::format_description!("[year]-[month]-[day]");
+    let d = time::Date::parse(s, &day).ok()?;
+    Some(d.midnight().assume_utc().unix_timestamp() * 1000)
 }
 
 fn table() -> &'static Table {
     static TABLE: OnceLock<Table> = OnceLock::new();
-    TABLE.get_or_init(|| serde_json::from_str(PRICING_JSON).expect("embedded pricing.json is valid"))
+    TABLE.get_or_init(|| {
+        let mut t: Table =
+            serde_json::from_str(PRICING_JSON).expect("embedded pricing.json is valid");
+        for f in &mut t.families {
+            for d in &mut f.history {
+                d.until_ms = parse_until(&d.until)
+                    .unwrap_or_else(|| panic!("pricing.json: bad until {:?} for {}", d.until, f.prefix));
+            }
+            f.history.sort_by_key(|d| d.until_ms);
+        }
+        t
+    })
 }
 
 /// Strip harness decorations and provider prefixes: "claude-opus-5[ffe]" and
@@ -42,7 +89,14 @@ pub fn normalize_model(model: &str) -> String {
     base.trim().to_ascii_lowercase()
 }
 
+/// Current rates for `model`.
+#[cfg(test)]
 fn rates_for(model: &str) -> Option<Rates> {
+    rates_at(model, i64::MAX)
+}
+
+/// Rates `model` was listed at when an event at `ts_ms` happened.
+fn rates_at(model: &str, ts_ms: i64) -> Option<Rates> {
     let t = table();
     let full = model
         .split('[')
@@ -71,25 +125,27 @@ fn rates_for(model: &str) -> Option<Rates> {
     // must hit the deepseek-flash family, not the deepseek catch-all).
     let by_base: Vec<&str> = candidates.iter().rev().cloned().collect();
     for c in &by_base {
-        if let Some(r) = t.families.iter().find(|f| c.starts_with(&f.prefix)) {
-            return Some(r.rates);
+        if let Some(f) = t.families.iter().find(|f| c.starts_with(&f.prefix)) {
+            return Some(f.rates_at(ts_ms));
         }
     }
     None
 }
 
-/// API-equivalent cost in USD of one model request, from the bundled list
-/// prices. Returns `None` when the model is unknown or missing.
+/// API-equivalent cost in USD of one model request at `ts_ms` (epoch ms), from
+/// the bundled list prices. Returns `None` when the model is unknown or missing.
+#[allow(clippy::too_many_arguments)]
 pub fn cost_for(
     source: Source,
     model: Option<&str>,
+    ts_ms: i64,
     input_tokens: i64,
     output_tokens: i64,
     reasoning_tokens: Option<i64>,
     cache_read_tokens: i64,
     cache_write_tokens: i64,
 ) -> Option<f64> {
-    let r = rates_for(model?)?;
+    let r = rates_at(model?, ts_ms)?;
     // Providers bill thinking tokens at the output rate. Most collectors report
     // output including thinking (already covered by r.output); Antigravity is
     // the one that subtracts thinking from output_tokens, so its reasoning
@@ -111,6 +167,7 @@ pub fn cost_usd(model: Option<&str>, e: &UsageEvent) -> Option<f64> {
     cost_for(
         e.source,
         model,
+        e.ts,
         e.input_tokens,
         e.output_tokens,
         e.reasoning_tokens,
@@ -526,6 +583,31 @@ mod tests {
         assert_eq!(rates_for("stepfun/step-5").map(|r| r.output), Some(2.7));
         // Older Step generations keep no pricing of their own.
         assert!(rates_for("step-3.7-flash").is_none());
+    }
+
+    #[test]
+    fn dated_family_rates_follow_event_time() {
+        let r = |input| Rates { input, output: 0.0, cache_read: 0.0, cache_write: 0.0 };
+        let cut = parse_until("2026-10-17").unwrap();
+        let f = Family {
+            prefix: "deepseek-flash".into(),
+            rates: r(0.5),
+            history: vec![Dated { until: "2026-10-17".into(), rates: r(0.3), until_ms: cut }],
+        };
+        assert_eq!(f.rates_at(cut - 1).input, 0.3);
+        assert_eq!(f.rates_at(cut).input, 0.5);
+        assert_eq!(f.rates_at(i64::MAX).input, 0.5);
+    }
+
+    #[test]
+    fn pricing_until_dates_parse() {
+        assert_eq!(parse_until("1970-01-02"), Some(86_400_000));
+        assert_eq!(parse_until("1970-01-01T00:00:01Z"), Some(1000));
+        assert_eq!(parse_until("Oct 17"), None);
+        // Every embedded history date parses (table() panics otherwise) and is sorted.
+        for f in &table().families {
+            assert!(f.history.windows(2).all(|w| w[0].until_ms <= w[1].until_ms));
+        }
     }
 
     #[test]

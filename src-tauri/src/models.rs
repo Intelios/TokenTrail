@@ -115,11 +115,15 @@ pub struct SourceStatus {
     pub found: bool,
 }
 
-/// A user-declared alias: events recorded as `alias` are displayed as `canonical`.
+/// A user-declared alias: events recorded as `alias` between `from_ts`
+/// (inclusive) and `until_ts` (exclusive, `i64::MAX` when open-ended), in epoch
+/// ms, are displayed as `canonical`. One raw name can have several segments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelAlias {
     pub alias: String,
     pub canonical: String,
+    pub from_ts: i64,
+    pub until_ts: i64,
 }
 
 /// A user-chosen chart color for a project, keyed by the project path exactly as
