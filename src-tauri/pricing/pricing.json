@@ -14,6 +14,8 @@
     { "prefix": "claude-sonnet-5.5", "rates": { "input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5 } },
     { "prefix": "claude-sonnet-5", "rates": { "input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5 } },
     { "prefix": "claude-sonnet", "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 } },
+    { "prefix": "claude-haiku-5-5", "rates": { "input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125 } },
+    { "prefix": "claude-haiku-5.5", "rates": { "input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125 } },
     { "prefix": "claude-haiku", "rates": { "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25 } },
     { "prefix": "claude", "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 } },
     { "prefix": "gpt-6-astra", "rates": { "input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5 } },
@@ -62,11 +64,13 @@
     { "prefix": "mimo-v2.5-pro", "rates": { "input": 0.435, "output": 0.87, "cache_read": 0.0036, "cache_write": 0.435 } },
     { "prefix": "mimo", "rates": { "input": 0.112, "output": 0.224, "cache_read": 0.003, "cache_write": 0.112 } },
     { "prefix": "muse-spark", "rates": { "input": 1.25, "output": 4.25, "cache_read": 0.15, "cache_write": 1.25 } },
+    { "prefix": "muse-wonder", "rates": { "input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 4.0 } },
     { "prefix": "swe-1-6", "rates": { "input": 0.5, "output": 2.5, "cache_read": 0.2, "cache_write": 0.0 } },
     { "prefix": "swe-1-7-lightning", "rates": { "input": 2.5, "output": 12.5, "cache_read": 1.0, "cache_write": 0.0 } },
     { "prefix": "swe-1-7", "rates": { "input": 0.5, "output": 2.5, "cache_read": 0.2, "cache_write": 0.0 } },
     { "prefix": "swe-2", "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 0.0 } },
     { "prefix": "step-5-preview", "rates": { "input": 1.0, "output": 2.7, "cache_read": 0.05, "cache_write": 1.0 } },
-    { "prefix": "step-5", "rates": { "input": 1.0, "output": 2.7, "cache_read": 0.05, "cache_write": 1.0 } }
+    { "prefix": "step-5", "rates": { "input": 1.0, "output": 2.7, "cache_read": 0.05, "cache_write": 1.0 } },
+    { "prefix": "beam-1", "rates": { "input": 1.0, "output": 3.0, "cache_read": 0.1, "cache_write": 1.0 } }
   ]
 }

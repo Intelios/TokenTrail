@@ -586,6 +586,64 @@ mod tests {
     }
 
     #[test]
+    fn haiku_55_prices() {
+        // Claude Haiku 5.5 lists at $0.10/$0.50 with the standard 10%
+        // cache hit ($0.01) and 1.25x five-minute cache write ($0.125) —
+        // the 0.05x cache-hit discounts are limited to Fable/Mythos 5.1
+        // and Opus/Sonnet 5.5. Both the hyphenated API id and the dot
+        // spelling resolve; their prefixes sit above claude-haiku, which
+        // would otherwise swallow them at the old $1/$5 Haiku 4.5 rate.
+        // The >100K-token long-context tier ($0.50/$2.50) is ignored, as
+        // for the other entries with long-context tiers.
+        assert_eq!(rates_for("claude-haiku-5-5").map(|r| r.input), Some(0.1));
+        assert_eq!(rates_for("claude-haiku-5-5").map(|r| r.output), Some(0.5));
+        assert_eq!(rates_for("claude-haiku-5-5").map(|r| r.cache_read), Some(0.01));
+        assert_eq!(rates_for("claude-haiku-5-5").map(|r| r.cache_write), Some(0.125));
+        assert_eq!(rates_for("claude-haiku-5.5").map(|r| r.input), Some(0.1));
+        assert_eq!(rates_for("claude-haiku-5.5[ffe]").map(|r| r.output), Some(0.5));
+        assert_eq!(rates_for("claude-haiku-5.5-20261007").map(|r| r.output), Some(0.5));
+        assert_eq!(rates_for("claude-haiku-5-5-20261007").map(|r| r.cache_read), Some(0.01));
+        assert_eq!(rates_for("anthropic/claude-haiku-5.5").map(|r| r.input), Some(0.1));
+        // Older Haiku generations keep the $1/$5 catch-all rate.
+        assert_eq!(rates_for("claude-haiku-4.5").map(|r| r.input), Some(1.0));
+        assert_eq!(rates_for("claude-haiku-4.5").map(|r| r.output), Some(5.0));
+    }
+
+    #[test]
+    fn muse_wonder_prices() {
+        // Muse Wonder (`muse-wonder-1.0` on Meta's Model API) lists at
+        // $4/$20 with $0.20 cached input; no cache-write rate is published,
+        // so writes bill at the uncached input rate, as for the other
+        // entries with undocumented cache writes.
+        assert_eq!(rates_for("muse-wonder").map(|r| r.input), Some(4.0));
+        assert_eq!(rates_for("muse-wonder").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("muse-wonder").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("muse-wonder").map(|r| r.cache_write), Some(4.0));
+        // The versioned API id and provider-prefixed spellings resolve.
+        assert_eq!(rates_for("muse-wonder-1.0").map(|r| r.input), Some(4.0));
+        assert_eq!(rates_for("meta/muse-wonder").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("meta/muse-wonder-1.0").map(|r| r.cache_read), Some(0.2));
+        // Muse Spark keeps its own $1.25/$4.25 rates.
+        assert_eq!(rates_for("muse-spark-1.2").map(|r| r.input), Some(1.25));
+    }
+
+    #[test]
+    fn beam_1_prices() {
+        // Reflection Beam 1.0 (501B total / 23B active MoE) lists at
+        // $1/$3 with $0.10 cached input (the full-precision reference
+        // rate; quantized/discounted host endpoints go lower). No
+        // cache-write rate is published, so writes bill at the uncached
+        // input rate, as for the other entries with undocumented writes.
+        assert_eq!(rates_for("beam-1.0-501b-a23b").map(|r| r.input), Some(1.0));
+        assert_eq!(rates_for("beam-1.0-501b-a23b").map(|r| r.output), Some(3.0));
+        assert_eq!(rates_for("beam-1.0-501b-a23b").map(|r| r.cache_read), Some(0.1));
+        assert_eq!(rates_for("beam-1.0-501b-a23b").map(|r| r.cache_write), Some(1.0));
+        // Provider-prefixed spellings resolve via the family.
+        assert_eq!(rates_for("reflection/beam-1.0-501b-a23b").map(|r| r.output), Some(3.0));
+        assert_eq!(rates_for("together_ai/reflection/beam-1.0-501b-a23b").map(|r| r.input), Some(1.0));
+    }
+
+    #[test]
     fn dated_family_rates_follow_event_time() {
         let r = |input| Rates { input, output: 0.0, cache_read: 0.0, cache_write: 0.0 };
         let cut = parse_until("2026-10-17").unwrap();
