@@ -5,7 +5,7 @@
   import Chart from '$lib/Chart.svelte';
   import AnimatedNumber from '$lib/AnimatedNumber.svelte';
   import AchievementIcon from '$lib/AchievementIcon.svelte';
-  import { api, type ModelDetail, type Achievement } from '$lib/api';
+  import { api, type ModelDetail, type Achievement, type Big6History } from '$lib/api';
   import {
     fmtCost,
     fmtDate,
@@ -43,6 +43,7 @@
   let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
   let detail = $state<ModelDetail | null>(null);
   let achievements = $state<Achievement[]>([]);
+  let big6 = $state<Big6History | null>(null);
   let projectColors = $state<Record<string, string>>({});
   let error = $state('');
   let loading = $state(true);
@@ -53,13 +54,15 @@
     if (!name) return;
     if (!detail) loading = true;
     try {
-      const [d, achs, colors] = await Promise.all([
+      const [d, achs, b6, colors] = await Promise.all([
         api.modelDetail(name, days),
         api.modelAchievements(name),
+        api.modelBig6(name),
         api.projectColors(),
       ]);
       detail = d;
       achievements = achs;
+      big6 = b6;
       projectColors = markedColors(colors);
       error = '';
     } catch (e) {
@@ -78,6 +81,7 @@
       if (detail && detail.model !== name) {
         detail = null;
         achievements = [];
+        big6 = null;
       }
       load();
     });
@@ -117,6 +121,30 @@
       },
       series: [donutSeries(data)],
     } satisfies EChartsOption;
+  });
+
+  // Big-6 run dates are UTC calendar days ("YYYY-MM-DD"), same as the leaderboard.
+  function fmtDay(d: string): string {
+    return new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  }
+
+  // All-time Big-6 record — kept here because the leaderboard feed ages a
+  // model's entry/exit events out once newer ones crowd them past its limit.
+  const big6Card = $derived.by(() => {
+    if (!big6 || !big6.stints.length) return null;
+    const last = big6.stints[big6.stints.length - 1];
+    const runs = big6.stints.length;
+    const status = last.exited ? `out since ${fmtDay(last.exited)}` : `in now · since ${fmtDay(last.entered)}`;
+    const extra = runs > 1 ? ` · ${runs} runs, longest ${big6.longest_days}d` : '';
+    const tip = big6.stints
+      .map((s) => `${fmtDay(s.entered)} → ${s.exited ? fmtDay(s.exited) : 'now'} · ${s.days}d`)
+      .join('\n');
+    return { current: !last.exited, total: big6.total_days, hint: status + extra, tip };
   });
 
   const dayCols = $derived(singleDailyColumns(detail?.daily ?? []));
@@ -209,8 +237,17 @@
         <div class="v sm"><AnimatedNumber value={detail.active_days} /></div>
         <div class="h">{detail.current_streak}d streak · {detail.longest_streak}d peak</div>
       </div>
+      {#if big6Card}
+        <div class="mc up" style="animation-delay:180ms" title={`All-time Big 6 runs\n${big6Card.tip}`}>
+          <div class="k">Time in Big 6</div>
+          <div class="v sm">
+            <AnimatedNumber value={big6Card.total} format={(n) => `${Math.round(n)}d`} />{#if big6Card.current}<span class="b6now">IN</span>{/if}
+          </div>
+          <div class="h">{big6Card.hint}</div>
+        </div>
+      {/if}
       {#if detail.peak_day}
-        <div class="mc up" style="animation-delay:180ms">
+        <div class="mc up" style="animation-delay:240ms">
           <div class="k">Peak day</div>
           <div class="v sm">{detail.peak_day}</div>
           <div class="h">{fmtTokens(detail.peak_day_tokens)} tokens</div>
@@ -411,6 +448,16 @@
   .mc .v.sm { font-size: clamp(14px, 1.1vw, 20px); font-family: var(--font-mono); font-weight: 600; letter-spacing: 0; margin-top: 10px; }
   .mc .h { font: 400 clamp(10px, 0.75vw, 12px)/1.3 var(--font-mono); margin-top: 7px; opacity: 0.48; }
   .mc.hl { background: var(--org); color: #fff; }
+  .b6now {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 5px;
+    vertical-align: 2px;
+    font: 700 9px/1 var(--font-mono);
+    letter-spacing: 1px;
+    background: var(--blu);
+    color: #fff;
+  }
   .mc.hl .k, .mc.hl .h { opacity: 0.82; }
 
   .subcards {

@@ -271,6 +271,12 @@
                   total_window_tokens: totalTokens,
                 };
               }
+              case 'get_model_big6': {
+                const i = MODELS.findIndex((x) => x[0] === args.model);
+                if (i < 0 || i > 6) return null;
+                if (i === 6) return { total_days: 50, longest_days: 50, stints: [{ entered: iso(140), exited: iso(90), days: 50 }] };
+                return { total_days: 71 + i * 9, longest_days: 41 + i * 9, stints: [{ entered: iso(200), exited: iso(170), days: 30 }, { entered: iso(41 + i * 9), exited: null, days: 41 + i * 9 }] };
+              }
               case 'get_model_achievements': {
                 const m = MODELS.find((x) => x[0] === args.model);
                 if (!m) return [];

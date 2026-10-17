@@ -1,5 +1,5 @@
 use crate::aggregate::{
-    self, Achievement, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow, EstimatedShare,
+    self, Achievement, Big6History, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow, EstimatedShare,
     FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow,
     Overview, PeakDayRow, ProjectDetail, ProjectRow, WackCodeCallRow, WackCodeDetail,
     WrappedSummary,
@@ -86,6 +86,11 @@ pub fn get_model_achievements(
     model: String,
 ) -> Result<Vec<Achievement>, String> {
     aggregate::model_achievements(&state.store, &model).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_model_big6(state: State<AppState>, model: String) -> Result<Option<Big6History>, String> {
+    aggregate::model_big6(&state.store, &model).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

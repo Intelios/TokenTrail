@@ -1972,15 +1972,17 @@ pub fn estimated_share(store: &Store) -> DbResult<Vec<EstimatedShare>> {
     Ok(rows)
 }
 
-pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardEvent>> {
-    let cutoff_ts = cutoff(days);
-    let cutoff_date: String = store.read_conn().query_row(
-        "SELECT date(?1/1000, 'unixepoch')",
-        [cutoff_ts],
-        |r| r.get(0),
-    )?;
-    let is_all_time = days >= 3650 || days <= 0;
+/// Date -> that day's (model id, tokens) rows.
+type DailyStandings = BTreeMap<String, Vec<(usize, i64)>>;
 
+/// Every day's per-model token totals, the input both standings replays
+/// (leaderboard events and Big-6 tenure) walk through in date order.
+///
+/// Models get dense ids in lexicographic order: id order is exactly the
+/// standings' (tokens desc, name asc) tie-break, and every hot structure in a
+/// replay is a Vec indexed by id rather than a HashMap keyed by name. Same-day
+/// rows are sorted by id, so same-day events come out deterministically.
+fn daily_standings(store: &Store) -> DbResult<(Vec<String>, DailyStandings)> {
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d,
                 COALESCE(a.canonical, u.model, 'unknown') AS model,
@@ -1999,18 +2001,6 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut aliased_models: HashSet<String> = HashSet::new();
-    if let Ok(mut alias_stmt) = conn.prepare("SELECT alias FROM model_alias UNION SELECT canonical FROM model_alias") {
-        if let Ok(alias_rows) = alias_stmt.query_map([], |r| r.get::<_, String>(0)) {
-            for name in alias_rows.flatten() {
-                aliased_models.insert(name);
-            }
-        }
-    }
-
-    // Dense model ids in lexicographic order: id order is exactly the
-    // standings' (tokens desc, name asc) tie-break, and every hot structure
-    // below is a Vec indexed by id rather than a HashMap keyed by name.
     let mut names: Vec<String> = Vec::new();
     {
         let mut seen: HashSet<&str> = HashSet::new();
@@ -2022,16 +2012,38 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
     }
     names.sort();
     let id_of: HashMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
-    let n_models = names.len();
 
-    let mut days_map: BTreeMap<String, Vec<(usize, i64)>> = BTreeMap::new();
+    let mut days_map: DailyStandings = BTreeMap::new();
     for (d, model, tokens) in rows {
         let id = id_of[model.as_str()];
         days_map.entry(d).or_default().push((id, tokens));
     }
-    // Same-day events are emitted in model-name order, deterministically.
     for day_models in days_map.values_mut() {
         day_models.sort_by_key(|(id, _)| *id);
+    }
+    Ok((names, days_map))
+}
+
+pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardEvent>> {
+    let cutoff_ts = cutoff(days);
+    let cutoff_date: String = store.read_conn().query_row(
+        "SELECT date(?1/1000, 'unixepoch')",
+        [cutoff_ts],
+        |r| r.get(0),
+    )?;
+    let is_all_time = days >= 3650 || days <= 0;
+
+    let (names, days_map) = daily_standings(store)?;
+    let n_models = names.len();
+    let conn = store.read_conn();
+
+    let mut aliased_models: HashSet<String> = HashSet::new();
+    if let Ok(mut alias_stmt) = conn.prepare("SELECT alias FROM model_alias UNION SELECT canonical FROM model_alias") {
+        if let Ok(alias_rows) = alias_stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for name in alias_rows.flatten() {
+                aliased_models.insert(name);
+            }
+        }
     }
 
     let mut cumulative: Vec<i64> = vec![0; n_models];
@@ -2347,6 +2359,82 @@ pub fn leaderboard_events(store: &Store, days: i64) -> DbResult<Vec<LeaderboardE
     events.sort_by(|a, b| b.date.cmp(&a.date));
     events.truncate(60);
     Ok(events)
+}
+
+/// One unbroken run in the all-time Big 6: from the day a model joined the
+/// top 6 to the day it was first seen outside it (`exited = None` while the
+/// run is still going, in which case `days` counts up to today).
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct Big6Stint {
+    pub entered: String,
+    pub exited: Option<String>,
+    pub days: i64,
+}
+
+/// A model's whole all-time Big-6 record. The leaderboard feed tells each
+/// entry and exit once and then ages it out; this is the part that stays.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct Big6History {
+    pub total_days: i64,
+    pub longest_days: i64,
+    /// Oldest first.
+    pub stints: Vec<Big6Stint>,
+}
+
+/// Replays the all-time standings for one (display-name) model and returns
+/// every Big-6 run it had, or None if it never made the top 6.
+///
+/// Runs are measured the way the leaderboard's demotion tenure is — entry date
+/// to exit date, a rank shuffle inside the top 6 never resets it, and the
+/// early days before six models exist count — so a finished run here always
+/// matches the "Nd in Big 6" its exit event showed.
+pub fn model_big6(store: &Store, model: &str) -> DbResult<Option<Big6History>> {
+    let (names, days_map) = daily_standings(store)?;
+    let Ok(target) = names.binary_search_by(|n| n.as_str().cmp(model)) else {
+        return Ok(None);
+    };
+
+    let mut cumulative: Vec<i64> = vec![0; names.len()];
+    let mut order: BTreeSet<(Reverse<i64>, usize)> = BTreeSet::new();
+    let mut since: Option<String> = None;
+    let mut stints: Vec<Big6Stint> = Vec::new();
+
+    for (d, day_models) in &days_map {
+        for (id, daily_tokens) in day_models {
+            let old = cumulative[*id];
+            order.remove(&(Reverse(old), *id));
+            cumulative[*id] = old + daily_tokens;
+            order.insert((Reverse(old + daily_tokens), *id));
+        }
+        let in_top6 = order.iter().take(6).any(|&(_, id)| id == target);
+        match (&since, in_top6) {
+            (None, true) => since = Some(d.clone()),
+            (Some(entered), false) => {
+                stints.push(Big6Stint {
+                    entered: entered.clone(),
+                    exited: Some(d.clone()),
+                    days: days_between(entered, d).unwrap_or(0),
+                });
+                since = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(entered) = since {
+        let day = format_description!("[year]-[month]-[day]");
+        let today = time::OffsetDateTime::now_utc().date().format(&day).unwrap_or_default();
+        let days = days_between(&entered, &today).unwrap_or(0).max(0);
+        stints.push(Big6Stint { entered, exited: None, days });
+    }
+
+    if stints.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Big6History {
+        total_days: stints.iter().map(|s| s.days).sum(),
+        longest_days: stints.iter().map(|s| s.days).max().unwrap_or(0),
+        stints,
+    }))
 }
 
 /// (current, longest) consecutive-day streaks over a sorted list of ISO dates.
@@ -3711,6 +3799,59 @@ mod tests {
         assert_eq!(demotions[0].other_model, Some("m7".into()));
         assert_eq!(demotions[0].rank, Some(6));
         assert_eq!(demotions[0].tenure_days, Some(90));
+    }
+
+    #[test]
+    fn model_big6_keeps_every_run_and_matches_demotion_tenure() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day_a = now - 200 * day_ms;
+        let day_b = now - 150 * day_ms;
+        let day_c = now - 100 * day_ms;
+
+        // A: hero sits at #5 of a full top 6; m7 and m8 trail outside it.
+        store
+            .insert_events(&[
+                test_event("m2", day_a, 90_000),
+                test_event("m3", day_a, 80_000),
+                test_event("m4", day_a, 70_000),
+                test_event("m5", day_a, 60_000),
+                test_event("hero", day_a, 55_000),
+                test_event("m6", day_a, 50_000),
+                test_event("m7", day_a, 5_000),
+                test_event("m8", day_a, 1_000),
+            ])
+            .unwrap();
+        // B: m7 climbs to 65k and m6 to 60k, pushing hero (55k) out after 50 days.
+        store
+            .insert_events(&[test_event("m7", day_b, 60_000), test_event("m6", day_b, 10_000)])
+            .unwrap();
+        // C: hero storms back to #1, which drops m6 out after a 100-day run.
+        store.insert_events(&[test_event("hero", day_c, 50_000)]).unwrap();
+
+        let hero = model_big6(&store, "hero").unwrap().expect("hero made the Big 6");
+        assert_eq!(hero.stints.len(), 2);
+        assert_eq!(hero.stints[0].days, 50);
+        assert!(hero.stints[0].exited.is_some());
+        assert_eq!(hero.stints[1].exited, None, "hero is still in");
+        assert_eq!(hero.stints[1].days, 100, "an open run counts up to today");
+        assert_eq!(hero.total_days, 150);
+        assert_eq!(hero.longest_days, 100);
+
+        // The finished run is the same number the exit event showed.
+        let events = leaderboard_events(&store, 3650).unwrap();
+        let m6_exit = events
+            .iter()
+            .find(|e| e.kind == "demotion" && e.model == "m6")
+            .expect("m6 exit event");
+        let m6 = model_big6(&store, "m6").unwrap().unwrap();
+        assert_eq!(m6.stints.len(), 1);
+        assert_eq!(Some(m6.stints[0].days), m6_exit.tenure_days);
+        assert_eq!(m6.stints[0].exited.as_deref(), Some(m6_exit.date.as_str()));
+
+        assert_eq!(model_big6(&store, "m8").unwrap(), None, "never made the top 6");
+        assert_eq!(model_big6(&store, "nope").unwrap(), None);
     }
 
     #[test]

@@ -277,6 +277,20 @@ export interface ModelDetail {
   total_window_tokens: number;
 }
 
+/** One unbroken all-time Big 6 run; `exited` is null while it is still going. */
+export interface Big6Stint {
+  entered: string;
+  exited: string | null;
+  days: number;
+}
+
+export interface Big6History {
+  total_days: number;
+  longest_days: number;
+  /** Oldest first. */
+  stints: Big6Stint[];
+}
+
 export interface Achievement {
   kind: string;
   tier: string | null;
@@ -403,6 +417,7 @@ export const api = {
     invoke<ModelDetail | null>('get_model_detail', { model, days }),
   modelAchievements: (model: string) =>
     invoke<Achievement[]>('get_model_achievements', { model }),
+  modelBig6: (model: string) => invoke<Big6History | null>('get_model_big6', { model }),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
   dailyByProject: (days: number) => invoke<DailyProjectRow[]>('get_daily_by_project', { days }),
   projectDetail: (project: string, days: number) =>
