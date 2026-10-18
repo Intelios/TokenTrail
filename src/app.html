@@ -295,6 +295,63 @@
               }
               case 'get_by_project':
                 return PROJECTS.map((p, i) => ({ project: p[0], tokens: Math.round(totalTokens * p[1]), events: Math.round(totalEvents * p[1]), sessions: Math.round(totalSessions * p[1]), cost_usd: totalCost * p[1], first_ts: Date.now() - 400 * 86400000, last_ts: Date.now() - i * 172800000 }));
+              // Project identity: a dead namesake waiting to be merged, automatic
+              // links with an undo, and the ignore list — the Project Merges tab.
+              case 'get_project_aliases':
+                return [
+                  { alias: '~/dev/TokenTrail/src', canonical: '~/dev/TokenTrail' },
+                  { alias: '~/dev/TokenTrail/src/lib', canonical: '~/dev/TokenTrail' },
+                  { alias: '~/dev/TokenTrail/src-tauri', canonical: '~/dev/TokenTrail' },
+                  { alias: '~/dev/aurora-api', canonical: '~/dev/aurora-api' },
+                ];
+              case 'get_project_paths':
+                return [
+                  { path: '~/dev/TokenTrail', canonical: '~/dev/TokenTrail', exists: true, events: 1200, last_ts: Date.now() - 36e5 },
+                  { path: '~/dev/TokenTrail/src', canonical: '~/dev/TokenTrail', exists: true, events: 400, last_ts: Date.now() - 72e5 },
+                  { path: '~/dev/aurora-api', canonical: '~/dev/aurora-api', exists: true, events: 800, last_ts: Date.now() - 864e5 },
+                  { path: '~/dev/website', canonical: '~/dev/website', exists: true, events: 600, last_ts: Date.now() - 2 * 864e5 },
+                  { path: '~/Desktop/old/TokenTrail', canonical: '~/Desktop/old/TokenTrail', exists: false, events: 220, last_ts: Date.now() - 90 * 864e5 },
+                ];
+              case 'get_project_suggestions':
+                return [
+                  {
+                    from: '~/Desktop/old/TokenTrail',
+                    to: '~/dev/TokenTrail',
+                    reason: 'same_name',
+                    from_exists: false,
+                    from_last_ts: Date.now() - 90 * 864e5,
+                    to_last_ts: Date.now() - 36e5,
+                    from_tokens: 2_400_000,
+                  },
+                  {
+                    from: '~/dev/aurora-api/scripts',
+                    to: '~/dev/aurora-api',
+                    reason: 'subfolder',
+                    from_exists: true,
+                    from_last_ts: Date.now() - 4 * 864e5,
+                    to_last_ts: Date.now() - 864e5,
+                    from_tokens: 120_000,
+                  },
+                ];
+              case 'get_project_auto_links':
+                return [
+                  { id: 4, ts: Date.now() - 2 * 864e5, folder: '~/.codex/worktrees/c07b/TokenTrail', from_canonical: null, to_canonical: '~/dev/TokenTrail', reason: 'worktree', undone: false },
+                  { id: 3, ts: Date.now() - 9 * 864e5, folder: '~/Documents/old/aurora-api', from_canonical: '~/Documents/old/aurora-api', to_canonical: '~/dev/aurora-api', reason: 'inode', undone: false },
+                  { id: 2, ts: Date.now() - 21 * 864e5, folder: '~/.gemini/antigravity/worktrees/aurora-api/fix', from_canonical: null, to_canonical: '~/dev/aurora-api', reason: 'remote', undone: true },
+                ];
+              case 'get_project_ignores':
+                return [
+                  { prefix: '~', builtin: true },
+                  { prefix: '~/Documents/Codex/', builtin: true },
+                  { prefix: '/private/tmp/', builtin: true },
+                  { prefix: '~/scratch/', builtin: false },
+                ];
+              case 'add_project_ignore':
+              case 'remove_project_ignore':
+              case 'undo_project_auto_links':
+                return 1;
+              case 'rescan_projects':
+                return 0;
               case 'get_daily_by_project': {
                 const n = Math.min(args.days ?? 90, 150);
                 const rows = [];

@@ -4,6 +4,7 @@ mod commands;
 mod families;
 mod models;
 mod pricing;
+mod project_id;
 mod state;
 mod store;
 mod wackchatter;
@@ -64,8 +65,9 @@ pub fn run() {
                 }
             }
 
-            // Fold recorded folders into their projects (nearest git roots), so
-            // history is grouped correctly before the first sync lands.
+            // Fold recorded folders into their projects (repository identity,
+            // ignore rules, nearest git root), so history is grouped correctly
+            // before the first sync lands.
             match store.ensure_project_aliases() {
                 Ok(n) if n > 0 => println!("folded {n} project folders into their projects"),
                 Ok(_) => {}
@@ -136,6 +138,14 @@ pub fn run() {
             commands::get_project_stacks,
             commands::set_project_stack,
             commands::get_project_aliases,
+            commands::get_project_paths,
+            commands::get_project_suggestions,
+            commands::get_project_auto_links,
+            commands::undo_project_auto_links,
+            commands::get_project_ignores,
+            commands::add_project_ignore,
+            commands::remove_project_ignore,
+            commands::rescan_projects,
             commands::merge_projects,
             commands::unmerge_projects,
             commands::regroup_projects,

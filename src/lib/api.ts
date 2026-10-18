@@ -230,11 +230,55 @@ export interface ProjectStack {
 
 /**
  * A folder → project mapping: events recorded under `alias` count as `canonical`.
- * Filled automatically from the nearest enclosing git root, and adjustable by hand.
+ * Filled automatically from the repository's identity (git remote, linked
+ * worktree, `.git` inode, else the nearest git root) and adjustable by hand.
  */
 export interface ProjectAlias {
   alias: string;
   canonical: string;
+}
+
+/** One folder recorded in `usage_event.project`, the project it counts under, and
+ *  whether it still exists. Synthetic names (`WackChatter · Lyra`) are never missing. */
+export interface ProjectPathRow {
+  path: string;
+  canonical: string;
+  exists: boolean;
+  events: number;
+  last_ts: number | null;
+}
+
+/** A project whose folder is gone, next to a live project that looks like its new
+ *  home. Guesswork: only ever applied when the user clicks Merge. */
+export interface ProjectSuggestion {
+  from: string;
+  to: string;
+  /** `same_name` (a moved folder), `inside` (a dead folder under a live project)
+   *  or `subfolder` (a live folder under a live project that never folded). */
+  reason: string;
+  /** The suggested folder still exists (`subfolder` always does). */
+  from_exists: boolean;
+  from_last_ts: number | null;
+  to_last_ts: number | null;
+  from_tokens: number;
+}
+
+/** A link TokenTrail applied on its own. Undo restores the previous grouping. */
+export interface ProjectAutoLink {
+  id: number;
+  ts: number;
+  folder: string;
+  from_canonical: string | null;
+  to_canonical: string;
+  /** `remote`, `inode` or `worktree`. */
+  reason: string;
+  undone: boolean;
+}
+
+/** A folder subtree hidden from Projects; its usage still counts, as Unknown. */
+export interface ProjectIgnore {
+  prefix: string;
+  builtin: boolean;
 }
 
 export interface FamilyStatsRow {
@@ -453,6 +497,17 @@ export const api = {
   setProjectStack: (project: string, stack: string[]) =>
     invoke<void>('set_project_stack', { project, stack }),
   projectAliases: () => invoke<ProjectAlias[]>('get_project_aliases'),
+  projectPaths: () => invoke<ProjectPathRow[]>('get_project_paths'),
+  projectSuggestions: () => invoke<ProjectSuggestion[]>('get_project_suggestions'),
+  projectAutoLinks: (limit = 20) => invoke<ProjectAutoLink[]>('get_project_auto_links', { limit }),
+  /** Undo this link and every newer one (`id >= throughId`), newest first. */
+  undoProjectAutoLinks: (throughId: number) =>
+    invoke<number>('undo_project_auto_links', { throughId }),
+  projectIgnores: () => invoke<ProjectIgnore[]>('get_project_ignores'),
+  addProjectIgnore: (prefix: string) => invoke<number>('add_project_ignore', { prefix }),
+  removeProjectIgnore: (prefix: string) => invoke<number>('remove_project_ignore', { prefix }),
+  /** Re-run folder resolution after moving things around. */
+  rescanProjects: () => invoke<number>('rescan_projects'),
   mergeProjects: (names: string[], canonical: string) =>
     invoke<void>('merge_projects', { names, canonical }),
   /** Keep these folders as their own projects, overriding automatic root-folding. */

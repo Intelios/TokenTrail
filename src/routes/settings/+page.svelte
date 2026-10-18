@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ALIAS_OPEN_END, api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectAlias, type ProjectColor, type SourceStatus } from '$lib/api';
+  import { ALIAS_OPEN_END, api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectAlias, type ProjectAutoLink, type ProjectColor, type ProjectIgnore, type ProjectPathRow, type ProjectSuggestion, type SourceStatus } from '$lib/api';
   import { basename, normalizeModelName, sourceSwatch } from '$lib/format';
   import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
   import WrappedCard from '$lib/WrappedCard.svelte';
@@ -42,6 +42,12 @@
   let projFilter = $state('');
   let projSelected = $state<string[]>([]);
   let projCanonical = $state('');
+  let projectPaths = $state<ProjectPathRow[]>([]);
+  let projectSuggestions = $state<ProjectSuggestion[]>([]);
+  let autoLinks = $state<ProjectAutoLink[]>([]);
+  let projectIgnores = $state<ProjectIgnore[]>([]);
+  let ignoreDraft = $state('');
+  let rescanning = $state(false);
 
   // project colors
   let projectColorRows = $state<ProjectColor[]>([]);
@@ -69,16 +75,31 @@
 
   async function loadMerges() {
     try {
-      const [byModel, aliasRows, hiddenRows, rawModelRows, colorRows, byProj, projAliasRows] =
-        await Promise.all([
-          api.byModel(3650),
-          api.modelAliases(),
-          api.hiddenModels(),
-          api.rawModels(),
-          api.projectColors(),
-          api.byProject(3650),
-          api.projectAliases(),
-        ]);
+      const [
+        byModel,
+        aliasRows,
+        hiddenRows,
+        rawModelRows,
+        colorRows,
+        byProj,
+        projAliasRows,
+        paths,
+        suggested,
+        links,
+        ignores,
+      ] = await Promise.all([
+        api.byModel(3650),
+        api.modelAliases(),
+        api.hiddenModels(),
+        api.rawModels(),
+        api.projectColors(),
+        api.byProject(3650),
+        api.projectAliases(),
+        api.projectPaths(),
+        api.projectSuggestions(),
+        api.projectAutoLinks(20),
+        api.projectIgnores(),
+      ]);
       modelNames = byModel.map((r) => r.model);
       aliases = aliasRows;
       hidden = hiddenRows;
@@ -86,6 +107,10 @@
       projectColorRows = colorRows;
       projNames = byProj.map((r) => r.project).filter((p) => p !== 'unknown');
       projAliases = projAliasRows;
+      projectPaths = paths ?? [];
+      projectSuggestions = suggested ?? [];
+      autoLinks = links ?? [];
+      projectIgnores = ignores ?? [];
       selected = selected.filter((n) => modelNames.includes(n));
       hideSelected = hideSelected.filter((n) => modelNames.includes(n));
       if (!selected.includes(canonical)) canonical = selected[0] ?? '';
@@ -225,6 +250,48 @@
       .map((a) => a.alias)
       .sort()
   );
+
+  /**
+   * Per project: does any folder it was recorded under still exist, and when was it
+   * last used. The merge list badges a project whose folder moved away, which is
+   * exactly the leftover that needs merging into the project where it lives now.
+   */
+  const projectHealth = $derived.by(() => {
+    const map = new Map<string, { exists: boolean; last: number | null }>();
+    for (const row of projectPaths) {
+      const cur = map.get(row.canonical);
+      if (!cur) {
+        map.set(row.canonical, { exists: row.exists, last: row.last_ts ?? null });
+        continue;
+      }
+      cur.exists = cur.exists || row.exists;
+      if (row.last_ts != null && (cur.last == null || row.last_ts > cur.last)) cur.last = row.last_ts;
+    }
+    return map;
+  });
+
+  const autoLinkLabel = (link: ProjectAutoLink): string =>
+    link.reason === 'worktree'
+      ? 'same repository (worktree)'
+      : link.reason === 'inode'
+        ? 'repository moved'
+        : 'same repository';
+
+  function shortDate(ts: number | null): string {
+    if (!ts) return '';
+    return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: '2-digit' });
+  }
+
+  const suggestionReason = (reason: string): string =>
+    reason === 'same_name'
+      ? 'same folder name'
+      : reason === 'subfolder'
+        ? 'folder inside this project'
+        : 'inside this project';
+
+  /** The project's folder is gone: only history is left under this name. */
+  const projectMissing = (name: string) => !(projectHealth.get(name)?.exists ?? true);
+  const projectLast = (name: string) => projectHealth.get(name)?.last ?? null;
 
   function toggleSelect(name: string) {
     selected = selected.includes(name)
@@ -429,6 +496,61 @@
     }
   }
 
+  async function doSuggestionMerge(from: string, to: string) {
+    await doProjMerge([from, to], to);
+  }
+
+  /** Undo this automatic link and every newer one; the backend restores the snapshot. */
+  async function doUndoAutoLink(id: number) {
+    try {
+      await api.undoProjectAutoLinks(id);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function doAddIgnore() {
+    const prefix = ignoreDraft.trim();
+    if (!prefix) return;
+    try {
+      await api.addProjectIgnore(prefix);
+      ignoreDraft = '';
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function doRemoveIgnore(prefix: string) {
+    try {
+      await api.removeProjectIgnore(prefix);
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function doRescan() {
+    rescanning = true;
+    try {
+      await api.rescanProjects();
+      window.dispatchEvent(new CustomEvent('tt-sync'));
+      await loadMerges();
+      error = '';
+    } catch (e) {
+      error = String(e);
+    } finally {
+      rescanning = false;
+    }
+  }
+
   // The picker already persisted the change; just reflect it in the local list.
   function onProjectColorChange(project: string, color: string | null) {
     if (color) {
@@ -473,7 +595,9 @@
           Hidden Models {#if hidden.length}<span class="badge">{hidden.length}</span>{/if}
         </button>
         <button class="pill" class:on={activeTab === 'pmerges'} onclick={() => (activeTab = 'pmerges')}>
-          Project Merges {#if projGroups.length}<span class="badge">{projGroups.length}</span>{/if}
+          Project Merges {#if projectSuggestions.length + projGroups.length}
+            <span class="badge">{projectSuggestions.length + projGroups.length}</span>
+          {/if}
         </button>
         <button class="pill" class:on={activeTab === 'projects'} onclick={() => (activeTab = 'projects')}>
           Project Colors {#if projectColorRows.length}<span class="badge">{projectColorRows.length}</span>{/if}
@@ -893,6 +1017,40 @@
 
   <!-- TAB 4: Project Merges -->
   {:else if activeTab === 'pmerges'}
+    {#if projectSuggestions.length}
+      <div class="suggest-band">
+        <div class="sug-hd">
+          <h3>Looks Like A Moved Project ({projectSuggestions.length})</h3>
+          <span class="sug-sub">
+            Folders that look like one project: the same folder name after a move, or a folder
+            sitting inside a project without ever being grouped with it. Merging folds their
+            history together — nothing is rewritten.
+          </span>
+        </div>
+        <div class="sug-grid">
+          {#each projectSuggestions as s}
+            <div class="sug-card">
+              <div class="sug-names">
+                {basename(s.from)}
+                <span class="sug-gone">
+                  {suggestionReason(s.reason)}
+                  {#if !s.from_exists}· missing since {shortDate(s.from_last_ts)}{/if}
+                </span>
+              </div>
+              <div class="sug-target" title={s.from}>{s.from} → <b>{s.to}</b></div>
+              <div class="sug-act">
+                <span class="sug-target">{Math.round(s.from_tokens / 1000).toLocaleString()}K tokens</span>
+                <span class="sug-acts">
+                  <button class="sug-btn ghost" onclick={() => doProjUnmerge([s.from])}>Keep separate</button>
+                  <button class="sug-btn" onclick={() => doSuggestionMerge(s.from, s.to)}>Merge</button>
+                </span>
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <div class="grid2">
       <div class="col">
         <div class="col-hd">
@@ -900,10 +1058,18 @@
           <span class="cnt">{projSelected.length} selected</span>
         </div>
         <p class="note">
-          Folders inside a git repository are already grouped under it automatically. Use this when
-          that guess is wrong: pick 2 or more projects that are really one, then choose the name to
-          display. Raw event data is never touched.
+          A folder is grouped with its repository automatically — by git remote, linked worktree or
+          the repository's own folder, so a moved project usually follows itself. Use this when the
+          guess is wrong: pick 2 or more projects that are really one, then choose the name to
+          display. A project marked <b>missing</b> is only history; merge it into the project where
+          it lives now. Raw event data is never touched.
         </p>
+        <div class="btn-row" style="margin-bottom:14px">
+          <button class="unmerge-btn" disabled={rescanning} onclick={doRescan}>
+            {rescanning ? 'Checking folders…' : 'Re-check folders'}
+          </button>
+          <span class="note-inline">Resolve every recorded folder again, without waiting for a sync.</span>
+        </div>
         <div class="search-box">
           <input type="text" placeholder="Search projects…" bind:value={projFilter} />
         </div>
@@ -912,6 +1078,11 @@
             <label class="check-row" class:checked={projSelected.includes(name)}>
               <input type="checkbox" checked={projSelected.includes(name)} onchange={() => toggleProjSelect(name)} />
               <span class="name">{name}</span>
+              {#if projectMissing(name)}
+                <span class="path-tag gone">missing</span>
+              {:else if projectLast(name)}
+                <span class="path-tag">{shortDate(projectLast(name))}</span>
+              {/if}
             </label>
           {/each}
           {#if !projFiltered.length}
@@ -997,6 +1168,68 @@
           {/each}
           {#if !projDetached.length}
             <div class="empty-state">No folders pinned as separate</div>
+          {/if}
+        </div>
+
+        <div class="col-hd" style="margin-top:28px">
+          <h2>Grouped Automatically ({autoLinks.filter((l) => !l.undone).length})</h2>
+        </div>
+        <p class="note">
+          A folder TokenTrail recognised as an existing project — the same git remote, a linked
+          worktree, or a repository that was moved. <b>Undo</b> puts it back as its own project and
+          also undoes any newer link, so the grouping returns to exactly what it was.
+        </p>
+        <div class="active-list">
+          {#each autoLinks.slice(0, 10) as link (link.id)}
+            <div class="rename-item" class:undone={link.undone}>
+              <div class="meta">
+                <div class="nm">
+                  {basename(link.folder)}
+                  <span class="path-tag">{autoLinkLabel(link)}</span>
+                </div>
+                <div class="p" title={link.folder}>
+                  {link.folder} → {link.to_canonical}
+                </div>
+              </div>
+              {#if link.undone}
+                <span class="path-tag">undone</span>
+              {:else}
+                <button class="unmerge-btn" onclick={() => doUndoAutoLink(link.id)}>Undo</button>
+              {/if}
+            </div>
+          {/each}
+          {#if !autoLinks.length}
+            <div class="empty-state">Nothing grouped automatically yet</div>
+          {/if}
+        </div>
+
+        <div class="col-hd" style="margin-top:28px">
+          <h2>Ignored Paths ({projectIgnores.length})</h2>
+        </div>
+        <p class="note">
+          Folders that are never projects: temp trees, harness sandboxes and app data. Their usage
+          still counts in every total — it lands in <b>Unknown</b> on the Projects page. A rule
+          ending in <code>/</code> covers everything below it; one without covers exactly that path.
+        </p>
+        <div class="search-box" style="display:flex;gap:8px">
+          <input type="text" placeholder="Folder to ignore, e.g. ~/scratch/" bind:value={ignoreDraft} />
+          <button class="sug-btn ghost" disabled={!ignoreDraft.trim()} onclick={doAddIgnore}>Ignore</button>
+        </div>
+        <div class="active-list">
+          {#each projectIgnores as rule (rule.prefix)}
+            <div class="rename-item">
+              <div class="meta">
+                <div class="nm">
+                  {rule.prefix}
+                  {#if rule.builtin}<span class="path-tag">built-in</span>{/if}
+                </div>
+                <div class="p">Counted as Unknown</div>
+              </div>
+              <button class="x-btn" aria-label="Stop ignoring {rule.prefix}" onclick={() => doRemoveIgnore(rule.prefix)}>×</button>
+            </div>
+          {/each}
+          {#if !projectIgnores.length}
+            <div class="empty-state">No ignored paths</div>
           {/if}
         </div>
       </div>
@@ -1317,6 +1550,31 @@
     border: 1.5px solid var(--ink);
     cursor: pointer;
   }
+  .sug-btn.ghost { background: transparent; color: var(--ink); }
+  .sug-btn.ghost:hover { background: var(--ink); color: #fff; }
+  .sug-btn:disabled { opacity: 0.45; cursor: default; }
+  .sug-acts { display: flex; gap: 6px; }
+  .sug-gone {
+    font: 500 9.5px/1 var(--font-ui);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .sug-names { display: flex; align-items: baseline; gap: 8px; }
+
+  /* Merge list + auto-link rows */
+  .path-tag {
+    font: 500 9px/1 var(--font-ui);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 3px 5px;
+    border: 1px solid var(--hair);
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .path-tag.gone { border-color: var(--ink); color: var(--ink); background: var(--cyn); }
+  .rename-item.undone { opacity: 0.55; }
+  .rename-item.undone .nm { text-decoration: line-through; }
 
   .tool-card {
     padding: 12px 14px;

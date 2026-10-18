@@ -3,8 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::models::{ModelAlias, ProjectAlias, ProjectColor, ProjectStack, Source, UsageEvent};
+use crate::models::{
+    ModelAlias, ProjectAlias, ProjectAutoLink, ProjectColor, ProjectIgnore, ProjectPathRow,
+    ProjectStack, Source, UsageEvent,
+};
 use crate::pricing;
+use crate::project_id::{self, Repo};
 
 /// How long a connection waits for a locked database before giving up. With
 /// readers and writer on separate WAL connections the remaining contention is
@@ -127,6 +131,27 @@ CREATE TABLE IF NOT EXISTS project_stack (
     tag TEXT NOT NULL,
     ord INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(project, tag)
+);
+CREATE TABLE IF NOT EXISTS project_identity (
+    kind TEXT NOT NULL,
+    value TEXT NOT NULL,
+    canonical TEXT NOT NULL,
+    seen_ts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(kind, value)
+);
+CREATE TABLE IF NOT EXISTS project_ignore (
+    prefix TEXT PRIMARY KEY,
+    builtin INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS project_auto_link (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    folder TEXT NOT NULL,
+    from_canonical TEXT,
+    to_canonical TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    undone INTEGER NOT NULL DEFAULT 0
 );
 "#;
 
@@ -878,9 +903,12 @@ impl Store {
         project_canonical(&conn, name)
     }
 
-    /// Map every recorded folder to its project root. Idempotent and sticky.
+    /// Map every recorded folder to its project. Idempotent and sticky: a decision
+    /// once recorded is never recomputed, so history stays grouped the way it was
+    /// seen and repositories that moved stay whole.
     pub fn ensure_project_aliases(&self) -> rusqlite::Result<usize> {
         let conn = self.writer();
+        seed_project_ignores(&conn)?;
         let projects: Vec<String> = {
             let mut stmt = conn.prepare_cached(
                 "SELECT DISTINCT project FROM usage_event WHERE project IS NOT NULL AND project != ''",
@@ -895,6 +923,14 @@ impl Store {
         remap_project_colors(&conn)?;
         remap_project_stacks(&conn)?;
         Ok(n)
+    }
+
+    /// Run the resolution pass on demand (startup and the Settings "Re-check"
+    /// button). Cheap: folders that already have a mapping are only re-inspected
+    /// for identity, never re-decided.
+    pub fn refresh_project_links(&self) -> Result<usize, String> {
+        self.ensure_project_aliases()
+            .map_err(|e| format!("resolve project folders: {e}"))
     }
 
     pub fn get_project_aliases(&self) -> rusqlite::Result<Vec<ProjectAlias>> {
@@ -913,23 +949,263 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every folder recorded in `usage_event.project`, the project it counts under
+    /// and whether it still exists on disk. The merge list needs the last two to
+    /// tell a live project from one whose folder was moved away.
+    pub fn get_project_paths(&self) -> rusqlite::Result<Vec<ProjectPathRow>> {
+        let conn = self.read_conn();
+        let mut stmt = conn.prepare_cached(
+            "SELECT u.project, COALESCE(pj.canonical, u.project, 'unknown'),
+                    COUNT(*), MAX(u.ts)
+             FROM usage_event u LEFT JOIN project_alias pj ON pj.alias = u.project
+             WHERE u.project IS NOT NULL AND u.project != ''
+             GROUP BY u.project ORDER BY MAX(u.ts) DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                let path: String = r.get(0)?;
+                // Synthetic names are not filesystem paths, so they are never missing.
+                let exists = !path.starts_with('/') || Path::new(&path).is_dir();
+                Ok(ProjectPathRow {
+                    path,
+                    canonical: r.get(1)?,
+                    exists,
+                    events: r.get(2)?,
+                    last_ts: r.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Automatic links newest first, as shown in Settings.
+    pub fn get_project_auto_links(&self, limit: i64) -> rusqlite::Result<Vec<ProjectAutoLink>> {
+        let conn = self.read_conn();
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, ts, folder, from_canonical, to_canonical, reason, undone
+             FROM project_auto_link ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit.max(1)], |r| {
+                Ok(ProjectAutoLink {
+                    id: r.get(0)?,
+                    ts: r.get(1)?,
+                    folder: r.get(2)?,
+                    from_canonical: r.get(3)?,
+                    to_canonical: r.get(4)?,
+                    reason: r.get(5)?,
+                    undone: r.get::<_, i64>(6)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Undo the automatic links from `through_id` upward, newest first. Each link's
+    /// snapshot is restored exactly, the folder it linked is pinned as its own
+    /// project, and the entries are marked undone so the next pass cannot re-link
+    /// them. Returns how many links were undone.
+    pub fn undo_project_auto_links(&self, through_id: i64) -> Result<usize, String> {
+        let conn = self.writer();
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin undo transaction: {e}"))?;
+        let rows: Vec<(i64, String, Option<String>, String, String)> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, folder, from_canonical, to_canonical, snapshot
+                     FROM project_auto_link WHERE undone=0 AND id>=?1 ORDER BY id DESC",
+                )
+                .map_err(|e| format!("read auto links: {e}"))?;
+            let rows = stmt
+                .query_map(params![through_id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })
+                .map_err(|e| format!("read auto links: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("read auto links: {e}"))?;
+            rows
+        };
+        if rows.is_empty() {
+            return Err("nothing to undo".to_string());
+        }
+        for (id, folder, from, to, snapshot) in &rows {
+            let snap: ProjectSnapshot =
+                serde_json::from_str(snapshot).unwrap_or_default();
+            // Drop the rows this link wrote, then put the snapshot back verbatim.
+            for (alias, _) in &snap.aliases {
+                tx.execute("DELETE FROM project_alias WHERE alias=?1", params![alias])
+                    .map_err(|e| format!("clear alias: {e}"))?;
+            }
+            let mut keys = vec![folder.clone()];
+            let normalized = project_id::normalize_project_path(folder);
+            if !normalized.is_empty() && normalized != *folder {
+                keys.push(normalized);
+            }
+            for key in &keys {
+                tx.execute("DELETE FROM project_alias WHERE alias=?1", params![key])
+                    .map_err(|e| format!("clear alias: {e}"))?;
+            }
+            // The repoint also aliased the old name onto the new one; undo drops that
+            // too, so the old name is a project again rather than an alias of its
+            // replacement.
+            if let Some(from) = from {
+                tx.execute("DELETE FROM project_alias WHERE alias=?1", params![from])
+                    .map_err(|e| format!("clear alias: {e}"))?;
+            }
+            for (alias, canonical) in &snap.aliases {
+                tx.execute(
+                    "INSERT INTO project_alias(alias, canonical) VALUES(?1,?2)
+                     ON CONFLICT(alias) DO UPDATE SET canonical=excluded.canonical",
+                    params![alias, canonical],
+                )
+                .map_err(|e| format!("restore alias: {e}"))?;
+            }
+            // Pins and stacks are restored from the same snapshot, so a colored
+            // project keeps the color it had before the link moved it.
+            for project in [from.as_deref(), Some(to.as_str())].into_iter().flatten() {
+                tx.execute("DELETE FROM project_color WHERE project=?1", params![project])
+                    .map_err(|e| format!("clear color: {e}"))?;
+                tx.execute("DELETE FROM project_stack WHERE project=?1", params![project])
+                    .map_err(|e| format!("clear stack: {e}"))?;
+            }
+            for (project, color) in &snap.colors {
+                tx.execute(
+                    "INSERT OR REPLACE INTO project_color(project, color) VALUES(?1,?2)",
+                    params![project, color],
+                )
+                .map_err(|e| format!("restore color: {e}"))?;
+            }
+            for (project, tag, ord) in &snap.stacks {
+                tx.execute(
+                    "INSERT OR REPLACE INTO project_stack(project, tag, ord) VALUES(?1,?2,?3)",
+                    params![project, tag, ord],
+                )
+                .map_err(|e| format!("restore stack: {e}"))?;
+            }
+            if let Some(from) = from {
+                tx.execute(
+                    "UPDATE project_identity SET canonical=?1 WHERE canonical=?2",
+                    params![from, to],
+                )
+                .map_err(|e| format!("restore identity: {e}"))?;
+            }
+            // Keep it undone: a plain delete would hand the folder straight back
+            // to the same identity match on the next pass.
+            for key in &keys {
+                tx.execute(
+                    "INSERT INTO project_alias(alias, canonical) VALUES(?1,?1)
+                     ON CONFLICT(alias) DO UPDATE SET canonical=excluded.canonical",
+                    params![key],
+                )
+                .map_err(|e| format!("pin folder: {e}"))?;
+            }
+            tx.execute("UPDATE project_auto_link SET undone=1 WHERE id=?1", params![id])
+                .map_err(|e| format!("mark undone: {e}"))?;
+        }
+        let n = rows.len();
+        tx.commit().map_err(|e| format!("commit undo: {e}"))?;
+        Ok(n)
+    }
+
+    pub fn get_project_ignores(&self) -> rusqlite::Result<Vec<ProjectIgnore>> {
+        let conn = self.read_conn();
+        let mut stmt = conn.prepare_cached("SELECT prefix, builtin FROM project_ignore ORDER BY builtin DESC, prefix")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ProjectIgnore {
+                    prefix: r.get(0)?,
+                    builtin: r.get::<_, i64>(1)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Hide a folder subtree from Projects. Events under it keep counting in every
+    /// total — they land in the shared 'unknown' bucket instead of a project. The
+    /// rule also rewrites folders that were already recorded.
+    pub fn add_project_ignore(&self, prefix: &str) -> Result<usize, String> {
+        let prefix = prefix.trim();
+        if prefix.is_empty() || prefix == "/" {
+            return Err("enter a folder path to ignore".to_string());
+        }
+        let conn = self.writer();
+        conn.execute(
+            "INSERT INTO project_ignore(prefix, builtin) VALUES(?1, 0) ON CONFLICT(prefix) DO NOTHING",
+            params![prefix],
+        )
+        .map_err(|e| format!("add ignore rule: {e}"))?;
+        apply_ignore_rule(&conn, prefix).map_err(|e| format!("apply ignore rule: {e}"))
+    }
+
+    /// Hand an ignored subtree back: its folders resolve again through the ladder.
+    pub fn remove_project_ignore(&self, prefix: &str) -> Result<usize, String> {
+        let prefix = prefix.trim();
+        let conn = self.writer();
+        conn.execute("DELETE FROM project_ignore WHERE prefix=?1", params![prefix])
+            .map_err(|e| format!("remove ignore rule: {e}"))?;
+        let home = project_id::home_dir();
+        let rules = vec![prefix.to_string()];
+        let paths: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT DISTINCT project FROM usage_event WHERE project IS NOT NULL AND project != ''")
+                .map_err(|e| format!("read projects: {e}"))?;
+            let paths = stmt
+                .query_map([], |r| r.get(0))
+                .map_err(|e| format!("read projects: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("read projects: {e}"))?;
+            paths
+        };
+        let mut n = 0;
+        for path in &paths {
+            let repo = project_id::inspect(path);
+            let target = repo.root.clone().unwrap_or_else(|| repo.alias_key.clone());
+            if !project_id::ignore_matches(&rules, &target, &home) {
+                continue;
+            }
+            for key in ignore_keys(&repo, path) {
+                conn.execute(
+                    "DELETE FROM project_alias WHERE alias=?1 AND canonical='unknown'",
+                    params![key],
+                )
+                .map_err(|e| format!("clear ignored alias: {e}"))?;
+            }
+            n += fold_project_alias(&conn, path).map_err(|e| format!("re-resolve folder: {e}"))?;
+        }
+        remap_project_colors(&conn).map_err(|e| format!("remap project colors: {e}"))?;
+        remap_project_stacks(&conn).map_err(|e| format!("remap project stacks: {e}"))?;
+        Ok(n)
+    }
+
     /// Merge projects `names` into one project `canonical` (which must be one of the
     /// names). Folders already folded into an absorbed name follow it, so the table
     /// never forms alias -> alias chains. Idempotent.
     pub fn merge_projects(&self, names: &[String], canonical: &str) -> Result<usize, String> {
-        if names.len() < 2 {
+        let conn = self.writer();
+        // Names may be projects or any folder folded into one: the merge list can
+        // only offer what it knows, and after a move the folder is often an alias.
+        let mut resolved: Vec<String> = Vec::new();
+        for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+            let project = project_canonical(&conn, name);
+            if !resolved.contains(&project) {
+                resolved.push(project);
+            }
+        }
+        let canonical = project_canonical(&conn, canonical.trim());
+        if resolved.len() < 2 {
             return Err("merge needs at least two projects".to_string());
         }
         if canonical.is_empty() || canonical == "unknown" {
             return Err(format!("cannot merge into project {canonical:?}"));
         }
-        if !names.iter().any(|n| n == canonical) {
+        if !resolved.contains(&canonical) {
             return Err("canonical project must be one of the merged names".to_string());
         }
-        if names.iter().any(|n| n.is_empty() || n == "unknown") {
+        if resolved.iter().any(|n| n == "unknown") {
             return Err("the 'unknown' bucket cannot be merged".to_string());
         }
-        let conn = self.writer();
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("begin merge transaction: {e}"))?;
@@ -940,11 +1216,7 @@ impl Store {
         )
         .map_err(|e| format!("clear canonical mapping: {e}"))?;
         let mut n = 0usize;
-        let mut seen = std::collections::HashSet::new();
-        for name in names.iter().filter(|n| *n != canonical) {
-            if !seen.insert(name.clone()) {
-                continue;
-            }
+        for name in resolved.iter().filter(|n| **n != canonical) {
             // Folders already folded into an absorbed name follow it to the new canonical.
             n += tx
                 .execute(
@@ -959,6 +1231,18 @@ impl Store {
                     params![name, canonical],
                 )
                 .map_err(|e| format!("set mapping: {e}"))?;
+            // The repositories that named the absorbed project now name the merged one,
+            // so the next move of either side links here instead of resurrecting it.
+            tx.execute(
+                "UPDATE project_identity SET canonical = ?1 WHERE canonical = ?2",
+                params![canonical, name],
+            )
+            .map_err(|e| format!("repoint project identity: {e}"))?;
+        }
+        for name in &resolved {
+            let repo = project_id::inspect(name);
+            record_identity(&tx, &repo, &canonical)
+                .map_err(|e| format!("record project identity: {e}"))?;
         }
         // Re-key pinned colors and tech stacks inside the transaction so a merge
         // moves folders and their annotations together or not at all.
@@ -971,27 +1255,48 @@ impl Store {
     /// Pin each folder as its own project — "no, keep this one separate". The row
     /// maps the folder to itself on purpose: a plain delete would hand it straight
     /// back to automatic root-folding on the next pass.
+    ///
+    /// A pinned folder also owns its own checkout: its inode identity points at it,
+    /// and the remote only moves when the folder *is* the repository's main worktree
+    /// — otherwise one pinned worktree would capture the next worktree of the same
+    /// repository.
     pub fn unmerge_projects(&self, names: &[String]) -> Result<usize, String> {
         let conn = self.writer();
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin unmerge transaction: {e}"))?;
         let mut n = 0usize;
         let mut seen = std::collections::HashSet::new();
         for name in names.iter().filter(|n| !n.is_empty() && **n != "unknown") {
-            if !seen.insert(name.clone()) {
+            let repo = project_id::inspect(name);
+            let key = if repo.alias_key.is_empty() {
+                name.clone()
+            } else {
+                repo.alias_key.clone()
+            };
+            if !seen.insert(key.clone()) {
                 continue;
             }
-            n += conn
-                .execute(
-                    "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?1)
-                     ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
-                    params![name],
-                )
-                .map_err(|e| format!("keep project separate: {e}"))?;
+            n += force_alias(&tx, name, name).map_err(|e| format!("keep project separate: {e}"))?;
+            if key != *name {
+                n += force_alias(&tx, &key, &key)
+                    .map_err(|e| format!("keep project separate: {e}"))?;
+            }
+            // Only a folder that *is* a repository's main checkout may claim that
+            // repository's identity: a pinned worktree (or a pinned subfolder) shares
+            // it with the project it was split from, and must not capture the next
+            // checkout of the same repository. Its self-mapping is what keeps it apart.
+            if repo.root.as_deref() == Some(key.as_str()) {
+                record_identity_force(&tx, &repo, &key, &["remote", "inode"])
+                    .map_err(|e| format!("record project identity: {e}"))?;
+            }
         }
+        tx.commit().map_err(|e| format!("commit unmerge: {e}"))?;
         Ok(n)
     }
 
-    /// Hand each folder back to automatic root-folding: drop the recorded decision
-    /// and resolve it again from the filesystem.
+    /// Hand each folder back to automatic resolution: drop the recorded decision
+    /// and let the ladder (identity, ignore rules, repository root) decide again.
     pub fn regroup_projects(&self, names: &[String]) -> Result<usize, String> {
         let conn = self.writer();
         let mut n = 0usize;
@@ -1002,6 +1307,11 @@ impl Store {
             }
             conn.execute("DELETE FROM project_alias WHERE alias = ?1", params![name])
                 .map_err(|e| format!("clear project mapping: {e}"))?;
+            let key = project_id::normalize_project_path(name);
+            if key != *name {
+                conn.execute("DELETE FROM project_alias WHERE alias = ?1", params![key])
+                    .map_err(|e| format!("clear project mapping: {e}"))?;
+            }
             n += fold_project_alias(&conn, name)
                 .map_err(|e| format!("resolve project root: {e}"))?;
         }
@@ -1009,32 +1319,436 @@ impl Store {
     }
 }
 
-/// The project a recorded folder counts under: its mapped target if one exists,
-/// else the folder itself.
-fn project_canonical(conn: &Connection, name: &str) -> String {
+/// Milliseconds since the epoch; audit rows and identity freshness only.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// The mapping recorded for `name`, if any.
+fn alias_lookup(conn: &Connection, name: &str) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT canonical FROM project_alias WHERE alias = ?1",
         params![name],
         |r| r.get::<_, String>(0),
     )
-    .unwrap_or_else(|_| name.to_string())
+    .optional()
 }
 
-/// Fold `folder` into its project root, unless a mapping already exists —
-/// a decision once recorded (by hand or by an earlier pass) is never recomputed,
-/// so history stays grouped the way it was seen and repos that moved stay whole.
-/// Runs on the caller's connection so ingest can fold inside its own transaction.
-fn fold_project_alias(conn: &Connection, folder: &str) -> rusqlite::Result<usize> {
-    let root = resolve_project_root(folder);
-    if root == folder {
+/// The project a recorded folder counts under: its mapped target if one exists,
+/// else the folder itself. Queried by the spelling a harness wrote as well as by
+/// the normalised key rows are stored under, so a caller holding either finds it.
+fn project_canonical(conn: &Connection, name: &str) -> String {
+    let name = name.trim();
+    if let Ok(Some(canonical)) = alias_lookup(conn, name) {
+        return canonical;
+    }
+    let key = project_id::normalize_project_path(name);
+    if key != name {
+        if let Ok(Some(canonical)) = alias_lookup(conn, &key) {
+            return canonical;
+        }
+    }
+    name.to_string()
+}
+
+/// Write `alias -> canonical` unless the row already exists. Self-mappings are
+/// skipped: a project that counts under itself needs no row, and one would show
+/// up in the UI as "kept separate".
+fn write_alias(conn: &Connection, alias: &str, canonical: &str) -> rusqlite::Result<usize> {
+    if alias.is_empty() || canonical.is_empty() || alias == canonical {
         return Ok(0);
     }
-    // Follow the root's own mapping so the table can never form a chain.
-    let canonical = project_canonical(conn, &root);
     conn.execute(
         "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?2) ON CONFLICT(alias) DO NOTHING",
-        params![folder, canonical],
+        params![alias, canonical],
     )
+}
+
+/// Write `alias -> canonical` even if a different mapping exists — used by pins and
+/// by ignore rules, which are explicit instructions rather than guesses.
+fn force_alias(conn: &Connection, alias: &str, canonical: &str) -> rusqlite::Result<usize> {
+    if alias.is_empty() || canonical.is_empty() {
+        return Ok(0);
+    }
+    conn.execute(
+        "INSERT INTO project_alias(alias, canonical) VALUES(?1, ?2)
+         ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical
+         WHERE project_alias.canonical <> excluded.canonical",
+        params![alias, canonical],
+    )
+}
+
+/// Write the same mapping for every spelling of one folder.
+fn write_keys(conn: &Connection, keys: &[String], canonical: &str) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for key in keys {
+        n += write_alias(conn, key, canonical)?;
+    }
+    Ok(n)
+}
+
+/// Force the same mapping for every spelling of one folder.
+fn force_keys(conn: &Connection, keys: &[String], canonical: &str) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for key in keys {
+        n += force_alias(conn, key, canonical)?;
+    }
+    Ok(n)
+}
+
+/// Fold `folder` into its project.
+///
+/// The ladder, in order: a recorded decision, the repository's stable identity
+/// (the same remote or the same `.git` on disk, however the folder moved), an
+/// ignore rule, the nearest repository root, and finally the folder itself.
+/// Runs on the caller's connection so ingest can fold inside its own transaction.
+fn fold_project_alias(conn: &Connection, folder: &str) -> rusqlite::Result<usize> {
+    let repo = project_id::inspect(folder);
+    // Rows are keyed by what `usage_event.project` actually stores, so the join
+    // matches; the normalised spelling is written alongside it when it differs.
+    let mut keys: Vec<String> = vec![folder.to_string()];
+    if !repo.alias_key.is_empty() && repo.alias_key != folder {
+        keys.push(repo.alias_key.clone());
+    }
+
+    // 1. A decision once recorded (by hand or by an earlier pass) is never
+    //    recomputed. Look it up by the exact string the harness wrote, then by the
+    //    normalised key, self-healing rows written before normalisation.
+    let recorded = alias_lookup(conn, folder)?.or({
+        if repo.alias_key != folder {
+            alias_lookup(conn, &repo.alias_key)?
+        } else {
+            None
+        }
+    });
+    if let Some(canonical) = recorded {
+        write_keys(conn, &keys, &canonical)?;
+        record_identity(conn, &repo, &canonical)?;
+        return Ok(0);
+    }
+
+    let key = repo.alias_key.clone();
+
+    // 2. Stable identity. When the project's old home is gone and the repository is
+    //    here now, the project follows the live path so its history, color and stack
+    //    move with it; a still-existing home wins, so parallel checkouts stay put
+    //    instead of flipping back and forth.
+    if let Some((reason, canonical)) = identity_match(conn, &repo)? {
+        if let Some(root) = repo.root.as_deref() {
+            if root != canonical && Path::new(root).is_dir() && !Path::new(&canonical).is_dir() {
+                let n = repoint_project(conn, folder, &canonical, root, &reason)?;
+                let n = n + write_keys(conn, &keys, root)?;
+                record_identity(conn, &repo, root)?;
+                return Ok(n);
+            }
+        }
+        if key == canonical && folder == canonical {
+            record_identity(conn, &repo, &canonical)?;
+            return Ok(0);
+        }
+        let n = write_keys(conn, &keys, &canonical)?;
+        if n > 0 {
+            record_auto_link(conn, folder, None, &canonical, &reason)?;
+        }
+        record_identity(conn, &repo, &canonical)?;
+        return Ok(n);
+    }
+
+    // 3. Folders the ignore list covers count as Unknown: the usage is kept, it just
+    //    is not a project. Matched against the resolved target, so a scratch
+    //    repository inside a temp tree is caught by the temp tree's rule.
+    let target = repo.root.as_deref().unwrap_or(&key);
+    if project_ignored(conn, target)? {
+        return force_keys(conn, &keys, "unknown");
+    }
+
+    // 4. Inside a repository: count under its root, which is already the main
+    //    checkout when the folder is a linked worktree.
+    if let Some(root) = repo.root.as_deref() {
+        let canonical = match alias_lookup(conn, root)? {
+            Some(canonical) => canonical,
+            None => root.to_string(),
+        };
+        record_identity(conn, &repo, &canonical)?;
+        if root == key && folder == key {
+            return Ok(0);
+        }
+        return write_keys(conn, &keys, &canonical);
+    }
+
+    // 5. Nothing above it: the folder is its own project.
+    Ok(0)
+}
+
+/// Identity of `repo` from the `project_identity` table, strongest signal first.
+fn identity_match(conn: &Connection, repo: &Repo) -> rusqlite::Result<Option<(String, String)>> {
+    for (kind, value) in repo.identities() {
+        let found = conn
+            .query_row(
+                "SELECT canonical FROM project_identity WHERE kind=?1 AND value=?2",
+                params![kind, value],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(canonical) = found {
+            let reason = if repo.worktree { "worktree" } else { kind };
+            return Ok(Some((reason.to_string(), canonical)));
+        }
+    }
+    Ok(None)
+}
+
+/// Remember that `canonical` is this repository, so a later move can be recognised.
+/// A conflict is only settled in favour of a live location over a dead one: two live
+/// checkouts of one remote stay grouped under the project that already owns it.
+fn record_identity(conn: &Connection, repo: &Repo, canonical: &str) -> rusqlite::Result<()> {
+    let identities = repo.identities();
+    if identities.is_empty() || canonical.is_empty() || canonical == "unknown" {
+        return Ok(());
+    }
+    for (kind, value) in identities {
+        let existing = conn
+            .query_row(
+                "SELECT canonical FROM project_identity WHERE kind=?1 AND value=?2",
+                params![kind, value],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        match existing {
+            None => {
+                conn.execute(
+                    "INSERT INTO project_identity(kind, value, canonical, seen_ts) VALUES(?1,?2,?3,?4)",
+                    params![kind, value, canonical, now_ms()],
+                )?;
+            }
+            Some(current) if current == canonical => {
+                // Freshness, not a heartbeat: every ingest pass folds the same
+                // folders, and rewriting these rows each time buys nothing.
+                conn.execute(
+                    "UPDATE project_identity SET seen_ts=?1 WHERE kind=?2 AND value=?3 AND seen_ts < ?1 - 3600000",
+                    params![now_ms(), kind, value],
+                )?;
+            }
+            Some(current) => {
+                if !Path::new(&current).is_dir() && Path::new(canonical).is_dir() {
+                    conn.execute(
+                        "UPDATE project_identity SET canonical=?1, seen_ts=?2 WHERE kind=?3 AND value=?4",
+                        params![canonical, now_ms(), kind, value],
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write identities regardless of what they pointed at — an explicit "this folder
+/// is its own project" has to win over an earlier automatic link.
+fn record_identity_force(
+    conn: &Connection,
+    repo: &Repo,
+    canonical: &str,
+    kinds: &[&str],
+) -> rusqlite::Result<()> {
+    for (kind, value) in repo.identities() {
+        if !kinds.contains(&kind) {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO project_identity(kind, value, canonical, seen_ts) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(kind, value) DO UPDATE SET canonical=excluded.canonical, seen_ts=excluded.seen_ts",
+            params![kind, value, canonical, now_ms()],
+        )?;
+    }
+    Ok(())
+}
+
+/// `project_alias`, `project_color` and `project_stack` rows a repoint is about to
+/// change, kept as JSON so undo can put them back exactly.
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+struct ProjectSnapshot {
+    #[serde(default)]
+    aliases: Vec<(String, String)>,
+    #[serde(default)]
+    colors: Vec<(String, String)>,
+    #[serde(default)]
+    stacks: Vec<(String, String, i64)>,
+}
+
+fn snapshot_projects(conn: &Connection, from: &str, to: &str) -> rusqlite::Result<String> {
+    let mut snap = ProjectSnapshot::default();
+    {
+        let mut stmt = conn.prepare_cached(
+            "SELECT alias, canonical FROM project_alias
+             WHERE canonical IN (?1, ?2) OR alias IN (?1, ?2) ORDER BY alias",
+        )?;
+        snap.aliases = stmt
+            .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    {
+        let mut stmt = conn.prepare_cached(
+            "SELECT project, color FROM project_color WHERE project IN (?1, ?2) ORDER BY project",
+        )?;
+        snap.colors = stmt
+            .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    {
+        let mut stmt = conn.prepare_cached(
+            "SELECT project, tag, ord FROM project_stack WHERE project IN (?1, ?2) ORDER BY project, ord",
+        )?;
+        snap.stacks = stmt
+            .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    Ok(serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string()))
+}
+
+/// Move a project from a path that no longer exists to the one that does now.
+/// Every folder folded into the old canonical follows, pinned colors and stacks
+/// are re-keyed, the repositories that named it now name the new path, and the
+/// whole change is snapshotted so it can be undone.
+fn repoint_project(
+    conn: &Connection,
+    folder: &str,
+    from: &str,
+    to: &str,
+    reason: &str,
+) -> rusqlite::Result<usize> {
+    // Log first: the undo snapshot has to hold the rows as they were *before* this.
+    record_auto_link(conn, folder, Some(from), to, reason)?;
+    let mut n = conn.execute(
+        "UPDATE project_alias SET canonical=?1 WHERE canonical=?2 AND alias<>?1",
+        params![to, from],
+    )?;
+    // The old path keeps resolving, so a Project page open on it still works.
+    write_alias(conn, from, to)?;
+    conn.execute(
+        "UPDATE project_identity SET canonical=?1, seen_ts=?2 WHERE canonical=?3",
+        params![to, now_ms(), from],
+    )?;
+    remap_project_colors(conn)?;
+    remap_project_stacks(conn)?;
+    n += 1;
+    Ok(n)
+}
+
+/// Append an entry to the automatic-link log, pruning to the newest 200.
+fn record_auto_link(
+    conn: &Connection,
+    folder: &str,
+    from: Option<&str>,
+    to: &str,
+    reason: &str,
+) -> rusqlite::Result<()> {
+    let snapshot = match from {
+        Some(from) => snapshot_projects(conn, from, to)?,
+        None => "{}".to_string(),
+    };
+    conn.execute(
+        "INSERT INTO project_auto_link(ts, folder, from_canonical, to_canonical, reason, snapshot, undone)
+         VALUES(?1,?2,?3,?4,?5,?6,0)",
+        params![now_ms(), folder, from, to, reason, snapshot],
+    )?;
+    conn.execute(
+        "DELETE FROM project_auto_link WHERE id NOT IN
+         (SELECT id FROM project_auto_link ORDER BY id DESC LIMIT 200)",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Rules that keep temp dirs, harness sandboxes and app data folders out of
+/// Projects. Seeded once; the user can remove or add rules afterwards.
+const DEFAULT_PROJECT_IGNORES: &[&str] = &[
+    "~",
+    "/private/tmp/",
+    "/tmp/",
+    "~/Library/Application Support/",
+    "~/.zcode/workspace/",
+    "~/Documents/Codex/",
+];
+
+fn seed_project_ignores(conn: &Connection) -> rusqlite::Result<()> {
+    let seeded: Option<i64> = conn
+        .query_row(
+            "SELECT watermark FROM ingest_state WHERE source='project_ignore' AND path=''",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if seeded.unwrap_or(0) != 0 {
+        return Ok(());
+    }
+    for rule in DEFAULT_PROJECT_IGNORES {
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO project_ignore(prefix, builtin) VALUES(?1, 1)",
+            params![rule],
+        )?;
+        if inserted > 0 {
+            apply_ignore_rule(conn, rule)?;
+        }
+    }
+    conn.execute(
+        "INSERT INTO ingest_state(source, path, watermark, updated_at) VALUES('project_ignore','',1,strftime('%s','now'))
+         ON CONFLICT(source, path) DO UPDATE SET watermark=1, updated_at=excluded.updated_at",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Every spelling of a folder that an ignore rule has to touch: the recorded string,
+/// its normalised key and the repository root it resolves to (an ignored project is
+/// ignored whole, so a subfolder recorded later folds into the same bucket).
+fn ignore_keys(repo: &Repo, path: &str) -> Vec<String> {
+    let mut keys = vec![path.to_string()];
+    if !repo.alias_key.is_empty() && repo.alias_key != *path {
+        keys.push(repo.alias_key.clone());
+    }
+    if let Some(root) = repo.root.as_deref() {
+        if !keys.iter().any(|k| k == root) {
+            keys.push(root.to_string());
+        }
+    }
+    keys
+}
+
+/// Rewrite already-recorded folders a rule covers to the shared 'unknown' bucket.
+fn apply_ignore_rule(conn: &Connection, rule: &str) -> rusqlite::Result<usize> {
+    let home = project_id::home_dir();
+    let rules = vec![rule.to_string()];
+    let paths: Vec<String> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT DISTINCT project FROM usage_event WHERE project IS NOT NULL AND project != ''",
+        )?;
+        let paths = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        paths
+    };
+    let mut n = 0;
+    for path in &paths {
+        let repo = project_id::inspect(path);
+        let target = repo.root.clone().unwrap_or_else(|| repo.alias_key.clone());
+        if !project_id::ignore_matches(&rules, &target, &home) {
+            continue;
+        }
+        n += force_keys(conn, &ignore_keys(&repo, path), "unknown")?;
+    }
+    Ok(n)
+}
+
+fn project_ignored(conn: &Connection, path: &str) -> rusqlite::Result<bool> {
+    let rules: Vec<String> = {
+        let mut stmt = conn.prepare_cached("SELECT prefix FROM project_ignore")?;
+        let rules = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+        rules
+    };
+    Ok(project_id::ignore_matches(&rules, path, &project_id::home_dir()))
 }
 
 /// Re-key pinned colors through the mapping table, so a color pinned on a folder
@@ -1071,32 +1785,12 @@ fn normalize_hex(color: &str) -> Option<String> {
         .then(|| format!("#{}", hex.to_ascii_lowercase()))
 }
 
-/// Fold a recorded working directory into its project: the nearest enclosing
-/// directory that holds a `.git`. Subfolders of one repository — however deep,
-/// `node_modules/.pnpm/.../dist/core` included — are one project, while nested
-/// repositories (submodules, vendored checkouts) stay their own.
-///
-/// Strings that are not POSIX paths (WackChatter's synthetic "WackChatter ·
-/// <character>" names) and folders outside any repository come back unchanged.
-/// Missing directories are walked through rather than rejected, so a deleted deep
-/// folder still lands on the repository above it.
-pub fn resolve_project_root(path: &str) -> String {
-    if path.is_empty() || !path.starts_with('/') {
-        return path.to_string();
-    }
-    let base = path.trim_end_matches('/');
-    let start = if base.is_empty() { "/" } else { base };
-    let mut dir = Path::new(start);
-    loop {
-        if dir.join(".git").exists() {
-            return dir.to_string_lossy().into_owned();
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => return path.to_string(),
-        }
-    }
-}
+/// The project a recorded folder belongs to: the nearest enclosing repository
+/// (the main checkout for a linked worktree), else the folder itself. The ladder
+/// that decides what a folder *counts under* lives in `fold_project_alias`; this is
+/// the filesystem half of it, re-exported so callers and tests keep one name.
+#[cfg(test)]
+pub use crate::project_id::resolve_project_root;
 
 /// A checked-out read connection, returned to the pool on drop.
 pub struct PooledRead<'a> {
@@ -1428,11 +2122,12 @@ mod tests {
     }
 
     fn tmp_dir(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("tokentrail-test-{}-{name}", std::process::id()));
+        // Under `target/`, not the OS temp dir: default ignore rules cover the temp
+        // tree, and a project fixture must be a project.
+        let dir = crate::collectors::test_root().join(format!("tt-repo-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        std::fs::canonicalize(&dir).unwrap()
     }
 
     fn ev(id: &str, project: Option<&str>) -> UsageEvent {
@@ -2101,4 +2796,218 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    fn fake_repo(name: &str, remote: Option<&str>) -> std::path::PathBuf {
+        let dir = tmp_dir(name);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let config = match remote {
+            Some(url) => format!("[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = {url}\n"),
+            None => "[core]\n\trepositoryformatversion = 0\n".to_string(),
+        };
+        std::fs::write(dir.join(".git/config"), config).unwrap();
+        dir
+    }
+
+    fn moved_path(name: &str) -> std::path::PathBuf {
+        let dir = crate::collectors::test_root().join(format!("tt-moved-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn a_moved_repository_follows_to_its_new_path() {
+        let store = test_store();
+        let repo = fake_repo("move", None);
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let sub = repo.join("src").to_string_lossy().to_string();
+        let old = repo.to_string_lossy().to_string();
+
+        store.insert_events(&[ev("1", Some(&sub))]).unwrap();
+        assert_eq!(store.project_canonical(&sub), old);
+        store.set_project_color(&old, "#FF0000").unwrap();
+
+        // `mv` on one volume keeps the `.git` inode, which is the identity we kept.
+        let new_dir = moved_path("repo");
+        std::fs::rename(&repo, &new_dir).unwrap();
+        let new_dir = std::fs::canonicalize(&new_dir).unwrap();
+        let new = new_dir.to_string_lossy().to_string();
+        let new_sub = new_dir.join("src").to_string_lossy().to_string();
+
+        store.insert_events(&[ev("2", Some(&new_sub))]).unwrap();
+
+        // The project follows the live path, and its color comes with it.
+        assert_eq!(store.project_canonical(&new_sub), new);
+        assert_eq!(store.project_canonical(&old), new);
+        assert_eq!(
+            store.get_project_colors().unwrap(),
+            vec![ProjectColor { project: new.clone(), color: "#ff0000".into() }]
+        );
+        let links = store.get_project_auto_links(10).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].from_canonical.as_deref(), Some(old.as_str()));
+        assert_eq!(links[0].to_canonical, new);
+    }
+
+    #[test]
+    fn a_checkout_of_a_known_repository_joins_it_until_it_moves() {
+        let store = test_store();
+        let first = fake_repo("clone-a", Some("https://github.com/Intelios/Probe.git"));
+        let first_s = first.to_string_lossy().to_string();
+        store.insert_events(&[ev("1", Some(&first_s))]).unwrap();
+
+        // a second live checkout of the same remote is the same project
+        let second = fake_repo("clone-b", Some("git@github.com:Intelios/Probe.git"));
+        let second_s = second.to_string_lossy().to_string();
+        store.insert_events(&[ev("2", Some(&second_s))]).unwrap();
+        assert_eq!(store.project_canonical(&second_s), first_s);
+
+        // once the original is gone, a new checkout takes over the project's name
+        std::fs::remove_dir_all(&first).unwrap();
+        let third = fake_repo("clone-c", Some("ssh://git@github.com/Intelios/Probe"));
+        let third_s = third.to_string_lossy().to_string();
+        store.insert_events(&[ev("3", Some(&third_s))]).unwrap();
+        assert_eq!(store.project_canonical(&third_s), third_s);
+        assert_eq!(store.project_canonical(&first_s), third_s);
+        assert_eq!(store.project_canonical(&second_s), third_s);
+    }
+
+    #[test]
+    fn worktrees_fold_into_the_main_checkout_without_a_merge() {
+        let store = test_store();
+        let main = fake_repo("wt-main", Some("https://github.com/Intelios/Probe.git"));
+        let main_s = main.to_string_lossy().to_string();
+        store.insert_events(&[ev("1", Some(&main_s))]).unwrap();
+
+        let worktree = tmp_dir("wt-task");
+        let gitdir = main.join(".git/worktrees/task");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .unwrap();
+        let worktree_s = worktree.to_string_lossy().to_string();
+
+        store.insert_events(&[ev("2", Some(&worktree_s))]).unwrap();
+        assert_eq!(store.project_canonical(&worktree_s), main_s);
+
+        // keeping one worktree separate pins that folder, and only that folder: the
+        // next worktree of the same repository still folds into the main checkout.
+        store
+            .unmerge_projects(std::slice::from_ref(&worktree_s))
+            .unwrap();
+        assert_eq!(store.project_canonical(&worktree_s), worktree_s);
+        store.ensure_project_aliases().unwrap();
+        assert_eq!(store.project_canonical(&worktree_s), worktree_s);
+
+        let other = tmp_dir("wt-other");
+        let other_gitdir = main.join(".git/worktrees/other");
+        std::fs::create_dir_all(&other_gitdir).unwrap();
+        std::fs::write(other_gitdir.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            other.join(".git"),
+            format!("gitdir: {}\n", other_gitdir.display()),
+        )
+        .unwrap();
+        let other_s = other.to_string_lossy().to_string();
+        store.insert_events(&[ev("3", Some(&other_s))]).unwrap();
+        assert_eq!(store.project_canonical(&other_s), main_s);
+    }
+
+    #[test]
+    fn undo_restores_the_previous_grouping_and_pins_the_folder() {
+        let store = test_store();
+        let repo = fake_repo("undo", None);
+        let old = repo.to_string_lossy().to_string();
+        store.insert_events(&[ev("1", Some(&old))]).unwrap();
+        store.set_project_color(&old, "#00ff00").unwrap();
+
+        let new_dir = moved_path("undo");
+        std::fs::rename(&repo, &new_dir).unwrap();
+        let new_dir = std::fs::canonicalize(&new_dir).unwrap();
+        let new = new_dir.to_string_lossy().to_string();
+        store.insert_events(&[ev("2", Some(&new))]).unwrap();
+        assert_eq!(store.project_canonical(&old), new);
+
+        let links = store.get_project_auto_links(10).unwrap();
+        assert_eq!(store.undo_project_auto_links(links[0].id).unwrap(), 1);
+
+        // the old name is the project again, its color is back, and the folder that
+        // triggered the link is pinned so the next pass cannot re-link it.
+        assert_eq!(store.project_canonical(&old), old);
+        assert_eq!(store.project_canonical(&new), new);
+        assert_eq!(
+            store.get_project_colors().unwrap(),
+            vec![ProjectColor { project: old.clone(), color: "#00ff00".into() }]
+        );
+        store.ensure_project_aliases().unwrap();
+        assert_eq!(store.project_canonical(&new), new);
+        assert!(store.get_project_auto_links(10).unwrap()[0].undone);
+    }
+
+    #[test]
+    fn undo_splits_a_plain_identity_link_off_again() {
+        let store = test_store();
+        let first = fake_repo("undo-plain-a", Some("https://github.com/Intelios/Probe.git"));
+        let first_s = first.to_string_lossy().to_string();
+        store.insert_events(&[ev("1", Some(&first_s))]).unwrap();
+
+        let second = fake_repo("undo-plain-b", Some("https://github.com/Intelios/Probe.git"));
+        let second_s = second.to_string_lossy().to_string();
+        store.insert_events(&[ev("2", Some(&second_s))]).unwrap();
+        assert_eq!(store.project_canonical(&second_s), first_s);
+
+        let links = store.get_project_auto_links(10).unwrap();
+        assert_eq!(links.len(), 1);
+        assert!(links[0].from_canonical.is_none());
+        store.undo_project_auto_links(links[0].id).unwrap();
+
+        // the checkout is its own project again, and stays that way on the next pass
+        assert_eq!(store.project_canonical(&second_s), second_s);
+        assert_eq!(store.project_canonical(&first_s), first_s);
+        store.ensure_project_aliases().unwrap();
+        assert_eq!(store.project_canonical(&second_s), second_s);
+    }
+
+    #[test]
+    fn ignore_rules_hide_folders_without_deleting_usage() {
+        let store = test_store();
+        let scr = fake_repo("scratch", None);
+        std::fs::create_dir_all(scr.join("logs")).unwrap();
+        let scr_s = scr.to_string_lossy().to_string();
+        let sub = scr.join("logs").to_string_lossy().to_string();
+        store.insert_events(&[ev("1", Some(&sub))]).unwrap();
+        assert_eq!(store.project_canonical(&sub), scr_s);
+
+        store.add_project_ignore(&format!("{scr_s}/")).unwrap();
+        assert_eq!(store.project_canonical(&sub), "unknown");
+        assert_eq!(store.project_canonical(&scr_s), "unknown");
+
+        store.remove_project_ignore(&format!("{scr_s}/")).unwrap();
+        assert_eq!(store.project_canonical(&sub), scr_s);
+    }
+
+    #[test]
+    fn merge_accepts_a_folded_folder_as_a_name() {
+        let store = test_store();
+        let repo = fake_repo("merge-alias", None);
+        let repo_s = repo.to_string_lossy().to_string();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let sub = repo.join("src").to_string_lossy().to_string();
+        store.insert_events(&[ev("1", Some(&sub))]).unwrap();
+
+        // a folded folder names its project: merging it merges the project it belongs to
+        let other = fake_repo("merge-other", None);
+        let other_s = other.to_string_lossy().to_string();
+        store.insert_events(&[ev("2", Some(&other_s))]).unwrap();
+        store.merge_projects(&[sub.clone(), other_s.clone()], &other_s).unwrap();
+        assert_eq!(store.project_canonical(&sub), other_s);
+        assert_eq!(store.project_canonical(&repo_s), other_s);
+        // one distinct project left: nothing to merge
+        assert!(store.merge_projects(&[sub, repo_s], "/elsewhere").is_err());
+    }
+
+
 }
+

@@ -1,11 +1,14 @@
 use crate::aggregate::{
     self, Achievement, Big6History, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow, EstimatedShare,
     FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow,
-    Overview, PeakDayRow, ProjectDetail, ProjectRow, WackCodeCallRow, WackCodeDetail,
-    WrappedSummary,
+    Overview, PeakDayRow, ProjectDetail, ProjectRow, ProjectSuggestion, WackCodeCallRow,
+    WackCodeDetail, WrappedSummary,
 };
 use crate::collectors;
-use crate::models::{IngestStats, ModelAlias, ProjectAlias, ProjectColor, ProjectStack, SourceStatus};
+use crate::models::{
+    IngestStats, ModelAlias, ProjectAlias, ProjectAutoLink, ProjectColor, ProjectIgnore,
+    ProjectPathRow, ProjectStack, SourceStatus,
+};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, State};
 
@@ -278,6 +281,60 @@ pub fn set_project_stack(
 #[tauri::command]
 pub fn get_project_aliases(state: State<AppState>) -> Vec<ProjectAlias> {
     state.store.get_project_aliases().unwrap_or_default()
+}
+
+/// Every recorded folder with the project it counts under and whether it still
+/// exists — the merge list uses the last two to flag a project whose folder moved.
+#[tauri::command]
+pub fn get_project_paths(state: State<AppState>) -> Vec<ProjectPathRow> {
+    state.store.get_project_paths().unwrap_or_default()
+}
+
+/// Projects whose folder is gone but which look like a live project's old home.
+#[tauri::command]
+pub fn get_project_suggestions(state: State<AppState>) -> Result<Vec<ProjectSuggestion>, String> {
+    aggregate::project_suggestions(&state.store).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_project_auto_links(
+    state: State<AppState>,
+    limit: i64,
+) -> Vec<ProjectAutoLink> {
+    state.store.get_project_auto_links(limit).unwrap_or_default()
+}
+
+/// Undo the automatic links from `through_id` upward, newest first.
+#[tauri::command]
+pub fn undo_project_auto_links(state: State<AppState>, through_id: i64) -> Result<usize, String> {
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.undo_project_auto_links(through_id)
+}
+
+#[tauri::command]
+pub fn get_project_ignores(state: State<AppState>) -> Vec<ProjectIgnore> {
+    state.store.get_project_ignores().unwrap_or_default()
+}
+
+/// Hide a folder subtree from Projects; its usage still counts, as Unknown.
+#[tauri::command]
+pub fn add_project_ignore(state: State<AppState>, prefix: String) -> Result<usize, String> {
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.add_project_ignore(&prefix)
+}
+
+/// Hand an ignored subtree back to automatic grouping.
+#[tauri::command]
+pub fn remove_project_ignore(state: State<AppState>, prefix: String) -> Result<usize, String> {
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.remove_project_ignore(&prefix)
+}
+
+/// Re-run the project resolution pass on demand (after moving folders around).
+#[tauri::command]
+pub fn rescan_projects(state: State<AppState>) -> Result<usize, String> {
+    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+    state.store.refresh_project_links()
 }
 
 #[tauri::command]

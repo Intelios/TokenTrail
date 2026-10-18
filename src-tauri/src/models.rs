@@ -149,3 +149,39 @@ pub struct ProjectStack {
     pub stack: Vec<String>,
 }
 
+/// One folder recorded in `usage_event.project`, with the project it counts under
+/// and whether it still exists on disk. Non-path names (`WackChatter · Lyra`) are
+/// never reported as missing.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectPathRow {
+    pub path: String,
+    pub canonical: String,
+    pub exists: bool,
+    pub events: i64,
+    pub last_ts: Option<i64>,
+}
+
+/// An automatic link TokenTrail applied on its own: `folder` joined
+/// `to_canonical`, either as a new alias or by moving the project away from
+/// `from_canonical` because that path no longer exists. Undo restores the
+/// snapshot taken before the change and pins the folder as its own project.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectAutoLink {
+    pub id: i64,
+    pub ts: i64,
+    pub folder: String,
+    pub from_canonical: Option<String>,
+    pub to_canonical: String,
+    /// `remote`, `inode` or `worktree`.
+    pub reason: String,
+    pub undone: bool,
+}
+
+/// A folder subtree hidden from Projects. Events under it still count in every
+/// total; they land in the shared 'unknown' bucket instead of a project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectIgnore {
+    pub prefix: String,
+    pub builtin: bool,
+}
+

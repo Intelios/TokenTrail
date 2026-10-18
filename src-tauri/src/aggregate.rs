@@ -473,6 +473,22 @@ pub struct ProjectRow {
     pub last_ts: Option<i64>,
 }
 
+/// A project whose folder is gone, next to a live project that looks like its new
+/// home. Never applied automatically: it is a guess and the user decides.
+#[derive(Debug, Serialize)]
+pub struct ProjectSuggestion {
+    pub from: String,
+    pub to: String,
+    /// `same_name` (a moved folder), `inside` (a dead folder under a live project)
+    /// or `subfolder` (a live folder under a live project that never folded).
+    pub reason: String,
+    /// The suggested folder still exists — `subfolder` always does.
+    pub from_exists: bool,
+    pub from_last_ts: Option<i64>,
+    pub to_last_ts: Option<i64>,
+    pub from_tokens: i64,
+}
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct DailyProjectRow {
     pub date: String,
@@ -1310,6 +1326,7 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
          LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE COALESCE(a.canonical, u.model, 'unknown') = ?1 AND {H}
            AND u.project IS NOT NULL AND u.project != '' AND u.project != 'unknown'
+           AND {P} != 'unknown'
          GROUP BY p
          ORDER BY first_ts ASC, p ASC",
         H = NOT_HIDDEN,
@@ -1446,6 +1463,170 @@ pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// The folder above `path`, if any.
+fn folder_parent(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    let i = trimmed.rfind('/')?;
+    (i > 0).then(|| trimmed[..i].to_string())
+}
+
+/// The last path segment, without a trailing slash.
+fn folder_name(path: &str) -> Option<&str> {
+    let trimmed = path.trim_end_matches('/');
+    let name = match trimmed.rfind('/') {
+        Some(i) => &trimmed[i + 1..],
+        None => trimmed,
+    };
+    (!name.is_empty()).then_some(name)
+}
+
+/// Projects whose folder no longer exists, paired with a live project that looks
+/// like its new home: the same folder name (a move), or a live ancestor (a working
+/// directory deep inside a project that was never a repository of its own).
+/// Guesswork only: Settings offers it and never applies it, and "keep separate"
+/// pins the folder so it stops being suggested.
+///
+/// Only projects active in the last year are considered, so a long-deleted rename
+/// does not nag forever, and the list is capped so a big cleanup cannot flood it.
+pub fn project_suggestions(store: &Store) -> DbResult<Vec<ProjectSuggestion>> {
+    const MAX_SUGGESTIONS: usize = 20;
+    let conn = store.read_conn();
+    let sql = format!(
+        "SELECT {P}, COALESCE(SUM({T}),0), MAX(u.ts)
+         FROM usage_event u LEFT JOIN project_alias pj ON pj.alias = u.project
+         WHERE {P} != 'unknown' GROUP BY 1",
+        T = TOKENS,
+        P = PROJECT
+    );
+    let rows: Vec<(String, i64, Option<i64>)> = {
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    // A self-mapping is a decision, not a guess: the folder was kept on purpose.
+    let pinned: std::collections::HashSet<String> = {
+        let mut stmt = conn.prepare("SELECT alias FROM project_alias WHERE alias = canonical")?;
+        let pinned = stmt.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        pinned
+    };
+
+    let active_since = now_ms() - 365 * 24 * 60 * 60 * 1000;
+    let mut live: Vec<(String, String, Option<i64>)> = Vec::new();
+    let mut gone: Vec<(String, String, i64, Option<i64>)> = Vec::new();
+    for (project, tokens, last) in &rows {
+        // Synthetic names are not folders and cannot move.
+        if !project.starts_with('/') {
+            continue;
+        }
+        let Some(name) = folder_name(project).map(str::to_string) else {
+            continue;
+        };
+        if std::path::Path::new(project).is_dir() {
+            live.push((project.clone(), name, *last));
+        } else if !pinned.contains(project) && last.unwrap_or(0) >= active_since {
+            gone.push((project.clone(), name, *tokens, *last));
+        }
+    }
+    // A live "project" that contains several other live projects is a container
+    // folder — the parent of a checkout tree, where a harness was run once. It is
+    // never a merge target for a nested folder, or every deleted repository below it
+    // would look like one of its subdirectories.
+    let containers: std::collections::HashSet<String> = live
+        .iter()
+        .filter(|(path, _, _)| {
+            let prefix = format!("{path}/");
+            live.iter()
+                .filter(|(other, _, _)| *other != *path && other.starts_with(&prefix))
+                .count()
+                >= 2
+        })
+        .map(|(path, _, _)| path.clone())
+        .collect();
+
+    // The most recently used live namesake is the likeliest new home.
+    live.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    gone.sort_by_key(|(_, _, tokens, _)| std::cmp::Reverse(*tokens));
+
+    // Tokens per project, needed for both the dead and the live candidates.
+    let stats: std::collections::HashMap<String, (i64, Option<i64>)> = rows
+        .iter()
+        .map(|(project, tokens, last)| (project.clone(), (*tokens, *last)))
+        .collect();
+
+    let mut out: Vec<ProjectSuggestion> = Vec::new();
+    for (from, name, tokens, last) in gone {
+        // A live project with the same folder name is the likeliest new home.
+        let same_name = live
+            .iter()
+            .find(|(path, n, _)| n == &name && path != &from)
+            .map(|(path, _, last)| (path.clone(), *last, "same_name"));
+        // Otherwise the dead folder may simply be *inside* a live project: a folder
+        // that was never a repository of its own kept turning each new working
+        // directory into a project. The deepest live ancestor is the right one.
+        let nested = live
+            .iter()
+            .filter(|(path, _, _)| {
+                !containers.contains(path) && from.starts_with(&format!("{path}/"))
+            })
+            .max_by_key(|(path, _, _)| path.len())
+            .map(|(path, _, last)| (path.clone(), *last, "inside"));
+        let Some((to, to_last, reason)) = same_name.or(nested) else {
+            continue;
+        };
+        out.push(ProjectSuggestion {
+            from,
+            to,
+            reason: reason.to_string(),
+            from_exists: false,
+            from_last_ts: last,
+            to_last_ts: to_last,
+            from_tokens: tokens,
+        });
+    }
+
+    // The other half of the same story, still live: a folder sitting directly inside
+    // a live project that never folded into it, because that project is a plain
+    // directory rather than a repository. No repository of its own means no reason
+    // for it to be a project, so it is offered — never applied.
+    for (path, _, last) in &live {
+        if pinned.contains(path) {
+            continue;
+        }
+        let Some(parent) = folder_parent(path) else {
+            continue;
+        };
+        if !live.iter().any(|(p, _, _)| *p == parent) {
+            continue;
+        }
+        if crate::project_id::inspect(path).root.is_some() {
+            continue;
+        }
+        let Some((tokens, _)) = stats.get(path) else {
+            continue;
+        };
+        let parent_last = live
+            .iter()
+            .find(|(p, _, _)| *p == parent)
+            .and_then(|(_, _, l)| *l);
+        out.push(ProjectSuggestion {
+            from: path.clone(),
+            to: parent,
+            reason: "subfolder".to_string(),
+            from_exists: true,
+            from_last_ts: *last,
+            to_last_ts: parent_last,
+            from_tokens: *tokens,
+        });
+    }
+
+    // Biggest history first: that is the fold that changes the numbers most.
+    out.sort_by_key(|s| std::cmp::Reverse(s.from_tokens));
+    out.truncate(MAX_SUGGESTIONS);
+    Ok(out)
 }
 
 pub fn daily_by_project(store: &Store, days: i64) -> DbResult<Vec<DailyProjectRow>> {
@@ -1903,7 +2084,7 @@ pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
         let mut stmt = conn.prepare(&format!(
             "SELECT {PROJECT}, COALESCE(SUM({T}),0)
              FROM usage_event u LEFT JOIN project_alias pj ON pj.alias = u.project
-             WHERE {w} GROUP BY 1 ORDER BY 2 DESC LIMIT 1",
+             WHERE {w} AND {PROJECT} != 'unknown' GROUP BY 1 ORDER BY 2 DESC LIMIT 1",
             T = TOKENS
         ))?;
         let mut rows = stmt
@@ -2931,14 +3112,100 @@ mod tests {
     }
 
     #[test]
+    fn project_suggestions_offer_a_live_ancestor_for_a_nested_dead_folder() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let root = crate::collectors::test_root().join(format!("tt-nest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let live = root.join("plain-project");
+        std::fs::create_dir_all(&live).unwrap();
+        let live_s = live.to_string_lossy().to_string();
+        let gone_s = live.join("notes/scripts").to_string_lossy().to_string();
+
+        store
+            .insert_events(&[
+                project_event("1", &gone_s, now - 2000, 300),
+                project_event("2", &live_s, now - 1000, 900),
+            ])
+            .unwrap();
+
+        let suggestions = project_suggestions(&store).unwrap();
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].from, gone_s);
+        assert_eq!(suggestions[0].to, live_s);
+        assert_eq!(suggestions[0].reason, "inside");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_suggestions_offer_a_live_subfolder_of_a_project() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let root = crate::collectors::test_root().join(format!("tt-sub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("plain-project");
+        let sub = project.join("scripts");
+        std::fs::create_dir_all(&sub).unwrap();
+        let project_s = project.to_string_lossy().to_string();
+        let sub_s = sub.to_string_lossy().to_string();
+
+        store
+            .insert_events(&[
+                project_event("1", &project_s, now - 2000, 900),
+                project_event("2", &sub_s, now - 1000, 100),
+            ])
+            .unwrap();
+
+        let suggestions = project_suggestions(&store).unwrap();
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].from, sub_s);
+        assert_eq!(suggestions[0].to, project_s);
+        assert_eq!(suggestions[0].reason, "subfolder");
+        assert!(suggestions[0].from_exists);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_suggestions_pair_a_dead_folder_with_a_live_namesake() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let root = crate::collectors::test_root().join(format!("tt-sugg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let live = root.join("new/Probe");
+        std::fs::create_dir_all(&live).unwrap();
+        let live_s = live.to_string_lossy().to_string();
+        let gone_s = root.join("old/Probe").to_string_lossy().to_string();
+
+        store
+            .insert_events(&[
+                project_event("1", &gone_s, now - 2000, 500),
+                project_event("2", &live_s, now - 1000, 100),
+            ])
+            .unwrap();
+
+        let suggestions = project_suggestions(&store).unwrap();
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].from, gone_s);
+        assert_eq!(suggestions[0].to, live_s);
+        assert_eq!(suggestions[0].reason, "same_name");
+        assert_eq!(suggestions[0].from_tokens, 500);
+
+        // keeping the folder separate is the dismissal: the guess does not come back
+        store.unmerge_projects(&[gone_s]).unwrap();
+        assert!(project_suggestions(&store).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn project_folders_fold_into_one_project() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let now = now_ms();
         let mk_repo = |name: &str| {
-            let dir = std::env::temp_dir().join(format!("tokentrail-test-{}-{name}", std::process::id()));
+            let dir = crate::collectors::test_root().join(format!("tt-agg-{name}"));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.join(".git")).unwrap();
-            dir
+            // Folders resolve to their real path, and temp_dir is a symlink on macOS.
+            std::fs::canonicalize(&dir).unwrap()
         };
         let repo = mk_repo("agg-main");
         std::fs::create_dir_all(repo.join("sub/a")).unwrap();

@@ -107,9 +107,16 @@ pub fn mtime_ns(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
+/// Scratch root for tests. Kept out of the repository tree so the project fixtures
+/// below it are not folded into TokenTrail's own git root.
+#[cfg(test)]
+pub(crate) fn test_root() -> PathBuf {
+    std::env::temp_dir()
+}
+
 #[cfg(test)]
 pub(crate) fn test_home(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("tokentrail-test-{tag}-{}", std::process::id()));
+    let dir = test_root().join(format!("tokentrail-test-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
