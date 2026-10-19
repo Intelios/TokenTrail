@@ -644,6 +644,32 @@ mod tests {
     }
 
     #[test]
+    fn minimax_m31_flash_prices() {
+        // MiniMax M3.1 Flash (launched 2026-10-19) lists at $0.15/$0.60 per
+        // 1M tokens with $0.015 cached input (10% cache hit discount). Cache
+        // writes are undocumented and bill at the uncached input rate ($0.15),
+        // as for the other entries with undocumented writes.
+        assert_eq!(rates_for("minimax-m3.1-flash").map(|r| r.input), Some(0.15));
+        assert_eq!(rates_for("minimax-m3.1-flash").map(|r| r.output), Some(0.6));
+        assert_eq!(rates_for("minimax-m3.1-flash").map(|r| r.cache_read), Some(0.015));
+        assert_eq!(rates_for("minimax-m3.1-flash").map(|r| r.cache_write), Some(0.15));
+        // Both dot and hyphen spellings resolve.
+        assert_eq!(rates_for("minimax-m3-1-flash").map(|r| r.input), Some(0.15));
+        assert_eq!(rates_for("minimax-m3-1-flash").map(|r| r.output), Some(0.6));
+        assert_eq!(rates_for("minimax-m3-1-flash").map(|r| r.cache_read), Some(0.015));
+        assert_eq!(rates_for("minimax-m3-1-flash").map(|r| r.cache_write), Some(0.15));
+        // Dated snapshots, provider prefixes and uppercase spellings resolve.
+        assert_eq!(rates_for("MiniMax-M3.1-Flash").map(|r| r.input), Some(0.15));
+        assert_eq!(rates_for("minimax/minimax-m3.1-flash").map(|r| r.output), Some(0.6));
+        assert_eq!(rates_for("minimax/MiniMax-M3.1-Flash").map(|r| r.cache_read), Some(0.015));
+        assert_eq!(rates_for("minimax-m3.1-flash-20261019").map(|r| r.output), Some(0.6));
+        // Cost calculation: 1M input ($0.15) + 1M output ($0.60) + 1M cached input ($0.015) = $0.765
+        let e = event(Some("minimax-m3.1-flash"), 1_000_000, 0, 1_000_000, 1_000_000);
+        let cost = cost_usd(e.model.as_deref(), &e).unwrap();
+        assert!((cost - 0.765).abs() < 1e-9);
+    }
+
+    #[test]
     fn dated_family_rates_follow_event_time() {
         let r = |input| Rates { input, output: 0.0, cache_read: 0.0, cache_write: 0.0 };
         let cut = parse_until("2026-10-17").unwrap();

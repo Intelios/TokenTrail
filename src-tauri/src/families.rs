@@ -30,6 +30,9 @@ const FAMILY_RULES: &[(&str, &str)] = &[
     ("qwen", "Qwen"),
     ("glm", "GLM"),
     ("mimo", "MiMo"),
+    // Minimax
+    ("minimax", "Minimax"),
+    ("abab", "Minimax"),
     // Cognition — the SWE line, usually arriving via the Devin CLI
     ("swe", "SWE"),
     // Meta — Llama weights plus the Muse line; family groups by provider
@@ -93,6 +96,10 @@ mod tests {
         assert_eq!(family_for("kimi-k2"), "Kimi");
         assert_eq!(family_for("qwen3.8-max"), "Qwen");
         assert_eq!(family_for("mimo-v2.5-pro"), "MiMo");
+        assert_eq!(family_for("MiniMax-M3.1-Flash"), "Minimax");
+        assert_eq!(family_for("minimax-m3.1-flash"), "Minimax");
+        assert_eq!(family_for("minimax/minimax-m3.1-flash"), "Minimax");
+        assert_eq!(family_for("abab6.5s"), "Minimax");
     }
 
     #[test]

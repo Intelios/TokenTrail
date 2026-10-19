@@ -283,6 +283,8 @@ export const FAMILY_COLORS: Record<string, ChartColor> = {
   Grok: '#0d0d0b',
   MiMo: '#FF6900',
   SWE: '#5E6AD2',
+  Minimax: '#FF3763',
+  MiniMax: '#FF3763',
 };
 
 export function familyColor(family: string, rank: number): ChartColor {
@@ -318,7 +320,8 @@ const FAMILY_RULES: ReadonlyArray<readonly [string, string]> = [
   ['claude-sonnet', 'Claude'], ['claude-haiku', 'Claude'], ['claude', 'Claude'],
   ['gemini-3.7-flash', 'Gemini'], ['gemini-2.5-pro', 'Gemini'], ['gemini', 'Gemini'],
   ['deepseek-v4-pro', 'DeepSeek'], ['deepseek', 'DeepSeek'],
-  ['kimi', 'Kimi'], ['qwen', 'Qwen'], ['glm', 'GLM'], ['mimo', 'MiMo'], ['swe', 'SWE'],
+  ['kimi', 'Kimi'], ['qwen', 'Qwen'], ['glm', 'GLM'], ['mimo', 'MiMo'],
+  ['minimax', 'Minimax'], ['abab', 'Minimax'], ['swe', 'SWE'],
   ['meta-llama', 'Meta'], ['llama', 'Meta'], ['muse', 'Meta'], ['codestral', 'Mistral'], ['mistral', 'Mistral'], ['grok', 'Grok'],
 ];
 
