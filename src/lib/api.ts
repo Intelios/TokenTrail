@@ -297,6 +297,32 @@ export interface FamilyStatsRow {
   models: ModelStatsRow[];
 }
 
+/** One family's card: the family's totals plus the same splits a model card has. */
+export interface FamilyDetail {
+  family: string;
+  tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  events: number;
+  sessions: number;
+  cost_usd: number | null;
+  first_ts: number | null;
+  last_ts: number | null;
+  active_days: number;
+  current_streak: number;
+  longest_streak: number;
+  peak_day: string | null;
+  peak_day_tokens: number;
+  models: ModelStatsRow[];
+  by_source: SourceTotals[];
+  by_project: ProjectRow[];
+  daily: HeatmapCell[];
+  total_window_tokens: number;
+}
+
 export interface ModelDetail {
   model: string;
   tokens: number;
@@ -333,6 +359,27 @@ export interface Big6History {
   longest_days: number;
   /** Oldest first. */
   stints: Big6Stint[];
+}
+
+/** One unbroken run holding a single Big-6 rank; `exited` is null while held. */
+export interface Big6SeatRun {
+  model: string;
+  entered: string;
+  exited: string | null;
+  days: number;
+}
+
+/** Every run at one rank; once filled, the runs tile contiguously. */
+export interface Big6Seat {
+  rank: number;
+  runs: Big6SeatRun[];
+}
+
+/** Seat occupancy over the whole standings history, for the Trends podium.
+ *  `first_date` is the earliest recorded day so the page can clamp its zoom. */
+export interface Big6Timeline {
+  first_date: string | null;
+  seats: Big6Seat[];
 }
 
 export interface Achievement {
@@ -462,6 +509,7 @@ export const api = {
   modelAchievements: (model: string) =>
     invoke<Achievement[]>('get_model_achievements', { model }),
   modelBig6: (model: string) => invoke<Big6History | null>('get_model_big6', { model }),
+  big6Timeline: () => invoke<Big6Timeline>('get_big6_timeline'),
   byProject: (days: number) => invoke<ProjectRow[]>('get_by_project', { days }),
   dailyByProject: (days: number) => invoke<DailyProjectRow[]>('get_daily_by_project', { days }),
   projectDetail: (project: string, days: number) =>
@@ -515,6 +563,10 @@ export const api = {
   /** Hand these folders back to automatic root-folding (nearest git root). */
   regroupProjects: (names: string[]) => invoke<void>('regroup_projects', { names }),
   familyStats: (days: number) => invoke<FamilyStatsRow[]>('get_family_stats', { days }),
+  familyDetail: (family: string, days: number) =>
+    invoke<FamilyDetail | null>('get_family_detail', { family, days }),
+  familyAchievements: (family: string) =>
+    invoke<Achievement[]>('get_family_achievements', { family }),
   leaderboardEvents: (days: number) => invoke<LeaderboardEvent[]>('get_leaderboard_events', { days }),
   peakDays: (days: number) => invoke<PeakDayRow[]>('get_peak_days', { days }),
   wrappedSummary: (days: number) => invoke<WrappedSummary>('get_wrapped_summary', { days }),

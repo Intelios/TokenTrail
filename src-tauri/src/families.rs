@@ -61,6 +61,19 @@ pub fn family_for(model: &str) -> &'static str {
     "Other"
 }
 
+/// The canonical display spelling of a family, matched case-insensitively so a
+/// URL segment (`claude`, `gpt`) resolves to the label the rest of the UI uses.
+pub fn canonical_family_name(input: &str) -> Option<&'static str> {
+    let want = input.trim();
+    if want.eq_ignore_ascii_case("Other") {
+        return Some("Other");
+    }
+    FAMILY_RULES
+        .iter()
+        .map(|(_, family)| *family)
+        .find(|family| family.eq_ignore_ascii_case(want))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +140,16 @@ mod tests {
     fn unknown_is_other() {
         assert_eq!(family_for("totally-unknown-model"), "Other");
         assert_eq!(family_for(""), "Other");
+    }
+
+    #[test]
+    fn canonical_names_resolve_case_insensitively() {
+        assert_eq!(canonical_family_name("claude"), Some("Claude"));
+        assert_eq!(canonical_family_name("Claude"), Some("Claude"));
+        assert_eq!(canonical_family_name("GPT"), Some("GPT"));
+        assert_eq!(canonical_family_name("minimax"), Some("Minimax"));
+        assert_eq!(canonical_family_name(" other "), Some("Other"));
+        assert_eq!(canonical_family_name("Claude Family"), None);
+        assert_eq!(canonical_family_name(""), None);
     }
 }

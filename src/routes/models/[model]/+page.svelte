@@ -11,6 +11,7 @@
     fmtDate,
     fmtDateTime,
     fmtTokens,
+    familyFor,
     modelColor,
     MIX_COLORS,
     REASONING_COLOR,
@@ -175,6 +176,10 @@
         <div class="sub">
           {detail.events.toLocaleString()} calls across
           {detail.by_source.length} harness{detail.by_source.length !== 1 ? 'es' : ''}
+          ·
+          <a class="familylink" href={'/families/' + encodeURIComponent(familyFor(detail.model))}>
+            {familyFor(detail.model)} family
+          </a>
           {#if detail.first_ts}
             · since {fmtDate(detail.first_ts)}
           {/if}
@@ -414,6 +419,15 @@
   }
   .backlink:hover {
     color: var(--org);
+  }
+  .familylink {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid currentColor;
+  }
+  .familylink:hover {
+    color: var(--org);
+    border-color: var(--org);
   }
   .thd h1 {
     margin: 0;

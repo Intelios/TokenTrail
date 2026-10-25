@@ -1,6 +1,7 @@
 use crate::aggregate::{
-    self, Achievement, Big6History, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow, EstimatedShare,
-    FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow,
+    self, Achievement, Big6History, Big6Timeline, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow,
+    EstimatedShare,
+    FamilyDetail, FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow,
     Overview, PeakDayRow, ProjectDetail, ProjectRow, ProjectSuggestion, WackCodeCallRow,
     WackCodeDetail, WrappedSummary,
 };
@@ -94,6 +95,11 @@ pub fn get_model_achievements(
 #[tauri::command]
 pub fn get_model_big6(state: State<AppState>, model: String) -> Result<Option<Big6History>, String> {
     aggregate::model_big6(&state.store, &model).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_big6_timeline(state: State<AppState>) -> Result<Big6Timeline, String> {
+    aggregate::big6_timeline(&state.store).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -499,6 +505,23 @@ pub fn export_data(
 #[tauri::command]
 pub fn get_family_stats(state: State<AppState>, days: i64) -> Result<Vec<FamilyStatsRow>, String> {
     aggregate::family_stats(&state.store, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_family_detail(
+    state: State<AppState>,
+    family: String,
+    days: i64,
+) -> Result<Option<FamilyDetail>, String> {
+    aggregate::family_detail(&state.store, &family, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_family_achievements(
+    state: State<AppState>,
+    family: String,
+) -> Result<Vec<Achievement>, String> {
+    aggregate::family_achievements(&state.store, &family).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

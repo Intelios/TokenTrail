@@ -201,6 +201,10 @@
   function modelUrl(name: string): string {
     return '/models/' + encodeURIComponent(name);
   }
+
+  function familyUrl(name: string): string {
+    return '/families/' + encodeURIComponent(name);
+  }
 </script>
 
 <div class="fframe">
@@ -240,14 +244,26 @@
       </div>
       <div class="mc hl up" style="animation-delay:60ms">
         <div class="k">Top family</div>
-        <div class="v name ell" title={sorted[0]?.family}>{sorted[0]?.family ?? '—'}</div>
+        <div class="v name ell" title={sorted[0]?.family}>
+          {#if sorted[0]}
+            <a class="famlink" href={familyUrl(sorted[0].family)}>{sorted[0].family}</a>
+          {:else}
+            —
+          {/if}
+        </div>
         <div class="h">
           {totalMetric ? ((metricVal(sorted[0]) / totalMetric) * 100).toFixed(1) : 0}% of {metricLabel}
         </div>
       </div>
       <div class="mc up" style="animation-delay:120ms">
         <div class="k">Costliest</div>
-        <div class="v name ell" title={costliest?.family}>{costliest?.family ?? '—'}</div>
+        <div class="v name ell" title={costliest?.family}>
+          {#if costliest}
+            <a class="famlink" href={familyUrl(costliest.family)}>{costliest.family}</a>
+          {:else}
+            —
+          {/if}
+        </div>
         <div class="h">{fmtCost(costliest?.cost_usd ?? null)} est.</div>
       </div>
       <div class="mc up" style="animation-delay:180ms">
@@ -286,7 +302,7 @@
           {@const color = familySwatch(f.family, i)}
           <div class="rankbar up" style="animation-delay:{i * 50}ms">
             <span class="chip" style="background:{color}">{i + 1}</span>
-            <span class="nm" title={f.family}>{f.family}</span>
+            <a class="nm famlink" href={familyUrl(f.family)} title={f.family}>{f.family}</a>
             <span class="tr" data-tip="{f.family} · {fmtMetricExact(metricVal(f))}">
               <div
                 class="gw"
@@ -313,10 +329,28 @@
         {@const flat = familyFlat(f.family, fi)}
         {@const isOpen = expanded.has(f.family)}
         <div class="fam" class:open={isOpen}>
-          <!-- family header -->
-          <button class="fhead up" style="animation-delay:{fi * 45}ms" onclick={() => toggle(f.family)}>
+          <!-- family header: clicking the row toggles the inline model table,
+               the name and CARD pill open the family card -->
+          <div
+            class="fhead up"
+            style="animation-delay:{fi * 45}ms"
+            role="button"
+            tabindex="0"
+            aria-expanded={isOpen}
+            onclick={(e) => {
+              if ((e.target as HTMLElement).closest('a')) return;
+              toggle(f.family);
+            }}
+            onkeydown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle(f.family);
+              }
+            }}
+          >
             <span class="chip" style="background:{color}">{fi + 1}</span>
-            <span class="fnm">{f.family}</span>
+            <a class="fnm famlink" href={familyUrl(f.family)} title={f.family}>{f.family}</a>
             <span class="fcnt">{f.models.length} model{f.models.length !== 1 ? 's' : ''}</span>
             <span class="ftags">
               {#each f.sources as s}
@@ -335,8 +369,9 @@
               </span>
               <span class="pct">{totalMetric ? ((metricVal(f) / totalMetric) * 100).toFixed(0) : 0}%</span>
             </span>
+            <a class="fcardlink" href={familyUrl(f.family)} title="Open the {f.family} family card">CARD →</a>
             <span class="chev" class:rot={isOpen}>▼</span>
-          </button>
+          </div>
 
           <!-- member models -->
           {#if isOpen}
@@ -690,6 +725,39 @@
     text-decoration: underline;
   }
 
+  .famlink {
+    color: inherit;
+    text-decoration: none;
+  }
+  .famlink:hover {
+    color: var(--org);
+    text-decoration: underline;
+  }
+  /* the highlighted top-family card is already orange */
+  .mc.hl .famlink:hover {
+    color: #fff;
+  }
+
+  .fcardlink {
+    flex: none;
+    font: 600 9px/1 var(--font-mono);
+    letter-spacing: 0.8px;
+    padding: 5px 7px;
+    border: 2px solid var(--ink);
+    color: var(--ink);
+    background: none;
+    white-space: nowrap;
+  }
+  .fcardlink:hover {
+    background: var(--org);
+    border-color: var(--org);
+    color: #fff;
+  }
+  .fhead:focus-visible {
+    outline: 2px solid var(--org);
+    outline-offset: -2px;
+  }
+
   .noteband {
     border-left: none;
     border-right: none;
@@ -712,6 +780,9 @@
       border-bottom: 2px solid var(--ink);
     }
     .ftags {
+      display: none;
+    }
+    .fcardlink {
       display: none;
     }
     .fstat:last-of-type {

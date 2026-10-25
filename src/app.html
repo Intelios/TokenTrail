@@ -199,6 +199,19 @@
             return {totals:{events:1428,measured_events:1300,priced_events:1214,input_tokens:2900000,output_tokens:800000,cache_read_tokens:1200000,cache_write_tokens:0,estimated_tokens:52000,cost_usd:24.81,avg_duration_ms:4820,avg_ttft_ms:410},features:rows(['chat','summary','arena','groupDirector','recap']),models:rows(['claude-sonnet-5','gemini-3-pro']),providers:rows(['OpenRouter','Google']),characters:rows(WCHAT_CAST.map(c=>c.character_id)),conversations:rows(WCHAT_CHATS.map(c=>c.id)),outcomes:rows(['completed','cancelled','unknown']),daily:Array.from({length:30},(_,i)=>({name:iso(i),events:44,measured_tokens:Math.round(rng()*180000),estimated_tokens:Math.round(rng()*5000),cost_usd:.7})),calls:args.sessionId?[{id:'demo-generation',ts:Date.now(),model:'claude-sonnet-5',purpose:'chat',outcome:'completed',measured_tokens:14200,estimated_tokens:0,cost_usd:.08,duration_ms:4500,ttft_ms:300}]:[]};
           }
 
+          // Family rollups are shared by the Families list and each family card.
+          function familyStatsMock(days) {
+            const fams = {};
+            MODELS.forEach((m) => {
+              const norm = m[0].split('/').pop().split('[')[0].trim().toLowerCase();
+              const fam = norm.startsWith('claude') ? 'Claude' : norm.startsWith('gpt') ? 'GPT' : norm.startsWith('gemini') ? 'Gemini' : norm.startsWith('minimax') || norm.startsWith('abab') ? 'Minimax' : 'Other';
+              if (!fams[fam]) fams[fam] = { family: fam, tokens: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, events: 0, sessions: 0, cost_usd: 0, first_ts: Date.now() - 300 * 86400000, last_ts: Date.now(), sources: new Set(), models: [] };
+              const row = { model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31, cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5, events: m[4], sessions: m[5], cost_usd: m[3], first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - MODELS.indexOf(m) * 86400000, sources: m[2], active_days: Math.max(1, Math.min(Math.round((days ?? 90) * 0.6), 42)) };
+              const f = fams[fam]; f.tokens += m[1]; f.input_tokens += row.input_tokens; f.output_tokens += row.output_tokens; f.cache_read_tokens += row.cache_read_tokens; f.cache_write_tokens += row.cache_write_tokens; f.events += m[4]; f.sessions += m[5]; f.cost_usd += m[3]; m[2].forEach((s) => f.sources.add(s)); f.models.push(row);
+            });
+            return Object.values(fams).map((f) => ({ ...f, sources: [...f.sources], models: f.models.sort((a, b) => b.tokens - a.tokens) })).sort((a, b) => b.tokens - a.tokens);
+          }
+
           function mockData(cmd, args) {
             switch (cmd) {
               case 'get_wackchatter_libraries': return [{id:'demo-library',name:'Story library',available:true,current:true}];
@@ -276,6 +289,22 @@
                 if (i < 0 || i > 6) return null;
                 if (i === 6) return { total_days: 50, longest_days: 50, stints: [{ entered: iso(140), exited: iso(90), days: 50 }] };
                 return { total_days: 71 + i * 9, longest_days: 41 + i * 9, stints: [{ entered: iso(200), exited: iso(170), days: 30 }, { entered: iso(41 + i * 9), exited: null, days: 41 + i * 9 }] };
+              }
+              // All-time podium: each seat's runs tile contiguously and no
+              // model holds two seats at once (hand-built to stay consistent).
+              case 'get_big6_timeline': {
+                const run = (model, a, b) => ({ model, entered: iso(a), exited: b == null ? null : iso(b), days: a - (b ?? 0) });
+                return {
+                  first_date: iso(400),
+                  seats: [
+                    { rank: 1, runs: [run('claude-sonnet-5', 400, 330), run('gemini-2.5-pro', 330, 140), run('claude-opus-5', 140, null)] },
+                    { rank: 2, runs: [run('gpt-4.1', 400, 330), run('claude-sonnet-5', 330, 140), run('gpt-5.6-sol', 140, 40), run('claude-sonnet-5', 40, null)] },
+                    { rank: 3, runs: [run('gemini-2.5-pro', 400, 330), run('claude-opus-4.1', 330, 250), run('gpt-5.5', 250, 150), run('gemini-3-pro', 150, null)] },
+                    { rank: 4, runs: [run('claude-opus-4.1', 400, 330), run('claude-haiku-4-5', 330, 250), run('gpt-5', 250, 170), run('swe-1-6-slow', 170, 150), run('gpt-5.5', 150, 110), run('gpt-5', 110, 40), run('gpt-5.6-sol', 40, null)] },
+                    { rank: 5, runs: [run('claude-haiku-4-5', 400, 330), run('gpt-5.5', 330, 250), run('claude-haiku-4-5', 250, 170), run('gpt-5', 170, 110), run('gpt-5.5', 110, null)] },
+                    { rank: 6, runs: [run('gpt-5.5', 400, 330), run('swe-1-6-slow', 330, 250), run('gpt-5.6-sol', 250, 140), run('claude-opus-4.1', 140, 100), run('claude-haiku-4-5', 100, null)] },
+                  ],
+                };
               }
               case 'get_model_achievements': {
                 const m = MODELS.find((x) => x[0] === args.model);
@@ -515,15 +544,64 @@
               case 'sync_now': return SOURCES.map((s) => ({ source: s, processed: Math.round(rng() * 400), error: null }));
               case 'export_data': return '/home/dev/.local/share/TokenTrail/usage.' + (args.format ?? 'csv');
               case 'get_family_stats': {
-                const fams = {};
-                MODELS.forEach((m) => {
-                  const norm = m[0].split('/').pop().split('[')[0].trim().toLowerCase();
-                  const fam = norm.startsWith('claude') ? 'Claude' : norm.startsWith('gpt') ? 'GPT' : norm.startsWith('gemini') ? 'Gemini' : norm.startsWith('minimax') || norm.startsWith('abab') ? 'Minimax' : 'Other';
-                  if (!fams[fam]) fams[fam] = { family: fam, tokens: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, events: 0, sessions: 0, cost_usd: 0, first_ts: Date.now() - 300 * 86400000, last_ts: Date.now(), sources: new Set(), models: [] };
-                  const row = { model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31, cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5, events: m[4], sessions: m[5], cost_usd: m[3], first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - MODELS.indexOf(m) * 86400000, sources: m[2] };
-                  const f = fams[fam]; f.tokens += m[1]; f.input_tokens += row.input_tokens; f.output_tokens += row.output_tokens; f.cache_read_tokens += row.cache_read_tokens; f.cache_write_tokens += row.cache_write_tokens; f.events += m[4]; f.sessions += m[5]; f.cost_usd += m[3]; m[2].forEach((s) => f.sources.add(s)); f.models.push(row);
+                return familyStatsMock(args.days ?? 90);
+              }
+              case 'get_family_detail': {
+                const fam = familyStatsMock(args.days ?? 90).find((f) => f.family.toLowerCase() === String(args.family ?? '').toLowerCase());
+                if (!fam) return null;
+                const n = Math.min(args.days ?? 90, 150);
+                const daily = Array.from({ length: n }, (_, i) => ({ date: iso(n - 1 - i), tokens: Math.round(fam.tokens / 90 * (0.3 + rng() * 1.7)) }));
+                const by_source = fam.sources.map((s, i) => {
+                  const share = i === 0 ? 0.6 : 0.4 / Math.max(1, fam.sources.length - 1);
+                  return { source: s, tokens: Math.round(fam.tokens * share), events: Math.round(fam.events * share), sessions: Math.round(fam.sessions * share), cost_usd: fam.cost_usd * share };
                 });
-                return Object.values(fams).map((f) => ({ ...f, sources: [...f.sources], models: f.models.sort((a, b) => b.tokens - a.tokens) })).sort((a, b) => b.tokens - a.tokens);
+                const by_project = PROJECTS.map((p, i) => ({
+                  project: p[0],
+                  tokens: Math.round(fam.tokens * p[1]),
+                  events: Math.round(fam.events * p[1]),
+                  sessions: Math.round(fam.sessions * p[1]),
+                  cost_usd: fam.cost_usd * p[1],
+                  first_ts: Date.now() - 280 * 86400000,
+                  last_ts: Date.now() - i * 7200000,
+                }));
+                return {
+                  family: fam.family,
+                  tokens: fam.tokens,
+                  input_tokens: fam.input_tokens,
+                  output_tokens: fam.output_tokens,
+                  reasoning_tokens: Math.round(fam.tokens * 0.12),
+                  cache_read_tokens: fam.cache_read_tokens,
+                  cache_write_tokens: fam.cache_write_tokens,
+                  events: fam.events,
+                  sessions: fam.sessions,
+                  cost_usd: fam.cost_usd,
+                  first_ts: fam.first_ts,
+                  last_ts: fam.last_ts,
+                  active_days: Math.min(187, n),
+                  current_streak: 12,
+                  longest_streak: 40,
+                  peak_day: iso(9),
+                  peak_day_tokens: Math.round(fam.tokens / 30),
+                  models: fam.models,
+                  by_source,
+                  by_project,
+                  daily,
+                  total_window_tokens: totalTokens,
+                };
+              }
+              case 'get_family_achievements': {
+                const fam = familyStatsMock(90).find((f) => f.family.toLowerCase() === String(args.family ?? '').toLowerCase());
+                if (!fam) return [];
+                return [
+                  { kind: 'peak_day', tier: null, title: 'Peak Day', value: '4.2M tokens', earned_ts: Date.now() - 9 * 86400000 },
+                  { kind: 'longest_streak', tier: null, title: 'Longest Streak', value: '40 days in a row', earned_ts: Date.now() - 14 * 86400000 },
+                  { kind: 'multi_harness', tier: null, title: 'Multi-Harness', value: `Used in ${fam.sources.length} harnesses`, earned_ts: Date.now() - 60 * 86400000 },
+                  { kind: 'family_champion', tier: null, title: 'Top Family', value: 'Most used model family', earned_ts: null },
+                  { kind: 'token_milestone', tier: '100m', title: '100M Tokens', value: '100M tokens', earned_ts: Date.now() - 120 * 86400000 },
+                  { kind: 'big_spender', tier: '100', title: '$100 Spent', value: '$100 spent', earned_ts: Date.now() - 75 * 86400000 },
+                  { kind: 'first_project', tier: null, title: 'First Project', value: 'tokentrail', earned_ts: Date.now() - 280 * 86400000 },
+                  { kind: 'project_explorer', tier: null, title: 'Project Explorer', value: 'Used in 4 projects', earned_ts: Date.now() - 45 * 86400000 },
+                ];
               }
               case 'plugin:event|listen': return 1;
               default: return null;

@@ -683,6 +683,32 @@ pub struct FamilyStatsRow {
     pub models: Vec<ModelStatsRow>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct FamilyDetail {
+    pub family: String,
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub cost_usd: Option<f64>,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub active_days: i64,
+    pub current_streak: i64,
+    pub longest_streak: i64,
+    pub peak_day: Option<String>,
+    pub peak_day_tokens: i64,
+    pub models: Vec<ModelStatsRow>,
+    pub by_source: Vec<SourceTotals>,
+    pub by_project: Vec<ProjectRow>,
+    pub daily: Vec<HeatmapCell>,
+    pub total_window_tokens: i64,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct LeaderboardEvent {
     pub kind: String,
@@ -1434,6 +1460,517 @@ pub fn family_stats(store: &Store, days: i64) -> DbResult<Vec<FamilyStatsRow>> {
         f.models.sort_by_key(|b| std::cmp::Reverse(b.tokens));
     }
     Ok(families)
+}
+
+/// The display names of every model that belongs to `family`.
+///
+/// `families::family_for` is the one place the prefix rules live and SQLite
+/// cannot call it, so membership is resolved here and the queries below filter
+/// on the resulting names. Hidden models are already absent from the list.
+fn family_model_names(conn: &rusqlite::Connection, family: &str) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT COALESCE(a.canonical, u.model, 'unknown')
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {H}",
+        H = NOT_HIDDEN
+    ))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(names
+        .into_iter()
+        .filter(|m| families::family_for(m) == family)
+        .collect())
+}
+
+/// One `?` placeholder per family member name.
+fn family_name_filter(names: &[String]) -> String {
+    let holes = vec!["?"; names.len()].join(",");
+    format!("COALESCE(a.canonical, u.model, 'unknown') IN ({holes})")
+}
+
+fn family_name_params(names: &[String]) -> Vec<rusqlite::types::Value> {
+    names
+        .iter()
+        .cloned()
+        .map(rusqlite::types::Value::Text)
+        .collect()
+}
+
+/// Full detail card for one model family, keyed by the family label (matched
+/// case-insensitively) and filtered by range in days. Returns `None` when no
+/// visible model has ever resolved to that family.
+pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<FamilyDetail>> {
+    let Some(fam) = families::canonical_family_name(family) else {
+        return Ok(None);
+    };
+    let conn = store.read_conn();
+    let names = family_model_names(&conn, fam)?;
+    if names.is_empty() {
+        return Ok(None);
+    }
+
+    let cutoff_ts = cutoff(days);
+    let filter = family_name_filter(&names);
+    let mut params = vec![rusqlite::types::Value::Integer(cutoff_ts)];
+    params.extend(family_name_params(&names));
+
+    let totals_sql = format!(
+        "SELECT COALESCE(SUM(u.input_tokens),0),
+                COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
+                COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
+                COALESCE(SUM(u.reasoning_tokens),0),
+                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE u.ts >= ? AND {F} AND {H}",
+        T = TOKENS,
+        F = filter,
+        H = NOT_HIDDEN
+    );
+    let mut stmt = conn.prepare(&totals_sql)?;
+    let (inp, out, cr, cw, reasoning, total, events, sessions, cost, first_ts, last_ts) =
+        stmt.query_row(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, Option<f64>>(8)?,
+                r.get::<_, Option<i64>>(9)?,
+                r.get::<_, Option<i64>>(10)?,
+            ))
+        })?;
+
+    // Same shape as `model_stats`, restricted to the family's display names.
+    let models_sql = format!(
+        "SELECT COALESCE(a.canonical, u.model, 'unknown'),
+                COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+                COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
+                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source),
+                COUNT(DISTINCT date(u.ts/1000, 'unixepoch'))
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE u.ts >= ? AND {F} AND {H}
+         GROUP BY 1 ORDER BY 6 DESC",
+        T = TOKENS,
+        F = filter,
+        H = NOT_HIDDEN
+    );
+    let mut stmt = conn.prepare(&models_sql)?;
+    let models: Vec<ModelStatsRow> = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            let src_str: Option<String> = r.get(11)?;
+            let sources = src_str
+                .map(|s| s.split(',').map(String::from).collect())
+                .unwrap_or_default();
+            Ok(ModelStatsRow {
+                model: r.get(0)?,
+                input_tokens: r.get(1)?,
+                output_tokens: r.get(2)?,
+                cache_read_tokens: r.get(3)?,
+                cache_write_tokens: r.get(4)?,
+                tokens: r.get(5)?,
+                events: r.get(6)?,
+                sessions: r.get(7)?,
+                cost_usd: r.get(8)?,
+                first_ts: r.get(9)?,
+                last_ts: r.get(10)?,
+                sources,
+                active_days: r.get(12)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let by_source = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE u.ts >= ? AND {F} AND {H}
+             GROUP BY u.source ORDER BY 2 DESC",
+            T = TOKENS,
+            F = filter,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+                Ok(SourceTotals {
+                    source: r.get(0)?,
+                    tokens: r.get(1)?,
+                    events: r.get(2)?,
+                    sessions: r.get(3)?,
+                    cost_usd: r.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    let by_project = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
+                    COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             LEFT JOIN project_alias pj ON pj.alias = u.project
+             WHERE u.ts >= ? AND {F} AND {H}
+             GROUP BY 1 ORDER BY 2 DESC",
+            P = PROJECT,
+            T = TOKENS,
+            F = filter,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+                Ok(ProjectRow {
+                    project: r.get(0)?,
+                    tokens: r.get(1)?,
+                    events: r.get(2)?,
+                    sessions: r.get(3)?,
+                    cost_usd: r.get(4)?,
+                    first_ts: r.get(5)?,
+                    last_ts: r.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    let daily: Vec<HeatmapCell> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE u.ts >= ? AND {F} AND {H}
+             GROUP BY d ORDER BY d",
+            T = TOKENS,
+            F = filter,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+                Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    let dates: Vec<String> = daily.iter().map(|d| d.date.clone()).collect();
+    let active_days = dates.len() as i64;
+    let (current_streak, longest_streak) = streaks(&dates);
+    let peak = daily.iter().max_by_key(|d| d.tokens);
+
+    let total_window_tokens: i64 = conn.query_row(
+        &format!(
+            "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ? AND {H}",
+            T = TOKENS,
+            H = NOT_HIDDEN
+        ),
+        [cutoff_ts],
+        |r| r.get(0),
+    )?;
+
+    Ok(Some(FamilyDetail {
+        family: fam.to_string(),
+        tokens: total,
+        input_tokens: inp,
+        output_tokens: out,
+        reasoning_tokens: reasoning,
+        cache_read_tokens: cr,
+        cache_write_tokens: cw,
+        events,
+        sessions,
+        cost_usd: cost,
+        first_ts,
+        last_ts,
+        active_days,
+        current_streak,
+        longest_streak,
+        peak_day: peak.map(|p| p.date.clone()),
+        peak_day_tokens: peak.map(|p| p.tokens).unwrap_or(0),
+        models,
+        by_source,
+        by_project,
+        daily,
+        total_window_tokens,
+    }))
+}
+
+/// Achievements for a whole family: the same milestones one model can earn,
+/// accumulated across every model that belongs to it. All-time by design — an
+/// achievement is something that happened, not something inside a range.
+pub fn family_achievements(store: &Store, family: &str) -> DbResult<Vec<Achievement>> {
+    let Some(fam) = families::canonical_family_name(family) else {
+        return Ok(Vec::new());
+    };
+    let conn = store.read_conn();
+    let names = family_model_names(&conn, fam)?;
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let filter = family_name_filter(&names);
+    let name_values = family_name_params(&names);
+
+    let mut achievements = Vec::new();
+
+    // 1. Daily usage for Peak Day and Longest Streak
+    let daily_rows: Vec<(String, i64, i64)> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT date(ts/1000, 'unixepoch') AS d, COALESCE(SUM({T}), 0), MIN(ts)
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE {F} AND {H}
+             GROUP BY d ORDER BY d",
+            T = TOKENS,
+            F = filter,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(name_values.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    if let Some((_d, tokens, min_ts)) = daily_rows.iter().max_by_key(|r| r.1) {
+        if *tokens > 0 {
+            achievements.push(Achievement {
+                kind: "peak_day".to_string(),
+                tier: None,
+                title: "Peak Day".to_string(),
+                value: format!("{} tokens", format_tokens(*tokens)),
+                earned_ts: Some(*min_ts),
+            });
+        }
+    }
+
+    let day_fmt = format_description!("[year]-[month]-[day]");
+    let mut longest = 0i64;
+    let mut longest_end_ts: Option<i64> = None;
+    let mut run = 0i64;
+    let mut prev: Option<time::Date> = None;
+
+    for (d_str, _tokens, min_ts) in &daily_rows {
+        let Ok(parsed) = time::Date::parse(d_str, &day_fmt) else {
+            continue;
+        };
+        if let Some(p) = prev {
+            if next_day(p) == parsed {
+                run += 1;
+            } else {
+                run = 1;
+            }
+        } else {
+            run = 1;
+        }
+        if run > longest {
+            longest = run;
+            longest_end_ts = Some(*min_ts);
+        }
+        prev = Some(parsed);
+    }
+
+    if longest >= 2 {
+        achievements.push(Achievement {
+            kind: "longest_streak".to_string(),
+            tier: None,
+            title: "Longest Streak".to_string(),
+            value: format!("{} days in a row", longest),
+            earned_ts: longest_end_ts,
+        });
+    }
+
+    // 2. Multi-Harness
+    let sources: Vec<(String, i64)> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT u.source, MIN(u.ts) AS first_ts
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE {F} AND {H}
+             GROUP BY u.source ORDER BY first_ts ASC",
+            F = filter,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(name_values.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    if sources.len() >= 2 {
+        achievements.push(Achievement {
+            kind: "multi_harness".to_string(),
+            tier: None,
+            title: "Multi-Harness".to_string(),
+            value: format!("Used in {} harnesses", sources.len()),
+            earned_ts: Some(sources[1].1),
+        });
+    }
+
+    // 3. Family Champion — the family that owns the most tokens overall
+    // carries the crown. "Other" is a bucket, not a family, so it never does.
+    if fam != "Other" {
+        let family_totals: HashMap<&'static str, i64> = {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT COALESCE(a.canonical, u.model, 'unknown') AS m, COALESCE(SUM({T}), 0) AS tok
+                 FROM usage_event u
+                 LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+                 WHERE {H}
+                 GROUP BY m",
+                T = TOKENS,
+                H = NOT_HIDDEN
+            ))?;
+            let rows: Vec<(String, i64)> = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut totals: HashMap<&'static str, i64> = HashMap::new();
+            for (model, tokens) in rows {
+                *totals.entry(families::family_for(&model)).or_insert(0) += tokens;
+            }
+            totals
+        };
+        let top = family_totals.iter().max_by_key(|(_, tokens)| **tokens);
+        if let Some((top_family, top_tokens)) = top {
+            if *top_family == fam && *top_tokens > 0 {
+                achievements.push(Achievement {
+                    kind: "family_champion".to_string(),
+                    tier: None,
+                    title: "Top Family".to_string(),
+                    value: "Most used model family".to_string(),
+                    earned_ts: None,
+                });
+            }
+        }
+    }
+
+    // 4. Token Milestones & Big Spender (scanned in chronological order)
+    let mut stmt_events = conn.prepare(&format!(
+        "SELECT u.ts, {T}, COALESCE(u.cost_usd, 0.0)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {F} AND {H}
+         ORDER BY u.ts ASC",
+        T = TOKENS,
+        F = filter,
+        H = NOT_HIDDEN
+    ))?;
+    let mut event_rows = stmt_events.query(rusqlite::params_from_iter(name_values.iter()))?;
+
+    let token_tiers: &[(i64, &str, &str, &str)] = &[
+        (100_000_000, "100m", "100M Tokens", "100M tokens"),
+        (500_000_000, "500m", "500M Tokens", "500M tokens"),
+        (1_000_000_000, "1b", "1B Tokens", "1B tokens"),
+    ];
+    let mut next_token_tier = 0;
+    let mut earned_token_milestones = Vec::new();
+
+    let cost_tiers: &[(f64, &str, &str, &str)] = &[
+        (100.0, "100", "$100 Spent", "$100 spent"),
+        (500.0, "500", "$500 Spent", "$500 spent"),
+        (1000.0, "1k", "$1K Spent", "$1,000 spent"),
+    ];
+    let mut next_cost_tier = 0;
+    let mut earned_cost_milestones = Vec::new();
+
+    let mut running_tokens: i64 = 0;
+    let mut running_cost: f64 = 0.0;
+
+    while let Some(row) = event_rows.next()? {
+        let ts: i64 = row.get(0)?;
+        let tokens: i64 = row.get(1)?;
+        let cost: f64 = row.get(2)?;
+
+        running_tokens += tokens;
+        running_cost += cost;
+
+        while next_token_tier < token_tiers.len() && running_tokens >= token_tiers[next_token_tier].0 {
+            let (_, tier, title, val) = token_tiers[next_token_tier];
+            earned_token_milestones.push(Achievement {
+                kind: "token_milestone".to_string(),
+                tier: Some(tier.to_string()),
+                title: title.to_string(),
+                value: val.to_string(),
+                earned_ts: Some(ts),
+            });
+            next_token_tier += 1;
+        }
+
+        while next_cost_tier < cost_tiers.len() && running_cost >= cost_tiers[next_cost_tier].0 {
+            let (_, tier, title, val) = cost_tiers[next_cost_tier];
+            earned_cost_milestones.push(Achievement {
+                kind: "big_spender".to_string(),
+                tier: Some(tier.to_string()),
+                title: title.to_string(),
+                value: val.to_string(),
+                earned_ts: Some(ts),
+            });
+            next_cost_tier += 1;
+        }
+
+        if next_token_tier >= token_tiers.len() && next_cost_tier >= cost_tiers.len() {
+            break;
+        }
+    }
+
+    achievements.extend(earned_token_milestones);
+    achievements.extend(earned_cost_milestones);
+
+    // 5. First Project & Project Explorer
+    let projects: Vec<(String, i64)> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {P} AS p, MIN(u.ts) AS first_ts
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             LEFT JOIN project_alias pj ON pj.alias = u.project
+             WHERE {F} AND {H}
+               AND u.project IS NOT NULL AND u.project != '' AND u.project != 'unknown'
+               AND {P} != 'unknown'
+             GROUP BY p
+             ORDER BY first_ts ASC, p ASC",
+            F = filter,
+            H = NOT_HIDDEN,
+            P = PROJECT
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(name_values.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    if let Some((first_proj, first_ts)) = projects.first() {
+        achievements.push(Achievement {
+            kind: "first_project".to_string(),
+            tier: None,
+            title: "First Project".to_string(),
+            value: first_proj.clone(),
+            earned_ts: Some(*first_ts),
+        });
+    }
+
+    if projects.len() >= 3 {
+        achievements.push(Achievement {
+            kind: "project_explorer".to_string(),
+            tier: None,
+            title: "Project Explorer".to_string(),
+            value: format!("Used in {} projects", projects.len()),
+            earned_ts: Some(projects[2].1),
+        });
+    }
+
+    Ok(achievements)
 }
 
 pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
@@ -2618,6 +3155,100 @@ pub fn model_big6(store: &Store, model: &str) -> DbResult<Option<Big6History>> {
     }))
 }
 
+/// One unbroken run holding a single Big-6 rank: from the day the model took
+/// the seat to the day the next model did (`exited = None` while it still
+/// holds it, in which case `days` counts up to today).
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct Big6SeatRun {
+    pub model: String,
+    pub entered: String,
+    pub exited: Option<String>,
+    pub days: i64,
+}
+
+/// Every run at one rank — the history of who held that seat. Once a rank is
+/// first filled its runs tile contiguously: each run's `exited` is the next
+/// run's `entered`.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct Big6Seat {
+    pub rank: i64,
+    pub runs: Vec<Big6SeatRun>,
+}
+
+/// Seat occupancy over the whole standings history — the Trends "Podium"
+/// panel. `first_date` is the earliest recorded day so the frontend can clamp
+/// its zoom window to real history.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct Big6Timeline {
+    pub first_date: Option<String>,
+    pub seats: Vec<Big6Seat>,
+}
+
+/// Replays the all-time standings once and records every run at each of the
+/// six ranks. Where `model_big6` tracks one model's membership in the top 6,
+/// this tracks who held which seat — a slide from #2 to #5 closes a run at #2
+/// and opens one at #5 without the model leaving the Big 6, so a model's seat
+/// days always sum back to its membership days.
+pub fn big6_timeline(store: &Store) -> DbResult<Big6Timeline> {
+    let (names, days_map) = daily_standings(store)?;
+
+    let mut cumulative: Vec<i64> = vec![0; names.len()];
+    let mut order: BTreeSet<(Reverse<i64>, usize)> = BTreeSet::new();
+    // (model id, day the current run at this seat started)
+    let mut holder: [Option<(usize, String)>; 6] = Default::default();
+    let mut seats: Vec<Big6Seat> = (1..=6)
+        .map(|rank| Big6Seat {
+            rank,
+            runs: Vec::new(),
+        })
+        .collect();
+
+    for (d, day_models) in &days_map {
+        for (id, daily_tokens) in day_models {
+            let old = cumulative[*id];
+            order.remove(&(Reverse(old), *id));
+            cumulative[*id] = old + daily_tokens;
+            order.insert((Reverse(old + daily_tokens), *id));
+        }
+        let top: Vec<usize> = order.iter().take(6).map(|&(_, id)| id).collect();
+        for (rank, &m) in top.iter().enumerate() {
+            if holder[rank].as_ref().map(|(h, _)| *h) == Some(m) {
+                continue;
+            }
+            if let Some((prev, entered)) = holder[rank].take() {
+                seats[rank].runs.push(Big6SeatRun {
+                    model: names[prev].clone(),
+                    exited: Some(d.clone()),
+                    days: days_between(&entered, d).unwrap_or(0),
+                    entered,
+                });
+            }
+            holder[rank] = Some((m, d.clone()));
+        }
+    }
+
+    let day = format_description!("[year]-[month]-[day]");
+    let today = time::OffsetDateTime::now_utc()
+        .date()
+        .format(&day)
+        .unwrap_or_default();
+    for (rank, h) in holder.iter().enumerate() {
+        if let Some((m, entered)) = h {
+            seats[rank].runs.push(Big6SeatRun {
+                model: names[*m].clone(),
+                entered: entered.clone(),
+                exited: None,
+                days: days_between(entered, &today).unwrap_or(0).max(0),
+            });
+        }
+    }
+
+    Ok(Big6Timeline {
+        first_date: days_map.keys().next().cloned(),
+        seats,
+    })
+}
+
 /// (current, longest) consecutive-day streaks over a sorted list of ISO dates.
 /// Days are UTC; the current streak tolerates "today hasn't happened yet".
 fn streaks(dates: &[String]) -> (i64, i64) {
@@ -3425,6 +4056,134 @@ mod tests {
     }
 
     #[test]
+    fn family_detail_aggregates_members_once() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        // Noon UTC yesterday: both events land on one calendar day whatever
+        // time the test runs.
+        let now = now_ms();
+        let day = (now / 86_400_000 - 1) * 86_400_000 + 43_200_000;
+
+        let mut opus = test_event("claude-opus-5", day, 300);
+        opus.source = Source::ClaudeCode;
+        opus.session_id = Some("s1".into());
+        opus.project = Some("/dev/alpha".into());
+        let mut sonnet = test_event("claude-sonnet-4.5", day + 1000, 200);
+        sonnet.session_id = Some("s1".into());
+        sonnet.project = Some("/dev/alpha".into());
+        let mut gpt = test_event("gpt-5", day + 2000, 150);
+        gpt.session_id = Some("s2".into());
+        let mut unknown = test_event("totally-unknown-model", day + 3000, 70);
+        unknown.session_id = Some("s3".into());
+
+        store.insert_events(&[opus, sonnet, gpt, unknown]).unwrap();
+
+        let claude = family_detail(&store, "claude", 3650).unwrap().unwrap();
+        assert_eq!(claude.family, "Claude");
+        assert_eq!(claude.tokens, 500);
+        assert_eq!(claude.events, 2);
+        // Two Claude models sharing a session count it once, unlike family_stats.
+        assert_eq!(claude.sessions, 1);
+        assert_eq!(claude.models.len(), 2);
+        assert_eq!(claude.models[0].model, "claude-opus-5");
+        assert_eq!(claude.by_source.len(), 2);
+        assert_eq!(claude.by_project.len(), 1);
+        assert_eq!(claude.by_project[0].project, "/dev/alpha");
+        assert_eq!(claude.by_project[0].sessions, 1);
+        assert_eq!(claude.active_days, 1);
+        assert_eq!(claude.peak_day_tokens, 500);
+        assert_eq!(claude.total_window_tokens, 720);
+
+        // No prefix matches, so an unrecognised model is its own "Other" bucket.
+        let other = family_detail(&store, "Other", 3650).unwrap().unwrap();
+        assert_eq!(other.tokens, 70);
+        assert_eq!(other.models.len(), 1);
+    }
+
+    #[test]
+    fn family_detail_respects_range_and_hidden_models() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let recent = now - 86_400_000;
+        let old = now - 400 * 86_400_000;
+
+        store
+            .insert_events(&[
+                test_event("claude-opus-5", recent, 100),
+                test_event("claude-sonnet-4.5", old, 50),
+            ])
+            .unwrap();
+
+        let window = family_detail(&store, "Claude", 90).unwrap().unwrap();
+        assert_eq!(window.tokens, 100);
+        assert_eq!(window.models.len(), 1);
+
+        let all = family_detail(&store, "Claude", 3650).unwrap().unwrap();
+        assert_eq!(all.tokens, 150);
+        assert_eq!(all.models.len(), 2);
+
+        store
+            .hide_models(&["claude-opus-5".into(), "claude-sonnet-4.5".into()])
+            .unwrap();
+        assert!(family_detail(&store, "Claude", 3650).unwrap().is_none());
+    }
+
+    #[test]
+    fn family_detail_unknown_or_unused_is_none() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        store
+            .insert_events(&[test_event("gpt-5", now_ms(), 10)])
+            .unwrap();
+
+        assert!(family_detail(&store, "not-a-family", 3650).unwrap().is_none());
+        assert!(family_detail(&store, "Kimi", 3650).unwrap().is_none());
+        assert!(family_detail(&store, "gpt", 3650).unwrap().is_some());
+    }
+
+    #[test]
+    fn family_achievements_roll_up_members() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day1 = (now / 86_400_000 - 3) * 86_400_000 + 43_200_000;
+        let day2 = day1 + 86_400_000;
+        let day3 = day2 + 86_400_000;
+
+        let mut a = test_event("claude-opus-5", day1, 60_000_000);
+        a.source = Source::ClaudeCode;
+        a.project = Some("/dev/alpha".into());
+        let mut b = test_event("claude-sonnet-4.5", day2, 45_000_000);
+        b.project = Some("/dev/beta".into());
+        let mut c = test_event("claude-haiku-4-5", day3, 5_000_000);
+        c.project = Some("/dev/gamma".into());
+
+        store.insert_events(&[a, b, c]).unwrap();
+
+        let got = family_achievements(&store, "Claude").unwrap();
+        let kinds: Vec<&str> = got.iter().map(|a| a.kind.as_str()).collect();
+        assert!(kinds.contains(&"peak_day"));
+        assert!(kinds.contains(&"longest_streak"));
+        assert!(kinds.contains(&"multi_harness"));
+        assert!(kinds.contains(&"family_champion"));
+        assert!(kinds.contains(&"first_project"));
+        assert!(kinds.contains(&"project_explorer"));
+
+        // 60M then 45M crosses the 100M mark on the second day.
+        let milestone = got
+            .iter()
+            .find(|a| a.kind == "token_milestone" && a.tier.as_deref() == Some("100m"))
+            .expect("100M milestone");
+        assert_eq!(milestone.earned_ts, Some(day2));
+
+        let peak = got.iter().find(|a| a.kind == "peak_day").unwrap();
+        assert_eq!(peak.value, "60M tokens");
+
+        let streak = got.iter().find(|a| a.kind == "longest_streak").unwrap();
+        assert_eq!(streak.value, "3 days in a row");
+
+        // An unknown family has no achievements.
+        assert!(family_achievements(&store, "nope").unwrap().is_empty());
+    }
+
+    #[test]
     fn model_detail_folds_aliases_and_breaks_down() {
         let store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let now = now_ms();
@@ -4119,6 +4878,150 @@ mod tests {
 
         assert_eq!(model_big6(&store, "m8").unwrap(), None, "never made the top 6");
         assert_eq!(model_big6(&store, "nope").unwrap(), None);
+    }
+
+    #[test]
+    fn big6_timeline_tiles_seats_and_sums_to_membership() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day1 = now - 90 * day_ms;
+        let day50 = now - 40 * day_ms;
+
+        // Day 1: hero takes #1, m2..m6 fill the rest; m7 sits outside.
+        store
+            .insert_events(&[
+                test_event("hero", day1, 99_000),
+                test_event("m2", day1, 90_000),
+                test_event("m3", day1, 80_000),
+                test_event("m4", day1, 70_000),
+                test_event("m5", day1, 60_000),
+                test_event("m6", day1, 50_000),
+                test_event("m7", day1, 5_000),
+            ])
+            .unwrap();
+
+        // Day 50: m2..m6 all pass hero — it slides #1 → #6, closing its #1 run
+        // and opening a #6 run, without ever leaving the Big 6.
+        store
+            .insert_events(&[
+                test_event("m2", day50, 50_000),
+                test_event("m3", day50, 50_000),
+                test_event("m4", day50, 50_000),
+                test_event("m5", day50, 50_000),
+                test_event("m6", day50, 50_000),
+            ])
+            .unwrap();
+
+        // Today: m7 edges hero out of the Big 6.
+        store.insert_events(&[test_event("m7", now, 95_000)]).unwrap();
+
+        let tl = big6_timeline(&store).unwrap();
+        assert_eq!(tl.seats.len(), 6);
+
+        // Once a seat is filled its runs tile contiguously: each run's exit
+        // is the next run's entry, and only the last can still be open.
+        for seat in &tl.seats {
+            assert!(!seat.runs.is_empty(), "seat #{} never filled", seat.rank);
+            for pair in seat.runs.windows(2) {
+                assert_eq!(pair[0].exited.as_deref(), Some(pair[1].entered.as_str()));
+            }
+            assert!(seat.runs[..seat.runs.len() - 1]
+                .iter()
+                .all(|r| r.exited.is_some()));
+            assert_eq!(seat.runs.last().unwrap().exited, None);
+        }
+
+        // Hero's seat days: 50d at #1 then 40d at #6 = 90d in the Big 6, the
+        // membership total model_big6 reports and the demotion tenure showed.
+        let hero = tl
+            .seats
+            .iter()
+            .flat_map(|s| s.runs.iter())
+            .filter(|r| r.model == "hero")
+            .collect::<Vec<_>>();
+        assert_eq!(hero.len(), 2);
+        assert_eq!(hero[0].days, 50);
+        assert_eq!(hero[1].days, 40);
+        assert_eq!(hero.iter().map(|r| r.days).sum::<i64>(), 90);
+        assert_eq!(
+            model_big6(&store, "hero").unwrap().unwrap().total_days,
+            90
+        );
+
+        // m6 sat at #6 the whole run — its seat days equal its demotion tenure.
+        let m6_days: i64 = tl
+            .seats
+            .iter()
+            .flat_map(|s| s.runs.iter())
+            .filter(|r| r.model == "m6")
+            .map(|r| r.days)
+            .sum();
+        assert_eq!(model_big6(&store, "m6").unwrap().unwrap().total_days, m6_days);
+    }
+
+    #[test]
+    fn big6_timeline_fills_seats_progressively_and_respects_hidden_alias() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let day_ms = 86_400_000i64;
+        let day1 = now - 30 * day_ms;
+        let day2 = now - 20 * day_ms;
+        let day3 = now - 10 * day_ms;
+
+        store.hide_models(&["hidden-m".into()]).unwrap();
+        store.rename_model("raw-flash", "flash-canon").unwrap();
+        store
+            .insert_events(&[
+                test_event("alpha", day1, 5_000),
+                test_event("beta", day1, 3_000),
+                test_event("gamma", day1, 1_000),
+            ])
+            .unwrap();
+        // Hidden rows never reach the standings; the aliased model shows
+        // under its canonical name and jumps straight to #1.
+        store
+            .insert_events(&[
+                test_event("hidden-m", day2, 999_000),
+                test_event("raw-flash", day2, 10_000),
+            ])
+            .unwrap();
+        store
+            .insert_events(&[test_event("alpha", day3, 10_000)])
+            .unwrap();
+
+        let tl = big6_timeline(&store).unwrap();
+
+        // Four seen models fill seats #1–#4 only; #5 and #6 stay empty.
+        assert!(tl.seats[4].runs.is_empty() && tl.seats[5].runs.is_empty());
+        assert!(tl.seats[..4].iter().all(|s| !s.runs.is_empty()));
+
+        // #1: alpha (day1→day2), raw-flash shown as flash-canon (day2→day3),
+        // alpha again (day3→now, 10d so far).
+        let s1 = &tl.seats[0].runs;
+        assert_eq!(s1.len(), 3);
+        assert_eq!(s1[0].model, "alpha");
+        assert!(s1[0].exited.is_some());
+        assert_eq!(s1[1].model, "flash-canon");
+        assert!(s1[1].exited.is_some());
+        assert_eq!(s1[2].model, "alpha");
+        assert_eq!(s1[2].exited, None);
+        assert_eq!(s1[2].days, 10);
+
+        // Neither the hidden raw name nor the alias string appears anywhere.
+        assert!(!tl
+            .seats
+            .iter()
+            .flat_map(|s| s.runs.iter())
+            .any(|r| r.model == "hidden-m" || r.model == "raw-flash"));
+        // The canonical name does land as a real member.
+        assert_eq!(
+            model_big6(&store, "flash-canon")
+                .unwrap()
+                .unwrap()
+                .total_days,
+            20
+        );
     }
 
     #[test]
