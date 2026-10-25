@@ -394,8 +394,8 @@
                     {/if}
                   {/if}
                 {/each}
-                {#if seat.runs.some((r) => r.exited === null)}<span class="inflag">IN</span>{/if}
               </div>
+              {#if seat.runs.some((r) => r.exited === null)}<span class="inflag">IN</span>{/if}
             </div>
           {/each}
           <div class="axis">
@@ -493,6 +493,9 @@
 
   .podium {
     position: relative;
+    /* Right gutter outside the bars' axis: the IN flag parks there so it
+       never covers the current holder's block. */
+    --flagw: 28px;
   }
 
   .gl {
@@ -500,7 +503,7 @@
     top: 0;
     bottom: 18px;
     left: 56px;
-    right: 0;
+    right: var(--flagw);
     pointer-events: none;
   }
   .gl i {
@@ -524,6 +527,8 @@
     align-items: stretch;
     height: 32px;
     border-bottom: 1px solid var(--hair);
+    position: relative;
+    padding-right: var(--flagw);
   }
   .rk {
     width: 48px;
@@ -618,7 +623,7 @@
 
   .inflag {
     position: absolute;
-    right: 3px;
+    right: 0;
     top: 5px;
     height: 22px;
     display: flex;
@@ -636,6 +641,7 @@
     position: relative;
     height: 18px;
     margin-left: 56px;
+    margin-right: var(--flagw);
   }
   .axis span {
     position: absolute;

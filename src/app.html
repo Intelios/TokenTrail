@@ -10,7 +10,7 @@
       // (e.g. http://localhost:1420/?mock) to work on the UI with synthetic
       // data when the Rust backend isn't running. The real app always has
       // __TAURI_INTERNALS__ injected before this script, so this never fires.
-      if (!window.__TAURI_INTERNALS__ && location.search.includes('mock')) {
+      if (location.search.includes('mock')) {
         (function () {
           let seed = 42;
           const rng = () => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed / 4294967296);
