@@ -347,6 +347,31 @@ mod tests {
     }
 
     #[test]
+    fn kimi_k31_pro_prices() {
+        // Kimi K3.1 Pro (launched 2026-10-23) undercuts K3 by a third at
+        // $2/$10 with $0.20 cached input and a $2.00 cache write at the
+        // default 5-minute TTL (the 1-hour TTL, $4.00, is not carried, as
+        // for the other entries). The prefix sits above kimi-k3, which
+        // would otherwise swallow it at K3's $3/$15. Highspeed doubles
+        // input, output and the 5m write but keeps the $0.20 cache hit,
+        // so it needs the longer prefix to avoid being priced as standard.
+        assert_eq!(rates_for("kimi-k3.1-pro").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("kimi-k3.1-pro").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("kimi-k3.1-pro").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("kimi-k3.1-pro").map(|r| r.cache_write), Some(2.0));
+        assert_eq!(rates_for("kimi-k3.1-pro-highspeed").map(|r| r.input), Some(4.0));
+        assert_eq!(rates_for("kimi-k3.1-pro-highspeed").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("kimi-k3.1-pro-highspeed").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("kimi-k3.1-pro-highspeed").map(|r| r.cache_write), Some(4.0));
+        // Provider prefixes and dated snapshots resolve through the family.
+        assert_eq!(rates_for("moonshot/kimi-k3.1-pro").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("kimi-k3.1-pro-20261023").map(|r| r.output), Some(10.0));
+        assert_eq!(rates_for("moonshotai/kimi-k3.1-pro-highspeed").map(|r| r.output), Some(20.0));
+        // K3 keeps its own $3/$15 rates.
+        assert_eq!(rates_for("kimi-k3").map(|r| r.input), Some(3.0));
+    }
+
+    #[test]
     fn glm_flash_prices() {
         // GLM-5.3-Flash lists at $0.15/$0.50, far below the GLM-5.x catch-all.
         assert_eq!(rates_for("glm-5.3-flash").map(|r| r.input), Some(0.15));
@@ -523,6 +548,27 @@ mod tests {
         // plain GPT-6 Sol keeps its own (pricier) $0.20 cache-hit rate.
         assert_eq!(rates_for("gpt-6-sol").map(|r| r.cache_read), Some(0.2));
         assert_eq!(rates_for("gpt-6-astra").map(|r| r.output), Some(50.0));
+    }
+
+    #[test]
+    fn gpt_6_1_terra_prices() {
+        // GPT-6.1 Terra (released 2026-10-26) halves GPT-6.1 Sol's list
+        // rates: $1/$5 with $0.05 cached input and a 1.25x 30-minute cache
+        // write ($1.25). The table carries standard short-context rates;
+        // Batch/Flex (50% off), Fast (2x) and the >272K long-context tier
+        // are not the ordinary list price and are ignored, as elsewhere.
+        assert_eq!(rates_for("gpt-6.1-terra").map(|r| r.input), Some(1.0));
+        assert_eq!(rates_for("gpt-6.1-terra").map(|r| r.output), Some(5.0));
+        assert_eq!(rates_for("gpt-6.1-terra").map(|r| r.cache_read), Some(0.05));
+        assert_eq!(rates_for("gpt-6.1-terra").map(|r| r.cache_write), Some(1.25));
+        // Dated snapshots, provider prefixes and "model/variant" spellings
+        // resolve through the family.
+        assert_eq!(rates_for("gpt-6.1-terra-2026-10-26").map(|r| r.output), Some(5.0));
+        assert_eq!(rates_for("openai/gpt-6.1-terra").map(|r| r.cache_read), Some(0.05));
+        assert_eq!(rates_for("gpt-6.1-terra/long-context").map(|r| r.input), Some(1.0));
+        // Sol and the GPT-5.6 Terra keep their own (pricier) rates.
+        assert_eq!(rates_for("gpt-6.1-sol").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("gpt-5.6-terra").map(|r| r.output), Some(12.0));
     }
 
     #[test]
