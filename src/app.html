@@ -17,8 +17,8 @@
           const iso = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
           const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-          const SOURCES = ['claude_code', 'codex', 'zcode', 'antigravity', 'devin', 'opencode', 'gemini', 'wackchatter', 'wackcode'];
-          const WEIGHT = [0.5, 0.2, 0.09, 0.06, 0.05, 0.04, 0.02, 0.02];
+          const SOURCES = ['claude_code', 'codex', 'zcode', 'antigravity', 'devin', 'opencode', 'gemini', 'deepseek_harness', 'wackchatter', 'wackcode'];
+          const WEIGHT = [0.5, 0.2, 0.09, 0.06, 0.05, 0.04, 0.02, 0.02, 0.01, 0.01];
           const MODELS = [
             ['claude-opus-5', 8.1e6, ['claude_code', 'zcode'], 118.4, 2910, 412],
             ['claude-sonnet-5', 5.4e6, ['claude_code', 'opencode'], 61.2, 2140, 318],

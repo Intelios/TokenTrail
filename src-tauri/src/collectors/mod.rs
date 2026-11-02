@@ -1,6 +1,7 @@
 pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
+pub mod deepseek_harness;
 pub mod devin;
 pub mod gemini;
 pub mod opencode;
@@ -25,6 +26,7 @@ pub fn sync_all(store: &Store, home: &Path) -> Vec<IngestStats> {
         ("gemini", gemini::collect),
         ("antigravity", antigravity::collect),
         ("devin", devin::collect),
+        ("deepseek_harness", deepseek_harness::collect),
         ("wackchatter", wackchatter::collect),
         ("wackcode", wackcode::collect),
     ];
@@ -45,6 +47,7 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
         (Source::Gemini, home.join(".gemini/tmp")),
         (Source::Antigravity, home.join(".gemini/antigravity/conversations")),
         (Source::Devin, home.join(".local/share/devin/cli/sessions.db")),
+        (Source::DeepseekHarness, deepseek_harness::root(home)),
         // Discovery and retained usage live here; the library itself can move.
         (Source::WackChatter, home.join(".wackchatter")),
         (Source::WackCode, wackcode::root(home)),

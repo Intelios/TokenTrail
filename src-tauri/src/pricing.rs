@@ -481,6 +481,8 @@ mod tests {
         assert_eq!(rates_for("deepseek-flash").map(|r| r.cache_read), Some(0.006));
         assert_eq!(rates_for("deepseek-flash").map(|r| r.cache_write), Some(0.3));
         assert_eq!(rates_for("deepseek-v4.1-flash:0908-cloud").map(|r| r.input), Some(0.3));
+        // DeepSeek Harness writes the build suffix the same way.
+        assert_eq!(rates_for("deepseek-v4.1-flash:1017").map(|r| r.input), Some(0.3));
         assert_eq!(rates_for("deepseek/deepseek-flash").map(|r| r.output), Some(1.2));
         assert_eq!(rates_for("deepseek-v4-flash:0731-cloud").map(|r| r.input), Some(0.3));
         assert_eq!(rates_for("deepseek-v4-flash-vision-exp").map(|r| r.output), Some(1.2));

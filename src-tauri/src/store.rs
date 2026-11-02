@@ -1673,6 +1673,16 @@ const DEFAULT_PROJECT_IGNORES: &[&str] = &[
     "~/Documents/Codex/",
 ];
 
+/// Built-in ignores added after the first seed, with the generation that
+/// introduced each. The seed above runs once, so rules that arrive later need
+/// their own step — and are replayed by generation, never as a whole list: a
+/// built-in the user deleted must not come back when a later release adds another.
+const PROJECT_IGNORE_ADDITIONS: &[(i64, &str)] = &[
+    // DeepSeek Harness keeps its own workspaces here; chats with no folder
+    // chosen land in the default workspace under it.
+    (2, "~/Documents/deepseek-harness/"),
+];
+
 fn seed_project_ignores(conn: &Connection) -> rusqlite::Result<()> {
     let seeded: Option<i64> = conn
         .query_row(
@@ -1681,23 +1691,48 @@ fn seed_project_ignores(conn: &Connection) -> rusqlite::Result<()> {
             |r| r.get(0),
         )
         .optional()?;
-    if seeded.unwrap_or(0) != 0 {
-        return Ok(());
-    }
-    for rule in DEFAULT_PROJECT_IGNORES {
-        let inserted = conn.execute(
-            "INSERT OR IGNORE INTO project_ignore(prefix, builtin) VALUES(?1, 1)",
-            params![rule],
-        )?;
-        if inserted > 0 {
-            apply_ignore_rule(conn, rule)?;
+    if seeded.unwrap_or(0) == 0 {
+        for rule in DEFAULT_PROJECT_IGNORES {
+            insert_builtin_ignore(conn, rule)?;
         }
+        conn.execute(
+            "INSERT INTO ingest_state(source, path, watermark, updated_at) VALUES('project_ignore','',1,strftime('%s','now'))
+             ON CONFLICT(source, path) DO UPDATE SET watermark=1, updated_at=excluded.updated_at",
+            [],
+        )?;
     }
-    conn.execute(
-        "INSERT INTO ingest_state(source, path, watermark, updated_at) VALUES('project_ignore','',1,strftime('%s','now'))
-         ON CONFLICT(source, path) DO UPDATE SET watermark=1, updated_at=excluded.updated_at",
-        [],
+    let applied: i64 = conn
+        .query_row(
+            "SELECT watermark FROM ingest_state WHERE source='project_ignore_version' AND path=''",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    let latest = PROJECT_IGNORE_ADDITIONS.iter().map(|(v, _)| *v).max().unwrap_or(0);
+    if applied < latest {
+        for (generation, rule) in PROJECT_IGNORE_ADDITIONS {
+            if *generation > applied {
+                insert_builtin_ignore(conn, rule)?;
+            }
+        }
+        conn.execute(
+            "INSERT INTO ingest_state(source, path, watermark, updated_at) VALUES('project_ignore_version','',?1,strftime('%s','now'))
+             ON CONFLICT(source, path) DO UPDATE SET watermark=excluded.watermark, updated_at=excluded.updated_at",
+            params![latest],
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_builtin_ignore(conn: &Connection, rule: &str) -> rusqlite::Result<()> {
+    let inserted = conn.execute(
+        "INSERT OR IGNORE INTO project_ignore(prefix, builtin) VALUES(?1, 1)",
+        params![rule],
     )?;
+    if inserted > 0 {
+        apply_ignore_rule(conn, rule)?;
+    }
     Ok(())
 }
 
@@ -2986,6 +3021,65 @@ mod tests {
 
         store.remove_project_ignore(&format!("{scr_s}/")).unwrap();
         assert_eq!(store.project_canonical(&sub), scr_s);
+    }
+
+    #[test]
+    fn deepseek_harness_own_folders_count_as_unknown() {
+        let store = test_store();
+        let default_workspace =
+            project_id::home_dir().join("Documents/deepseek-harness/default-workspace");
+        let folder_s = default_workspace.to_string_lossy().to_string();
+        store
+            .insert_events(&[ev("1", Some(&folder_s))])
+            .unwrap();
+        store.ensure_project_aliases().unwrap();
+        assert_eq!(store.project_canonical(&folder_s), "unknown");
+        // A folder the user chose is still a project of its own.
+        let chosen = project_id::home_dir().join("code/notes");
+        let chosen_s = chosen.to_string_lossy().to_string();
+        store.insert_events(&[ev("2", Some(&chosen_s))]).unwrap();
+        store.ensure_project_aliases().unwrap();
+        assert_eq!(store.project_canonical(&chosen_s), chosen_s);
+    }
+
+    #[test]
+    fn builtin_ignore_additions_reach_existing_installs_but_never_resurrect_deleted_rules() {
+        const DEEPSEEK: &str = "~/Documents/deepseek-harness/";
+        let dir = tmp_dir("ignore-upgrade");
+        let path = dir.join("usage.db");
+        {
+            let store = Store::open(&path).unwrap();
+            store.ensure_project_aliases().unwrap();
+            assert!(store
+                .get_project_ignores()
+                .unwrap()
+                .iter()
+                .any(|r| r.prefix == DEEPSEEK && r.builtin));
+            store.remove_project_ignore(DEEPSEEK).unwrap();
+            store.remove_project_ignore("~/Documents/Codex/").unwrap();
+        }
+        // Put the database back in the state an install from before the rule had.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "DELETE FROM ingest_state WHERE source='project_ignore_version'",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        store.ensure_project_aliases().unwrap();
+        let rules = store.get_project_ignores().unwrap();
+        assert!(
+            rules.iter().any(|r| r.prefix == DEEPSEEK && r.builtin),
+            "the added rule reaches an existing install"
+        );
+        assert!(
+            !rules.iter().any(|r| r.prefix == "~/Documents/Codex/"),
+            "a built-in the user deleted stays deleted"
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

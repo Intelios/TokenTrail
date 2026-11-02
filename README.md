@@ -35,6 +35,7 @@ TokenTrail is a desktop app that reads the usage logs your AI coding tools alrea
 | OpenCode | Per-project usage |
 | Gemini CLI | Session history |
 | Antigravity | Conversation databases |
+| DeepSeek Harness | zstd-compressed session logs |
 | WackChatter | Dedicated offline Stats, character portraits, groups, and retained generation usage |
 
 If a tool isn't installed, it's simply skipped — TokenTrail shows whatever it finds.

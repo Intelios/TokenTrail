@@ -10,6 +10,7 @@ pub enum Source {
     Gemini,
     Antigravity,
     Devin,
+    DeepseekHarness,
     WackChatter,
     WackCode,
 }
@@ -24,6 +25,7 @@ impl Source {
             Source::Gemini => "gemini",
             Source::Antigravity => "antigravity",
             Source::Devin => "devin",
+            Source::DeepseekHarness => "deepseek_harness",
             Source::WackChatter => "wackchatter",
             Source::WackCode => "wackcode",
         }
@@ -38,6 +40,7 @@ impl Source {
             Source::Gemini => "Gemini CLI",
             Source::Antigravity => "Antigravity",
             Source::Devin => "Devin CLI",
+            Source::DeepseekHarness => "DeepSeek Harness",
             Source::WackChatter => "WackChatter",
             Source::WackCode => "WackCode",
         }
@@ -53,6 +56,7 @@ impl Source {
             "gemini" => Some(Source::Gemini),
             "antigravity" => Some(Source::Antigravity),
             "devin" => Some(Source::Devin),
+            "deepseek_harness" => Some(Source::DeepseekHarness),
             "wackchatter" => Some(Source::WackChatter),
             "wackcode" => Some(Source::WackCode),
             _ => None,

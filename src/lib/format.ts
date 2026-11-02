@@ -16,6 +16,7 @@ export const SOURCE_COLORS: Record<string, ChartColor> = {
   opencode: '#ff1f6f',
   gemini: '#4796E3',
   devin: '#5E6AD2',
+  deepseek_harness: '#4D6BFE',
   wackchatter: '#c2ee4a',
   wackcode: '#00c2c2',
 };
@@ -28,6 +29,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   gemini: 'Gemini CLI',
   antigravity: 'Antigravity',
   devin: 'Devin CLI',
+  deepseek_harness: 'DeepSeek Harness',
   wackchatter: 'WackChatter',
   wackcode: 'WackCode',
 };
