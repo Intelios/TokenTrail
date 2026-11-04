@@ -17,6 +17,7 @@ export const SOURCE_COLORS: Record<string, ChartColor> = {
   gemini: '#4796E3',
   devin: '#5E6AD2',
   deepseek_harness: '#4D6BFE',
+  vibe: '#CC5500',
   wackchatter: '#c2ee4a',
   wackcode: '#00c2c2',
 };
@@ -30,6 +31,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   antigravity: 'Antigravity',
   devin: 'Devin CLI',
   deepseek_harness: 'DeepSeek Harness',
+  vibe: 'Vibe',
   wackchatter: 'WackChatter',
   wackcode: 'WackCode',
 };
@@ -324,7 +326,7 @@ const FAMILY_RULES: ReadonlyArray<readonly [string, string]> = [
   ['deepseek-v4-pro', 'DeepSeek'], ['deepseek', 'DeepSeek'],
   ['kimi', 'Kimi'], ['qwen', 'Qwen'], ['glm', 'GLM'], ['mimo', 'MiMo'],
   ['minimax', 'Minimax'], ['abab', 'Minimax'], ['swe', 'SWE'],
-  ['meta-llama', 'Meta'], ['llama', 'Meta'], ['muse', 'Meta'], ['codestral', 'Mistral'], ['mistral', 'Mistral'], ['grok', 'Grok'],
+  ['meta-llama', 'Meta'], ['llama', 'Meta'], ['muse', 'Meta'], ['codestral', 'Mistral'], ['devstral', 'Mistral'], ['labs-devstral', 'Mistral'], ['mistral', 'Mistral'], ['grok', 'Grok'],
 ];
 
 /// Mirror of Rust `families::family_for` — assigns a model display name to

@@ -225,6 +225,18 @@ mod tests {
     }
 
     #[test]
+    fn vibe_mistral_large_4_prices_cache_and_reasoning_once() {
+        // https://docs.mistral.ai/models/mistral-large-4-0
+        let mut ev = event(Some("mistral-large-4-0"), 6_000, 0, 3_000, 1_000);
+        ev.source = Source::Vibe;
+        ev.reasoning_tokens = Some(700); // already in the reported output
+        let expected = (6_000.0 * 0.7 + 3_000.0 * 0.07 + 1_000.0 * 2.1) / 1_000_000.0;
+        assert!((cost_usd(ev.model.as_deref(), &ev).unwrap() - expected).abs() < 1e-12);
+        assert_eq!(rates_for("mistral-large-4-0-3").unwrap().input, 0.7);
+        assert!(rates_for("mistral-large-unknown").is_none());
+    }
+
+    #[test]
     fn resolves_provider_prefixes() {
         // "provider/model" from OpenCode-style harnesses must price the model.
         assert_eq!(rates_for("anthropic/claude-sonnet-4.5").map(|r| r.output), Some(15.0));

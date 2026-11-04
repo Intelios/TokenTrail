@@ -40,6 +40,8 @@ const FAMILY_RULES: &[(&str, &str)] = &[
     ("llama", "Meta"),
     ("muse", "Meta"),
     ("codestral", "Mistral"),
+    ("devstral", "Mistral"),
+    ("labs-devstral", "Mistral"),
     ("mistral", "Mistral"),
     ("grok", "Grok"),
 ];
@@ -124,6 +126,8 @@ mod tests {
         assert_eq!(family_for("Muse-Spark-1.2[ffe]"), "Meta");
         assert_eq!(family_for("mistral-large-latest"), "Mistral");
         assert_eq!(family_for("codestral-latest"), "Mistral");
+        assert_eq!(family_for("devstral-2512"), "Mistral");
+        assert_eq!(family_for("labs-devstral-small-2512"), "Mistral");
         assert_eq!(family_for("grok-4"), "Grok");
         assert_eq!(family_for("grok-code-fast-1"), "Grok");
     }

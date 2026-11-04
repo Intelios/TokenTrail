@@ -36,9 +36,16 @@ TokenTrail is a desktop app that reads the usage logs your AI coding tools alrea
 | Gemini CLI | Session history |
 | Antigravity | Conversation databases |
 | DeepSeek Harness | zstd-compressed session logs |
+| Vibe (Mistral) | Vibe 3 unified session journals, including subagents and cached tokens |
 | WackChatter | Dedicated offline Stats, character portraits, groups, and retained generation usage |
 
 If a tool isn't installed, it's simply skipped — TokenTrail shows whatever it finds.
+
+Vibe usage is read from `~/.vibe/logs/session/unified/` without changing Vibe's
+files. Keep TokenTrail running to import new calls: Vibe prunes older journals,
+and calls pruned before a sync cannot be recovered from transcript totals.
+Legacy Vibe `session_*/meta.json` summary-only logs are not imported as requests.
+See [Vibe collection details](docs/vibe-integration.md) for coverage and pricing.
 
 WackChatter is the odd one out: not a coding tool, and the only source that can report a
 token count it worked out itself rather than one a provider billed. Those are marked

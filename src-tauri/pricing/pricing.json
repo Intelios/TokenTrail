@@ -5,6 +5,7 @@
     "deepseek-v4-flash-free": { "input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0 }
   },
   "families": [
+    { "prefix": "mistral-large-4", "rates": { "input": 0.7, "output": 2.1, "cache_read": 0.07, "cache_write": 0.7 } },
     { "prefix": "claude-opus-4", "rates": { "input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75 } },
     { "prefix": "claude-opus-5-5", "rates": { "input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0 } },
     { "prefix": "claude-opus-5.5", "rates": { "input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0 } },

@@ -16,7 +16,7 @@
   import { dailyColumns, dailyOption, spineTotals, dailyRange } from '$lib/dailyColumns';
 
   // stack order matches the Marathon mockup legend
-  const SOURCE_ORDER = ['claude_code', 'codex', 'zcode', 'antigravity', 'devin', 'opencode', 'gemini', 'deepseek_harness', 'wackchatter', 'wackcode'];
+  const SOURCE_ORDER = ['claude_code', 'codex', 'zcode', 'antigravity', 'devin', 'opencode', 'gemini', 'deepseek_harness', 'vibe', 'wackchatter', 'wackcode'];
 
   let overview = $state<Overview | null>(null);
   let daily = $state<DailyRow[]>([]);
