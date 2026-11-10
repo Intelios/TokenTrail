@@ -461,24 +461,69 @@ mod tests {
 
     #[test]
     fn sonnet_55_prices() {
-        // Claude Sonnet 5.5 keeps Sonnet 5's $2/$10 pricing with the
-        // standard 10% cache hit ($0.20) and 1.25x five-minute cache write
-        // ($2.50) — the 0.025x/0.05x cache-hit discounts are limited to
-        // Fable/Mythos 5.1 and Opus 5.5. Both the hyphenated API id and the
-        // dot spelling resolve; their prefixes sit above claude-sonnet-5,
+        // Claude Sonnet 5.5 keeps Sonnet 5's $2/$10 pricing and 1.25x
+        // five-minute cache write ($2.50), but its cache hits halved to the
+        // 0.05x discount ($0.10) that Opus 5.5 also gets. Plain Sonnet 5
+        // keeps the standard 10% hit ($0.20). Both the hyphenated API id and
+        // the dot spelling resolve; their prefixes sit above claude-sonnet-5,
         // which would otherwise swallow them.
         assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.input), Some(2.0));
         assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.output), Some(10.0));
-        assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.cache_read), Some(0.1));
         assert_eq!(rates_for("claude-sonnet-5-5").map(|r| r.cache_write), Some(2.5));
         assert_eq!(rates_for("claude-sonnet-5.5").map(|r| r.input), Some(2.0));
         assert_eq!(rates_for("claude-sonnet-5.5[ffe]").map(|r| r.output), Some(10.0));
         assert_eq!(rates_for("claude-sonnet-5.5-20261026").map(|r| r.output), Some(10.0));
-        assert_eq!(rates_for("claude-sonnet-5-5-20261026").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("claude-sonnet-5-5-20261026").map(|r| r.cache_read), Some(0.1));
         assert_eq!(rates_for("anthropic/claude-sonnet-5.5").map(|r| r.input), Some(2.0));
         // Plain Sonnet 5 carries the same list rates; Sonnet 4.x keeps $3/$15.
         assert_eq!(rates_for("claude-sonnet-5").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("claude-sonnet-5").map(|r| r.cache_read), Some(0.2));
         assert_eq!(rates_for("claude-sonnet-4.6").map(|r| r.input), Some(3.0));
+    }
+
+    #[test]
+    fn fable_51_prices() {
+        // Claude Fable 5.1 kept Fable 5's $10/$50 list rates and 1.25x
+        // five-minute cache write ($12.50), but cache hits dropped to the
+        // 0.025x discount ($0.25). Its prefixes sit above the claude-fable
+        // catch-all, which stays at Fable 5's $1.00 cache hit. Both the
+        // hyphenated API id and the dot spelling resolve.
+        assert_eq!(rates_for("claude-fable-5-1").map(|r| r.input), Some(10.0));
+        assert_eq!(rates_for("claude-fable-5-1").map(|r| r.output), Some(50.0));
+        assert_eq!(rates_for("claude-fable-5-1").map(|r| r.cache_read), Some(0.25));
+        assert_eq!(rates_for("claude-fable-5-1").map(|r| r.cache_write), Some(12.5));
+        assert_eq!(rates_for("claude-fable-5.1").map(|r| r.input), Some(10.0));
+        assert_eq!(rates_for("claude-fable-5.1[1m]").map(|r| r.output), Some(50.0));
+        assert_eq!(rates_for("anthropic/claude-fable-5.1").map(|r| r.cache_read), Some(0.25));
+        // Fable 5.2 keeps its own cheaper rates; Fable 5 falls through to
+        // the catch-all.
+        assert_eq!(rates_for("claude-fable-5-2").map(|r| r.input), Some(8.0));
+        assert_eq!(rates_for("claude-fable-5").map(|r| r.cache_read), Some(1.0));
+    }
+
+    #[test]
+    fn fable_52_prices() {
+        // Claude Fable 5.2 (released 2026-11-09) cut Fable 5.1's $10/$50 to
+        // $8/$40, with the 0.025x cache-hit discount ($0.20) and Anthropic's
+        // standard 1.25x five-minute cache write ($10); the 1-hour write
+        // ($16) is not carried, as for the other entries. Both the
+        // hyphenated API id and the dot spelling resolve; their prefixes sit
+        // above claude-fable, which would otherwise charge the older rate.
+        assert_eq!(rates_for("claude-fable-5-2").map(|r| r.input), Some(8.0));
+        assert_eq!(rates_for("claude-fable-5-2").map(|r| r.output), Some(40.0));
+        assert_eq!(rates_for("claude-fable-5-2").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("claude-fable-5-2").map(|r| r.cache_write), Some(10.0));
+        assert_eq!(rates_for("claude-fable-5.2").map(|r| r.input), Some(8.0));
+        assert_eq!(rates_for("claude-fable-5.2[1m]").map(|r| r.output), Some(40.0));
+        assert_eq!(rates_for("claude-fable-5-2-20261109").map(|r| r.output), Some(40.0));
+        assert_eq!(rates_for("anthropic/claude-fable-5.2").map(|r| r.cache_read), Some(0.2));
+        // 1M input + 1M output = $48.
+        let e = event(Some("claude-fable-5-2"), 1_000_000, 0, 0, 1_000_000);
+        assert!((cost_usd(e.model.as_deref(), &e).unwrap() - 48.0).abs() < 1e-9);
+        // Fable 5 keeps the catch-all's $10/$50 and $1.00 cache hit.
+        assert_eq!(rates_for("claude-fable-5").map(|r| r.input), Some(10.0));
+        assert_eq!(rates_for("claude-fable-5").map(|r| r.cache_read), Some(1.0));
     }
 
     #[test]
@@ -649,8 +694,8 @@ mod tests {
     fn haiku_55_prices() {
         // Claude Haiku 5.5 lists at $0.10/$0.50 with the standard 10%
         // cache hit ($0.01) and 1.25x five-minute cache write ($0.125) —
-        // the 0.05x cache-hit discounts are limited to Fable/Mythos 5.1
-        // and Opus/Sonnet 5.5. Both the hyphenated API id and the dot
+        // the 0.025x/0.05x cache-hit discounts are limited to Fable/Mythos
+        // 5.1/5.2 and Opus/Sonnet 5.5. Both the hyphenated API id and the dot
         // spelling resolve; their prefixes sit above claude-haiku, which
         // would otherwise swallow them at the old $1/$5 Haiku 4.5 rate.
         // The >100K-token long-context tier ($0.50/$2.50) is ignored, as
