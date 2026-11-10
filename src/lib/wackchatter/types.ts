@@ -60,6 +60,8 @@ export interface Model {
   measured_timed_tokens: number;
   estimated_ms: number;
   estimated_timed_tokens: number;
+  /** Swipes that are the one their reply currently shows. */
+  kept_swipes: number;
 }
 export interface Persona {
   persona_id: string | null;
@@ -67,6 +69,19 @@ export interface Persona {
   chats: number;
   messages: number;
 }
+export interface PersonaCast {
+  persona_id: string | null;
+  /** The chat owner, or "group" for every group chat. */
+  character_id: string;
+  messages: number;
+}
+/** Colours pinned in WackChatter; anything absent follows its portrait. */
+export interface Colors {
+  characters: Record<string, string[]>;
+  personas: Record<string, string[]>;
+}
+/** [id, quarter-hour epoch ms, count] */
+export type Activity = [string, number, number];
 export interface Stats {
   totals: Totals;
   habits: Habits;
@@ -76,6 +91,10 @@ export interface Stats {
   models: Model[];
   personas: Persona[];
   hours: [number, number][];
+  cast_activity: Activity[];
+  model_activity: Activity[];
+  persona_cast: PersonaCast[];
+  colors: Colors;
   co_creator_sessions: number;
   first_chat: number | null;
   last_chat: number | null;
@@ -122,5 +141,23 @@ export interface Usage {
   conversations: Breakdown[];
   outcomes: Breakdown[];
   daily: Breakdown[];
+  flows: Flow[];
+  daily_features: DailyFeature[];
   calls: Call[];
+}
+export interface Flow {
+  purpose: string;
+  model: string;
+  outcome: string;
+  events: number;
+  measured_tokens: number;
+}
+export interface DailyFeature {
+  /** UTC date, YYYY-MM-DD. */
+  day: string;
+  purpose: string;
+  events: number;
+  measured_tokens: number;
+  estimated_tokens: number;
+  cost_usd: number | null;
 }

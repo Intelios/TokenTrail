@@ -27,6 +27,9 @@ Generation identity is independent of its memberships in libraries and conversat
 Library identity is the `created` string in `.wackchatter`, with canonical directory as a
 legacy fallback. Character identity is its bare PNG filename, qualified by library.
 Persona identity is its opaque filename stem. Group replies use message character_id.
+For aura display TokenTrail reads only `dialogueColors` from the library's settings.json,
+read-only: custom colour lists by those identities; portrait-derived colours are extracted
+from the stripped portrait instead.
 
 `tokentrail://wackchatter?library=<id>&character=<optional-id>` opens the Stats destination.
 `~/.wackchatter/runtime.json` contains `{version:1, libraryId, apiUrl, frontendUrl}` for

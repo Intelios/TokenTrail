@@ -189,15 +189,128 @@
           const totalEvents = MODELS.reduce((s, m) => s + m[4], 0);
           const totalSessions = MODELS.reduce((s, m) => s + m[5], 0);
 
-          const WCHAT_CAST = ['Ayla', 'Seraphina', 'Rowan', 'Mira'].map((name,i)=>({character_id:name+'.png',name,chats:14-i*3,replies:1254-i*285,measured_tokens:480000-i*90000,estimated_tokens:15000,first_chat:Date.now()-200*86400000,last_chat:Date.now()-i*86400000}));
-          const WCHAT_CHATS = WCHAT_CAST.map((c,i)=>({id:'wc-chat-'+i,title:['A night at the observatory','Letters from the coast','The long way home','The midnight train'][i],kind:i===3?'group':'direct',character_id:i===3?null:c.character_id,messages:1200-i*180,replies:590-i*80,measured_tokens:230000-i*20000,estimated_tokens:11000,created:Date.now()-180*86400000,modified:Date.now()-i*86400000}));
+          // WackChatter mock: six characters over ~14 months, each with an era of
+          // popularity, so the cast lanes, streamgraph and calendar have shape.
+          const WCHAT_NAMES = ['Ayla', 'Seraphina', 'Rowan', 'Mira', 'Kestrel', 'Juniper'];
+          const WCHAT_HUES = ['#d9534f', '#6f5bd9', '#2e9e6b', '#e0a030', '#3d8eff', '#c45fb0'];
+          const WCHAT_MODELS = ['claude-sonnet-5', 'gemini-3-pro', 'deepseek-v4', 'kimi-k3'];
+          const WCHAT_ACT = (() => {
+            let s2 = 7; const r2 = () => ((s2 = (s2 * 1664525 + 1013904223) >>> 0), s2 / 4294967296);
+            const out = []; const now = Date.now();
+            for (let d = 420; d >= 0; d--) {
+              if (r2() < 0.28) continue;
+              WCHAT_NAMES.forEach((n, i) => {
+                const centre = 380 - i * 70, w = Math.exp(-(((d - centre) / 90) ** 2)) + (i === 0 ? 0.35 : 0);
+                const count = Math.round(w * (6 + r2() * 30));
+                if (count <= 0) return;
+                const hour = [21, 22, 23, 20, 14, 1][Math.floor(r2() * 6)];
+                const ts = Math.floor((now - d * 86400000) / 86400000) * 86400000 + hour * 3600000 + Math.floor(r2() * 4) * 900000;
+                out.push([n + '.png', ts, count]);
+              });
+            }
+            return out;
+          })();
+          const WCHAT_CAST = WCHAT_NAMES.map((name, i) => {
+            const rows = WCHAT_ACT.filter((a) => a[0] === name + '.png');
+            const replies = rows.reduce((t, a) => t + a[2], 0);
+            return { character_id: name + '.png', name, chats: Math.max(2, 16 - i * 2), replies, measured_tokens: replies * 410, estimated_tokens: replies * 18, first_chat: Math.min(...rows.map((a) => a[1])), last_chat: Math.max(...rows.map((a) => a[1])) };
+          }).sort((a, b) => b.replies - a.replies);
+          const WCHAT_CHATS = ['A night at the observatory', 'Letters from the coast', 'The long way home', 'The midnight train', 'Salt and lanterns', 'Under the orchard', '+ New Chat', 'Glass harbour'].map((title, i) => {
+            const owner = WCHAT_CAST[i % WCHAT_CAST.length];
+            const group = i === 3 || i === 7;
+            return { id: 'wc-chat-' + i, title, kind: group ? 'group' : 'direct', character_id: group ? null : owner.character_id, messages: 1400 - i * 150, replies: 690 - i * 75, measured_tokens: 280000 - i * 26000, estimated_tokens: 11000, created: Date.now() - (300 - i * 25) * 86400000, modified: Date.now() - i * 86400000 };
+          });
           function chatterStats(args) {
-            const c=WCHAT_CAST.find(c=>c.character_id===args.characterId);
-            return {name:c?.name??'Your library',totals:{chats:c?14:38,messages:c?2300:7284,user_messages:3200,replies:4084,swipes:4521,measured_tokens:1920000,estimated_tokens:145000,active_minutes:1834},habits:{rerolls:437,rerolled_replies:312,eligible_replies:4084,avg_user_chars:143,avg_reply_chars:862,longest_reply_chars:6810,reasoning_swipes:2024,timed_swipes:3981,branched_chats:8,deleted_chats:3},cast:c?[c]:WCHAT_CAST,chats:WCHAT_CHATS,groups:[WCHAT_CHATS[3]],models:[{model:'claude-sonnet-5',provider:'OpenRouter',swipes:3200,measured_tokens:1400000,estimated_tokens:80000,timed_swipes:3100,total_ms:12400000,measured_ms:10000000,measured_timed_tokens:1300000,estimated_ms:2400000,estimated_timed_tokens:80000},{model:'gemini-3-pro',provider:'Google',swipes:1321,measured_tokens:520000,estimated_tokens:65000,timed_swipes:880,total_ms:4400000,measured_ms:3400000,measured_timed_tokens:450000,estimated_ms:1000000,estimated_timed_tokens:50000}],personas:[{persona_id:'traveller',name:'The Traveller',chats:25,messages:2400},{persona_id:'explorer',name:'The Traveller · Explorer',chats:13,messages:800}],hours:Array.from({length:84},(_,i)=>[Math.floor((Date.now()-i*86400000)/3600000)*3600000,Math.round(20+rng()*100)]),co_creator_sessions:12,first_chat:Date.now()-180*86400000,last_chat:Date.now()};
+            const c = WCHAT_CAST.find((c) => c.character_id === args.characterId);
+            const g = args.groupId ? WCHAT_CHATS.find((x) => x.id === args.groupId) : null;
+            const act = c ? WCHAT_ACT.filter((a) => a[0] === c.character_id) : g ? WCHAT_ACT.filter((a) => ['Ayla.png', 'Rowan.png', 'Kestrel.png'].includes(a[0])).map((a) => [a[0], a[1], Math.round(a[2] / 4)]).filter((a) => a[2] > 0) : WCHAT_ACT;
+            const cast = c ? [c] : g ? WCHAT_CAST.filter((x) => ['Ayla.png', 'Rowan.png', 'Kestrel.png'].includes(x.character_id)).map((x) => ({ ...x, replies: Math.round(x.replies / 4), chats: 1 })) : WCHAT_CAST;
+            const replies = act.reduce((t, a) => t + a[2], 0);
+            const hours = new Map();
+            act.forEach(([, ts, n]) => { hours.set(ts, (hours.get(ts) ?? 0) + n * 2); });
+            const modelAct = [];
+            act.forEach(([, ts, n]) => {
+              const age = (Date.now() - ts) / 86400000;
+              const weights = [1, age > 200 ? 0.8 : 0.2, age < 150 ? 0.9 : 0.05, age < 60 ? 0.7 : 0];
+              const sum = weights.reduce((a, b) => a + b, 0);
+              weights.forEach((w, mi) => { const k = Math.round((n * 1.15 * w) / sum); if (k) modelAct.push([WCHAT_MODELS[mi], ts, k]); });
+            });
+            const swipes = modelAct.reduce((t, a) => t + a[2], 0);
+            const models = WCHAT_MODELS.map((model, mi) => {
+              const sw = modelAct.filter((a) => a[0] === model).reduce((t, a) => t + a[2], 0);
+              return { model, provider: mi === 1 ? 'Google' : 'OpenRouter', swipes: sw, measured_tokens: sw * 380, estimated_tokens: mi === 2 ? sw * 40 : 0, timed_swipes: Math.round(sw * 0.9), total_ms: sw * (3000 + mi * 1400), measured_ms: sw * (2800 + mi * 1300), measured_timed_tokens: sw * 340, estimated_ms: mi === 2 ? sw * 300 : 0, estimated_timed_tokens: mi === 2 ? sw * 36 : 0, kept_swipes: Math.round(sw * [0.84, 0.71, 0.77, 0.62][mi]) };
+            }).filter((m) => m.swipes).sort((a, b) => b.swipes - a.swipes);
+            const personas = [{ persona_id: 'traveller', name: 'The Traveller', chats: 25, messages: Math.round(replies * 0.7) }, { persona_id: 'explorer', name: 'The Traveller · Explorer', chats: 13, messages: Math.round(replies * 0.25) }, { persona_id: '', name: 'No persona', chats: 3, messages: Math.round(replies * 0.05) }];
+            const persona_cast = [];
+            personas.forEach((p, pi) => cast.forEach((x, xi) => { const m = Math.round(x.replies * [0.6, 0.3, 0.1][pi] * (1 - ((xi + pi * 2) % 4) * 0.2)); if (m) persona_cast.push({ persona_id: p.persona_id, character_id: x.character_id, messages: m }); }));
+            if (!c && !g) personas.forEach((p, pi) => persona_cast.push({ persona_id: p.persona_id, character_id: 'group', messages: [320, 140, 12][pi] }));
+            const chats = c ? WCHAT_CHATS.filter((x) => x.character_id === c.character_id) : g ? [g] : WCHAT_CHATS;
+            return {
+              name: c?.name ?? g?.title ?? 'Your library',
+              totals: { chats: chats.length, messages: replies * 2, user_messages: replies, replies, swipes, measured_tokens: replies * 410, estimated_tokens: replies * 18, active_minutes: Math.round(replies * 0.9) },
+              habits: { rerolls: swipes - replies, rerolled_replies: Math.round(replies * 0.19), eligible_replies: replies, avg_user_chars: 143, avg_reply_chars: 862, longest_reply_chars: 6810, reasoning_swipes: Math.round(swipes * 0.45), timed_swipes: Math.round(swipes * 0.9), branched_chats: 8, deleted_chats: 3 },
+              cast, chats, groups: c ? [WCHAT_CHATS[3]].map((x) => ({ ...x, replies: 140, measured_tokens: 52000 })) : WCHAT_CHATS.filter((x) => x.kind === 'group'),
+              models, personas, persona_cast,
+              hours: [...hours.entries()].sort((a, b) => a[0] - b[0]),
+              cast_activity: act, model_activity: modelAct,
+              colors: { characters: { 'Seraphina.png': ['#6f5bd9'], 'Mira.png': ['#e0a030', '#c8926a'] }, personas: {} },
+              co_creator_sessions: c || g ? 0 : 12,
+              first_chat: Math.min(...act.map((a) => a[1])), last_chat: Date.now(),
+            };
+          }
+          function chatterPortrait(args) {
+            const i = WCHAT_NAMES.findIndex((n) => n + '.png' === args.id);
+            if (args.persona || i < 0) return '';
+            const c = WCHAT_HUES[i];
+            const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='200'><rect width='160' height='200' fill='#1d1b22'/><circle cx='80' cy='78' r='38' fill='${c}'/><path d='M14 200 Q80 96 146 200Z' fill='${c}'/><circle cx='80' cy='78' r='38' fill='white' opacity='.12'/></svg>`;
+            return 'data:image/svg+xml;base64,' + btoa(svg);
           }
           function chatterUsage(args) {
-            const rows=(names)=>names.map((name,i)=>({name,events:420-i*75,measured_tokens:730000-i*135000,estimated_tokens:17000,cost_usd:4.6-i*.8}));
-            return {totals:{events:1428,measured_events:1300,priced_events:1214,input_tokens:2900000,output_tokens:800000,cache_read_tokens:1200000,cache_write_tokens:0,estimated_tokens:52000,cost_usd:24.81,avg_duration_ms:4820,avg_ttft_ms:410},features:rows(['chat','summary','arena','groupDirector','recap']),models:rows(['claude-sonnet-5','gemini-3-pro']),providers:rows(['OpenRouter','Google']),characters:rows(WCHAT_CAST.map(c=>c.character_id)),conversations:rows(WCHAT_CHATS.map(c=>c.id)),outcomes:rows(['completed','cancelled','unknown']),daily:Array.from({length:30},(_,i)=>({name:iso(i),events:44,measured_tokens:Math.round(rng()*180000),estimated_tokens:Math.round(rng()*5000),cost_usd:.7})),calls:args.sessionId?[{id:'demo-generation',ts:Date.now(),model:'claude-sonnet-5',purpose:'chat',outcome:'completed',measured_tokens:14200,estimated_tokens:0,cost_usd:.08,duration_ms:4500,ttft_ms:300}]:[]};
+            const n = args.days || 120;
+            const feats = ['chat', 'summary', 'memory', 'arena', 'groupDirector', 'recap'];
+            const fw = [0.7, 0.1, 0.07, 0.06, 0.04, 0.03];
+            const daily_features = [];
+            let s3 = 11; const r3 = () => ((s3 = (s3 * 1664525 + 1013904223) >>> 0), s3 / 4294967296);
+            for (let d = n - 1; d >= 0; d--) {
+              const day = iso(d); const base = 20 + r3() * 60;
+              feats.forEach((purpose, fi) => {
+                const events = Math.round(base * fw[fi] * (0.5 + r3()));
+                if (!events) return;
+                const est = purpose === 'memory' ? events * 300 : 0;
+                daily_features.push({ day, purpose, events, measured_tokens: purpose === 'memory' ? 0 : events * (2400 + r3() * 800), estimated_tokens: est, cost_usd: purpose === 'memory' ? null : events * 0.011 });
+              });
+            }
+            const sum = (rows, k) => rows.reduce((t, r) => t + (r[k] ?? 0), 0);
+            const events = sum(daily_features, 'events');
+            const by = (key) => Object.values(daily_features.reduce((m, r) => { const k = r[key]; m[k] ??= { name: k, events: 0, measured_tokens: 0, estimated_tokens: 0, cost_usd: 0 }; m[k].events += r.events; m[k].measured_tokens += r.measured_tokens; m[k].estimated_tokens += r.estimated_tokens; m[k].cost_usd += r.cost_usd ?? 0; return m; }, {})).sort((a, b) => b.events - a.events);
+            const share = (names, w) => names.map((name, i) => ({ name, events: Math.round(events * w[i]), measured_tokens: Math.round(sum(daily_features, 'measured_tokens') * w[i]), estimated_tokens: Math.round(sum(daily_features, 'estimated_tokens') * w[i]), cost_usd: sum(daily_features, 'cost_usd') * w[i] }));
+            const flows = [];
+            feats.forEach((purpose, fi) => WCHAT_MODELS.forEach((model, mi) => ['completed', 'cancelled', 'failed'].forEach((outcome, oi) => {
+              const e = Math.round(events * fw[fi] * [0.45, 0.25, 0.2, 0.1][mi] * [0.9, 0.07, 0.03][oi]);
+              if (e) flows.push({ purpose, model, outcome, events: e, measured_tokens: e * 2600 });
+            })));
+            const calls = [];
+            if (args.sessionId) {
+              let s4 = args.sessionId.length * 31; const r4 = () => ((s4 = (s4 * 1664525 + 1013904223) >>> 0), s4 / 4294967296);
+              for (let k = 0; k < 140; k++) {
+                const purpose = r4() < 0.78 ? 'chat' : feats[1 + Math.floor(r4() * 5)];
+                const est = purpose === 'memory';
+                const outcome = r4() < 0.9 ? 'completed' : r4() < 0.6 ? 'cancelled' : 'failed';
+                const tok = Math.round(800 + r4() * 9000);
+                calls.push({ id: 'g' + k, ts: Date.now() - Math.floor(r4() * 40 * 86400000), model: WCHAT_MODELS[Math.floor(r4() * 3)], purpose, outcome, measured_tokens: est ? 0 : tok, estimated_tokens: est ? tok : 0, cost_usd: est ? null : tok * 0.000004, duration_ms: Math.round(1500 + r4() * 9000), ttft_ms: Math.round(150 + r4() * 900) });
+              }
+              calls.sort((a, b) => b.ts - a.ts);
+            }
+            const measured = sum(daily_features, 'measured_tokens');
+            return {
+              totals: { events, measured_events: events - sum(daily_features.filter((r) => r.purpose === 'memory'), 'events'), priced_events: events - sum(daily_features.filter((r) => r.purpose === 'memory'), 'events'), input_tokens: Math.round(measured * 0.55), output_tokens: Math.round(measured * 0.18), cache_read_tokens: Math.round(measured * 0.25), cache_write_tokens: Math.round(measured * 0.02), estimated_tokens: sum(daily_features, 'estimated_tokens'), cost_usd: sum(daily_features, 'cost_usd'), avg_duration_ms: 4820, avg_ttft_ms: 410 },
+              features: by('purpose'), models: share(WCHAT_MODELS, [0.45, 0.25, 0.2, 0.1]), providers: share(['OpenRouter', 'Google'], [0.75, 0.25]),
+              characters: share(WCHAT_CAST.map((c) => c.character_id), [0.34, 0.24, 0.17, 0.12, 0.08, 0.05]),
+              conversations: share(WCHAT_CHATS.map((c) => c.id), [0.3, 0.2, 0.15, 0.12, 0.09, 0.06, 0.05, 0.03]),
+              outcomes: share(['completed', 'cancelled', 'failed'], [0.9, 0.07, 0.03]),
+              daily: by('day').sort((a, b) => a.name.localeCompare(b.name)),
+              flows, daily_features, calls,
+            };
           }
 
           // Family rollups are shared by the Families list and each family card.
@@ -218,7 +331,7 @@
               case 'get_wackchatter_libraries': return [{id:'demo-library',name:'Story library',available:true,current:true}];
               case 'get_wackchatter_stats': return chatterStats(args);
               case 'get_wackchatter_usage': return chatterUsage(args);
-              case 'get_wackchatter_portrait': return '';
+              case 'get_wackchatter_portrait': return chatterPortrait(args);
               case 'open_wackchatter': return null;
               case 'get_wackcode_detail': return wcDetail(args.days ?? 90);
               case 'get_wackcode_session_calls':

@@ -36,58 +36,6 @@ export function foldDays(hours: readonly HourBucket[]): DayBucket[] {
     .sort((left, right) => left.day - right.day);
 }
 
-/** 24 counts, indexed by local hour. */
-export function foldHourOfDay(hours: readonly HourBucket[]): number[] {
-  const buckets = new Array<number>(24).fill(0);
-  for (const [hour, count] of hours) {
-    const index = new Date(hour).getHours();
-    buckets[index] = (buckets[index] ?? 0) + count;
-  }
-  return buckets;
-}
-
-/** Seven counts, **index 0 is Monday** — the order the strip is read in. */
-export function foldWeekday(hours: readonly HourBucket[]): number[] {
-  const buckets = new Array<number>(7).fill(0);
-  for (const [hour, count] of hours) {
-    // getDay() is Sunday-first; shift so the week starts where the display starts.
-    const index = (new Date(hour).getDay() + 6) % 7;
-    buckets[index] = (buckets[index] ?? 0) + count;
-  }
-  return buckets;
-}
-
-/**
- * A contiguous run of days ending today, so the column chart has a real time axis rather
- * than a row of active days pretending to be one. Starts at the first day with activity
- * when that is more recent than the cap, which keeps a young library from rendering as a
- * mostly-empty stretch of nothing.
- */
-export function recentDays(
-  days: readonly DayBucket[],
-  maxDays: number,
-  now: number = Date.now(),
-): DayBucket[] {
-  const today = startOfDay(now);
-  const counts = new Map(days.map((entry) => [entry.day, entry.count]));
-  const earliest = days[0]?.day;
-  const capDate = new Date(today);
-  capDate.setDate(capDate.getDate() - maxDays + 1);
-  const cap = capDate.getTime();
-  const from = earliest === undefined ? today : Math.max(earliest, cap);
-
-  const filled: DayBucket[] = [];
-  // Stepping by calendar day rather than adding DAY_MS: a daylight-saving day is 23 or 25
-  // hours long, and fixed-width arithmetic drifts an hour past every change.
-  const cursor = new Date(from);
-  while (cursor.getTime() <= today) {
-    const day = startOfDay(cursor.getTime());
-    filled.push({ day, count: counts.get(day) ?? 0 });
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return filled;
-}
-
 export interface Streaks {
   /** Days up to and including today, or up to yesterday if today is still empty. */
   current: number;
@@ -129,11 +77,6 @@ export function streaks(
   return { current: live ? run : 0, longest };
 }
 
-export function activeDayCount(days: readonly DayBucket[]): number {
-  return days.reduce((total, entry) => total + (entry.count > 0 ? 1 : 0), 0);
-}
-
-/** The busiest single day, or null when nothing has happened. */
 export function busiestDay(days: readonly DayBucket[]): DayBucket | null {
   let best: DayBucket | null = null;
   for (const entry of days) {
@@ -141,4 +84,90 @@ export function busiestDay(days: readonly DayBucket[]): DayBucket | null {
       best = entry;
   }
   return best;
+}
+
+/** 7×24 counts: `[weekday][hour]`, weekday 0 is Monday, both local. */
+export function foldWeekHour(hours: readonly HourBucket[]): number[][] {
+  const grid = Array.from({ length: 7 }, () => new Array<number>(24).fill(0));
+  for (const [instant, count] of hours) {
+    const date = new Date(instant);
+    grid[(date.getDay() + 6) % 7]![date.getHours()]! += count;
+  }
+  return grid;
+}
+
+export type Period = "week" | "month";
+
+/** Local start of the week (Monday) or month containing this instant. */
+export function startOfPeriod(ms: number, period: Period): number {
+  const date = new Date(ms);
+  date.setHours(0, 0, 0, 0);
+  if (period === "month") date.setDate(1);
+  else date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return date.getTime();
+}
+
+export interface PeriodSeries {
+  /** Contiguous period starts, ascending. */
+  periods: number[];
+  /** Per id, one count per period. */
+  series: Map<string, number[]>;
+}
+
+/**
+ * Per-id counts over a contiguous run of local weeks or months. Stepping by calendar
+ * unit rather than fixed milliseconds keeps every boundary on local midnight across
+ * daylight-saving changes.
+ */
+export function foldActivity(
+  rows: readonly (readonly [string, number, number])[],
+  period: Period,
+  now: number = Date.now(),
+): PeriodSeries {
+  if (!rows.length) return { periods: [], series: new Map() };
+  let first = Number.POSITIVE_INFINITY;
+  for (const row of rows) first = Math.min(first, row[1]);
+  const periods: number[] = [];
+  const cursor = new Date(startOfPeriod(first, period));
+  const last = startOfPeriod(now, period);
+  while (cursor.getTime() <= last) {
+    periods.push(cursor.getTime());
+    if (period === "month") cursor.setMonth(cursor.getMonth() + 1);
+    else cursor.setDate(cursor.getDate() + 7);
+  }
+  const index = new Map(periods.map((p, i) => [p, i]));
+  const series = new Map<string, number[]>();
+  for (const [id, instant, count] of rows) {
+    const at = index.get(startOfPeriod(instant, period));
+    if (at === undefined) continue;
+    let values = series.get(id);
+    if (!values) series.set(id, (values = new Array<number>(periods.length).fill(0)));
+    values[at]! += count;
+  }
+  return { periods, series };
+}
+
+export interface Milestone {
+  /** Local day it was reached. */
+  day: number;
+  /** The reply number, 1 for the first. */
+  count: number;
+}
+
+/** First reply and every power-of-ten-ish threshold the running total crosses. */
+export function milestones(
+  days: readonly DayBucket[],
+  thresholds: readonly number[] = [1, 100, 1000, 10000, 100000],
+): Milestone[] {
+  const out: Milestone[] = [];
+  let total = 0;
+  let next = 0;
+  for (const entry of days) {
+    total += entry.count;
+    while (next < thresholds.length && total >= thresholds[next]!) {
+      out.push({ day: entry.day, count: thresholds[next]! });
+      next += 1;
+    }
+  }
+  return out;
 }

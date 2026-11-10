@@ -1,0 +1,137 @@
+/* WackChatter destination: shared pieces used across its view components.
+   Scoped under .wc so nothing leaks into the rest of TokenTrail. */
+
+.wc {
+  --aura: var(--acd);
+  --aura-ink: var(--ink);
+  --aura-wash: var(--bone);
+}
+
+.wc button.wc-btn,
+.wc select {
+  background: transparent;
+  border: 2px solid var(--ink);
+  padding: 9px 12px;
+  color: var(--ink);
+  font: 600 12px var(--font-ui);
+  cursor: pointer;
+  border-radius: 0;
+}
+.wc button.wc-btn:hover {
+  background: var(--ink);
+  color: var(--bone);
+}
+.wc button.wc-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.wc button:focus-visible,
+.wc a:focus-visible {
+  outline: 3px solid var(--vio);
+  outline-offset: 3px;
+}
+
+.wc-scroll {
+  overflow: auto;
+  min-width: 0;
+  max-height: 380px;
+  border-top: 2px solid var(--ink);
+}
+.wc-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bone);
+  z-index: 1;
+}
+.wc-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font: 11px var(--font-mono);
+}
+.wc-table th {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+  letter-spacing: 0.5px;
+}
+.wc-table th,
+.wc-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--hair);
+}
+.wc-table td small {
+  display: block;
+  margin-top: 3px;
+  color: var(--dim);
+}
+.wc-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.wc-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 7px;
+  border: 1px solid var(--ink);
+  vertical-align: -1px;
+}
+
+/* Badges: small labelled figures, used wherever a number used to be a sentence. */
+.wc-badges {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border: 2px solid var(--ink);
+  gap: 2px;
+  background: var(--ink);
+}
+.wc-badge {
+  background: var(--bone);
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.wc-badge b {
+  font: 26px/1 var(--font-disp);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wc-badge span {
+  font: 9.5px/1.4 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+}
+.wc-badge.lit {
+  background: var(--aura);
+}
+.wc-badge.lit span {
+  color: var(--ink);
+}
+
+.wc-note {
+  font: 11px/1.7 var(--font-mono);
+  color: var(--dim);
+}
+.wc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font: 10px var(--font-mono);
+  color: var(--dim);
+  margin-top: 8px;
+}
+.wc-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border: 1px solid var(--ink);
+  vertical-align: -1px;
+}

@@ -82,6 +82,8 @@ pub struct Model {
     pub measured_timed_tokens: i64,
     pub estimated_ms: f64,
     pub estimated_timed_tokens: i64,
+    /// Swipes that are the one the reply currently shows.
+    pub kept_swipes: i64,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Persona {
@@ -89,6 +91,20 @@ pub struct Persona {
     pub name: String,
     pub chats: i64,
     pub messages: i64,
+}
+#[derive(Serialize, Deserialize)]
+pub struct PersonaCast {
+    pub persona_id: Option<String>,
+    /// The chat owner, or `group` for every group chat.
+    pub character_id: String,
+    pub messages: i64,
+}
+/// Colours pinned in WackChatter's own settings, keyed like its `dialogueColors`.
+/// Portrait-derived colours are not listed: the frontend extracts those itself.
+#[derive(Serialize, Default)]
+pub struct Colors {
+    pub characters: BTreeMap<String, Vec<String>>,
+    pub personas: BTreeMap<String, Vec<String>>,
 }
 #[derive(Serialize)]
 pub struct Stats {
@@ -100,6 +116,10 @@ pub struct Stats {
     pub models: Vec<Model>,
     pub personas: Vec<Persona>,
     pub hours: Vec<(i64, i64)>,
+    pub cast_activity: Vec<(String, i64, i64)>,
+    pub model_activity: Vec<(String, i64, i64)>,
+    pub persona_cast: Vec<PersonaCast>,
+    pub colors: Colors,
     pub co_creator_sessions: i64,
     pub first_chat: Option<i64>,
     pub last_chat: Option<i64>,
@@ -295,6 +315,49 @@ fn persona_name(root: &Path, id: Option<&str>) -> String {
         _ => name.into(),
     }
 }
+/// Only the colour lists in `dialogueColors` are read; nothing else in settings.json
+/// is parsed out or sent. A legacy hex string is a pinned single colour, an object
+/// with `source: "custom"` carries its own list, and anything else follows the portrait.
+fn pinned_colors(root: &Path) -> Colors {
+    let settings: Value = fs::read(root.join("settings.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null);
+    let hex = |v: &Value| {
+        v.as_str()
+            // #RGB or #RRGGBB only: the frontend's colour maths reads nothing else
+            .filter(|s| {
+                matches!(s.len(), 4 | 7)
+                    && s.starts_with('#')
+                    && s[1..].chars().all(|c| c.is_ascii_hexdigit())
+            })
+            .map(String::from)
+    };
+    let read = |key: &str| -> BTreeMap<String, Vec<String>> {
+        let Some(map) = settings["dialogueColors"][key].as_object() else {
+            return BTreeMap::new();
+        };
+        map.iter()
+            .filter_map(|(id, v)| {
+                let colors: Vec<String> = if v.is_string() {
+                    hex(v).into_iter().collect()
+                } else if v["source"] == "custom" {
+                    v["colors"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(hex).take(3).collect())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                (!colors.is_empty()).then(|| (id.clone(), colors))
+            })
+            .collect()
+    };
+    Colors {
+        characters: read("characters"),
+        personas: read("personas"),
+    }
+}
 fn safe_file(root: &Path, base: &Path, id: &str) -> Result<PathBuf> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id == ".." {
         return Err("Invalid asset identity".into());
@@ -382,7 +445,7 @@ pub fn stats(
     // Character summary covers direct chats; group participation is returned separately.
     let scope = "(?1 IS NULL OR c.character_id=?1) AND (?2 IS NULL OR c.id=?2)";
     let args: [&dyn rusqlite::ToSql; 2] = [&character, &group];
-    let base=format!("WITH msg AS (SELECT m.*,c.created,c.modified,c.metadata,c.character_id AS owner,{kind} AS kind,{speaker} AS speaker,{persona} AS persona,json_extract(m.swipes,'$['||m.swipe_id||']') AS text,json_extract(m.swipe_info,'$['||m.swipe_id||'].send_date') AS sent FROM messages m JOIN chats c ON c.id=m.chat_id WHERE {scope}), swipe AS (SELECT msg.*,s.value AS info,COALESCE(json_extract(s.value,'$.extra.token_count'),0) AS tokens,COALESCE(json_extract(s.value,'$.extra.usage_reported'),0) AS measured,(julianday(json_extract(s.value,'$.gen_finished'))-julianday(json_extract(s.value,'$.gen_started')))*86400000.0 AS elapsed FROM msg,json_each(msg.swipe_info) s WHERE is_user=0 AND is_system=0 AND position>0)");
+    let base=format!("WITH msg AS (SELECT m.*,c.created,c.modified,c.metadata,c.character_id AS owner,{kind} AS kind,{speaker} AS speaker,{persona} AS persona,json_extract(m.swipes,'$['||m.swipe_id||']') AS text,json_extract(m.swipe_info,'$['||m.swipe_id||'].send_date') AS sent FROM messages m JOIN chats c ON c.id=m.chat_id WHERE {scope}), swipe AS (SELECT msg.*,s.key AS swipe_index,s.value AS info,COALESCE(json_extract(s.value,'$.extra.token_count'),0) AS tokens,COALESCE(json_extract(s.value,'$.extra.usage_reported'),0) AS measured,(julianday(json_extract(s.value,'$.gen_finished'))-julianday(json_extract(s.value,'$.gen_started')))*86400000.0 AS elapsed FROM msg,json_each(msg.swipe_info) s WHERE is_user=0 AND is_system=0 AND position>0)");
     let mut totals:Totals=rows(&db,&format!("{base} SELECT (SELECT COUNT(*) FROM chats c WHERE {scope}) AS chats,COUNT(*) AS messages,COALESCE(SUM(is_user),0) AS user_messages,COALESCE(SUM(is_user=0 AND is_system=0),0) AS replies,(SELECT COUNT(*) FROM swipe) AS swipes,(SELECT COALESCE(SUM(CASE WHEN measured=1 THEN tokens ELSE 0 END),0) FROM swipe) AS measured_tokens,(SELECT COALESCE(SUM(CASE WHEN measured=0 THEN tokens ELSE 0 END),0) FROM swipe) AS estimated_tokens,0 AS active_minutes FROM msg"),&args)?.remove(0);
     let active:Vec<Value>=rows(&db,&format!("{base}, stamps AS (SELECT chat_id,position,CAST(strftime('%s',sent) AS INTEGER)*1000 AS ts FROM msg WHERE strftime('%s',sent) IS NOT NULL), gaps AS (SELECT ts-LAG(ts) OVER(PARTITION BY chat_id ORDER BY position) AS gap FROM stamps) SELECT COALESCE(SUM(CASE WHEN gap>0 AND gap<=1800000 THEN gap ELSE 0 END),0) AS ms FROM gaps"),&args)?;
     totals.active_minutes =
@@ -414,7 +477,7 @@ pub fn stats(
         "COALESCE(json_extract(info,'$.extra.model'),'unknown')",
         "CAST((julianday(COALESCE(json_extract(info,'$.gen_finished'),sent,'now'))-2440587.5)*86400000 AS INTEGER)",
     );
-    let models:Vec<Model>=rows(&db,&format!("{base} SELECT {display} AS model,COALESCE(json_extract(info,'$.extra.api'),'unknown') AS provider,COUNT(*) AS swipes,SUM(CASE WHEN measured=1 THEN tokens ELSE 0 END) AS measured_tokens,SUM(CASE WHEN measured=0 THEN tokens ELSE 0 END) AS estimated_tokens,COALESCE(SUM(elapsed>0),0) AS timed_swipes,COALESCE(SUM(CASE WHEN elapsed>0 THEN elapsed ELSE 0 END),0) AS total_ms,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=1 THEN elapsed ELSE 0 END),0) AS measured_ms,SUM(CASE WHEN elapsed>0 AND measured=1 THEN tokens ELSE 0 END) AS measured_timed_tokens,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=0 THEN elapsed ELSE 0 END),0) AS estimated_ms,SUM(CASE WHEN elapsed>0 AND measured=0 THEN tokens ELSE 0 END) AS estimated_timed_tokens FROM swipe GROUP BY 1,2 ORDER BY swipes DESC"),&args)?;
+    let models:Vec<Model>=rows(&db,&format!("{base} SELECT {display} AS model,COALESCE(json_extract(info,'$.extra.api'),'unknown') AS provider,COUNT(*) AS swipes,SUM(CASE WHEN measured=1 THEN tokens ELSE 0 END) AS measured_tokens,SUM(CASE WHEN measured=0 THEN tokens ELSE 0 END) AS estimated_tokens,COALESCE(SUM(elapsed>0),0) AS timed_swipes,COALESCE(SUM(CASE WHEN elapsed>0 THEN elapsed ELSE 0 END),0) AS total_ms,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=1 THEN elapsed ELSE 0 END),0) AS measured_ms,SUM(CASE WHEN elapsed>0 AND measured=1 THEN tokens ELSE 0 END) AS measured_timed_tokens,COALESCE(SUM(CASE WHEN elapsed>0 AND measured=0 THEN elapsed ELSE 0 END),0) AS estimated_ms,SUM(CASE WHEN elapsed>0 AND measured=0 THEN tokens ELSE 0 END) AS estimated_timed_tokens,COALESCE(SUM(swipe_index=swipe_id),0) AS kept_swipes FROM swipe GROUP BY 1,2 ORDER BY swipes DESC"),&args)?;
     let mut merged: BTreeMap<(String, String), Model> = BTreeMap::new();
     for m in models {
         let key = (m.model.clone(), m.provider.clone());
@@ -428,6 +491,7 @@ pub fn stats(
             x.measured_timed_tokens += m.measured_timed_tokens;
             x.estimated_ms += m.estimated_ms;
             x.estimated_timed_tokens += m.estimated_timed_tokens;
+            x.kept_swipes += m.kept_swipes;
         } else {
             merged.insert(key, m);
         }
@@ -439,6 +503,24 @@ pub fn stats(
         p.name = persona_name(&root, p.persona_id.as_deref());
     }
     let hours:Vec<Value>=rows(&db,&format!("{base} SELECT CAST(strftime('%s',sent) AS INTEGER)*1000 AS hour,COUNT(*) AS count FROM msg WHERE strftime('%s',sent) IS NOT NULL GROUP BY hour ORDER BY hour"),&args)?;
+    // Quarter-hour floors: every real UTC offset is a multiple of 15 minutes, so the
+    // client can still fold these into exact local days and months.
+    let quarter = |at: &str| format!("(CAST(strftime('%s',{at}) AS INTEGER)*1000/900000*900000)");
+    let cast_activity:Vec<Value>=rows(&db,&format!("{base} SELECT speaker AS id,{} AS ts,COUNT(*) AS n FROM msg WHERE is_user=0 AND is_system=0 AND position>0 AND speaker IS NOT NULL AND strftime('%s',sent) IS NOT NULL GROUP BY 1,2 ORDER BY 2,1",quarter("sent")),&args)?;
+    let swipe_sent = "COALESCE(json_extract(info,'$.send_date'),sent)";
+    let model_activity:Vec<Value>=rows(&db,&format!("{base} SELECT {display} AS id,{} AS ts,COUNT(*) AS n FROM swipe WHERE strftime('%s',{swipe_sent}) IS NOT NULL GROUP BY 1,2 ORDER BY 2,1",quarter(swipe_sent)),&args)?;
+    let persona_cast:Vec<PersonaCast>=rows(&db,&format!("{base} SELECT persona AS persona_id,CASE WHEN kind='group' THEN 'group' ELSE COALESCE(owner,'unknown') END AS character_id,COUNT(*) AS messages FROM msg WHERE is_user=1 GROUP BY 1,2 ORDER BY messages DESC"),&args)?;
+    let triples = |v: Vec<Value>| -> Vec<(String, i64, i64)> {
+        v.into_iter()
+            .map(|r| {
+                (
+                    r["id"].as_str().unwrap_or("unknown").to_string(),
+                    r["ts"].as_i64().unwrap_or(0),
+                    r["n"].as_i64().unwrap_or(0),
+                )
+            })
+            .collect()
+    };
     let names = names(&root);
     let chat_sql=format!("SELECT c.id,c.title,{kind} AS kind,c.character_id,c.created,c.modified,(SELECT COUNT(*) FROM messages m WHERE m.chat_id=c.id) AS messages,(SELECT COUNT(*) FROM messages m WHERE m.chat_id=c.id AND m.is_user=0 AND m.is_system=0 AND m.position>0) AS replies,(SELECT COALESCE(SUM(CASE WHEN COALESCE(json_extract(s.value,'$.extra.usage_reported'),0)=1 THEN COALESCE(json_extract(s.value,'$.extra.token_count'),0) ELSE 0 END),0) FROM messages m,json_each(m.swipe_info) s WHERE m.chat_id=c.id AND m.is_user=0 AND m.is_system=0 AND m.position>0) AS measured_tokens,(SELECT COALESCE(SUM(CASE WHEN COALESCE(json_extract(s.value,'$.extra.usage_reported'),0)=0 THEN COALESCE(json_extract(s.value,'$.extra.token_count'),0) ELSE 0 END),0) FROM messages m,json_each(m.swipe_info) s WHERE m.chat_id=c.id AND m.is_user=0 AND m.is_system=0 AND m.position>0) AS estimated_tokens FROM chats c WHERE {scope} ORDER BY messages DESC,c.modified DESC");
     let chats: Vec<Chat> = rows(&db, &chat_sql, &args)?;
@@ -508,6 +590,10 @@ pub fn stats(
                 )
             })
             .collect(),
+        cast_activity: triples(cast_activity),
+        model_activity: triples(model_activity),
+        persona_cast,
+        colors: pinned_colors(&root),
         co_creator_sessions: if character.is_none() && group.is_none() {
             scalar(&db, "SELECT COUNT(*) FROM cocreator_sessions")
         } else {
@@ -564,7 +650,26 @@ pub struct Usage {
     pub conversations: Vec<Breakdown>,
     pub outcomes: Vec<Breakdown>,
     pub daily: Vec<Breakdown>,
+    pub flows: Vec<Flow>,
+    pub daily_features: Vec<DailyFeature>,
     pub calls: Vec<Call>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct Flow {
+    pub purpose: String,
+    pub model: String,
+    pub outcome: String,
+    pub events: i64,
+    pub measured_tokens: i64,
+}
+#[derive(Serialize, Deserialize)]
+pub struct DailyFeature {
+    pub day: String,
+    pub purpose: String,
+    pub events: i64,
+    pub measured_tokens: i64,
+    pub estimated_tokens: i64,
+    pub cost_usd: Option<f64>,
 }
 pub fn usage(
     store: &Store,
@@ -606,6 +711,8 @@ pub fn usage(
         conversations: breakdown("COALESCE((SELECT NULLIF(m.session_id,'') FROM wackchatter_membership m WHERE m.event_id=filtered.source_event_id AND (?1 IS NULL OR m.library_id=?1) AND m.session_id<>'' ORDER BY m.rank DESC,m.library_id,m.session_id LIMIT 1),session_id)")?,
         outcomes: breakdown("outcome")?,
         daily: breakdown("date(ts/1000,'unixepoch')")?,
+        flows: rows(&db,&format!("{base} SELECT COALESCE(purpose,'unknown') AS purpose,display_model AS model,COALESCE(outcome,'unknown') AS outcome,COUNT(*) AS events,SUM({measured}) AS measured_tokens FROM filtered GROUP BY 1,2,3 ORDER BY events DESC"),&args)?,
+        daily_features: rows(&db,&format!("{base} SELECT date(ts/1000,'unixepoch') AS day,COALESCE(purpose,'unknown') AS purpose,COUNT(*) AS events,SUM({measured}) AS measured_tokens,SUM({estimated}) AS estimated_tokens,SUM(CASE WHEN estimated=0 THEN cost_usd END) AS cost_usd FROM filtered GROUP BY 1,2 ORDER BY 1,2"),&args)?,
         calls,
     })
 }
@@ -865,6 +972,118 @@ mod tests {
         let g = stats(&s, &h, "library-one", None, Some("group")).unwrap();
         assert_eq!(g.totals.chats, 1);
         assert_eq!(g.cast.len(), 2);
+    }
+    #[test]
+    fn activity_kept_swipes_and_persona_matrix() {
+        let (h, s, db) = fixture();
+        let a = swipe(100, true, "2026-01-01T12:07:30Z");
+        let b = swipe(50, false, "2026-01-01T12:20:00Z");
+        message(&db, "direct", "u", 1, true, false, None, Some("p1"), json!([a]));
+        // reply shows swipe 0 of two: one kept, one rerolled away
+        message(&db, "direct", "r", 2, false, false, None, None, json!([a, b]));
+        message(&db, "group", "u", 0, true, false, None, Some("p1"), json!([a]));
+        message(&db, "group", "a", 1, false, false, Some("A.png"), None, json!([b]));
+        message(&db, "group", "b", 2, false, false, Some("B.png"), None, json!([a]));
+        let v = stats(&s, &h, "library-one", None, None).unwrap();
+        let model = &v.models[0];
+        assert_eq!(model.swipes, 4);
+        assert_eq!(model.kept_swipes, 3);
+        let per = |id: &str| -> i64 {
+            v.cast_activity.iter().filter(|x| x.0 == id).map(|x| x.2).sum()
+        };
+        for c in &v.cast {
+            assert_eq!(per(&c.character_id), c.replies, "{}", c.character_id);
+        }
+        assert!(v.cast_activity.iter().all(|x| x.1 % 900_000 == 0));
+        // 12:07:30 floors to the 12:00 quarter
+        let noon = 1_767_268_800_000;
+        assert!(v.cast_activity.iter().any(|x| x.1 == noon));
+        assert_eq!(
+            v.model_activity.iter().map(|x| x.2).sum::<i64>(),
+            v.totals.swipes
+        );
+        let cell = |c: &str| {
+            v.persona_cast
+                .iter()
+                .find(|p| p.character_id == c && p.persona_id.as_deref() == Some("p1"))
+                .map(|p| p.messages)
+        };
+        assert_eq!(cell("A.png"), Some(1));
+        assert_eq!(cell("group"), Some(1));
+        let only_group = stats(&s, &h, "library-one", None, Some("group")).unwrap();
+        assert_eq!(only_group.cast_activity.len(), 2);
+        assert_eq!(only_group.persona_cast.len(), 1);
+    }
+    #[test]
+    fn pinned_colors_keep_only_custom_lists() {
+        let (h, s, _) = fixture();
+        assert!(stats(&s, &h, "library-one", None, None)
+            .unwrap()
+            .colors
+            .characters
+            .is_empty());
+        fs::write(
+            h.join("library/settings.json"),
+            json!({"connections":[{"apiKey":"secret"}],"dialogueColors":{"enabled":true,"characters":{
+                "Hex.png":"#2dd4bf",
+                "Custom.png":{"source":"custom","colors":["#e9ccc4","bad","#db9aa6"],"aura":"single","dialogue":"solid"},
+                "Portrait.png":{"source":"portrait","aura":"single","dialogue":"solid"},
+                "Off.png":null,
+                "Injected.png":"url(evil)"
+            },"personas":{"p1":"#a78bfa"}}})
+            .to_string(),
+        )
+        .unwrap();
+        let c = stats(&s, &h, "library-one", None, None).unwrap().colors;
+        assert_eq!(c.characters["Hex.png"], vec!["#2dd4bf"]);
+        assert_eq!(c.characters["Custom.png"], vec!["#e9ccc4", "#db9aa6"]);
+        assert_eq!(c.characters.len(), 2);
+        assert_eq!(c.personas["p1"], vec!["#a78bfa"]);
+    }
+    #[test]
+    fn usage_flows_and_daily_features_partition_totals() {
+        use crate::models::{Source, UsageEvent};
+        let s = test_store("wc-flows");
+        let now = time::OffsetDateTime::now_utc().unix_timestamp() * 1000;
+        let event = |id: &str, purpose: &str, outcome: &str, estimated: bool| UsageEvent {
+            source: Source::WackChatter,
+            source_event_id: id.into(),
+            ts: now - 3_600_000,
+            session_id: Some("chat".into()),
+            project: None,
+            provider: Some("openrouter".into()),
+            provider_name: None,
+            model: Some("claude-sonnet-4-5".into()),
+            input_tokens: 1000,
+            output_tokens: 200,
+            reasoning_tokens: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            duration_ms: Some(1000),
+            ttft_ms: Some(100),
+            is_subagent: false,
+            estimated,
+            purpose: Some(purpose.into()),
+            outcome: Some(outcome.into()),
+            workspace: None,
+            subagent_id: None,
+            mode: None,
+        };
+        s.insert_events(&[
+            event("a", "chat", "completed", false),
+            event("b", "chat", "failed", false),
+            event("c", "summary", "completed", true),
+        ])
+        .unwrap();
+        let u = usage(&s, None, 7, None).unwrap();
+        assert_eq!(u.totals.events, 3);
+        assert_eq!(u.flows.iter().map(|f| f.events).sum::<i64>(), 3);
+        assert_eq!(u.flows.len(), 3);
+        assert_eq!(u.daily_features.iter().map(|d| d.events).sum::<i64>(), 3);
+        let summary = u.daily_features.iter().find(|d| d.purpose == "summary").unwrap();
+        assert_eq!(summary.measured_tokens, 0);
+        assert_eq!(summary.estimated_tokens, 200);
+        assert!(summary.cost_usd.is_none());
     }
     #[test]
     fn sessions_drop_long_gaps_and_bad_timing() {

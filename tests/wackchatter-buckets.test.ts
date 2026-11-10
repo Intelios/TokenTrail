@@ -1,15 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { HourBucket } from "../src/lib/wackchatter/buckets";
-import {
-  activeDayCount,
-  busiestDay,
-  foldDays,
-  foldHourOfDay,
-  foldWeekday,
-  recentDays,
-  startOfDay,
-  streaks,
-} from "../src/lib/wackchatter/buckets";
+import { busiestDay, foldDays, startOfDay, streaks } from "../src/lib/wackchatter/buckets";
 
 /** A UTC-hour bucket, as the server sends them. */
 function hour(iso: string, count = 1): HourBucket {
@@ -50,83 +41,6 @@ describe("folding into local days", () => {
     expect(days.map((entry) => entry.day)).toEqual(
       [...days.map((e) => e.day)].sort((a, b) => a - b),
     );
-  });
-});
-
-describe("hour of day", () => {
-  test("returns 24 buckets indexed by local hour", () => {
-    const local = new Date(2026, 7, 8, 19, 0, 0);
-    const hours = foldHourOfDay([[local.getTime(), 5]]);
-    expect(hours).toHaveLength(24);
-    expect(hours[19]).toBe(5);
-    expect(hours.reduce((sum, value) => sum + value, 0)).toBe(5);
-  });
-});
-
-describe("weekday", () => {
-  test("index 0 is Monday", () => {
-    // 2026-08-10 is a Monday.
-    const monday = new Date(2026, 7, 10, 12, 0, 0);
-    const sunday = new Date(2026, 7, 9, 12, 0, 0);
-    expect(foldWeekday([[monday.getTime(), 2]])[0]).toBe(2);
-    expect(foldWeekday([[sunday.getTime(), 3]])[6]).toBe(3);
-  });
-});
-
-describe("recentDays", () => {
-  test("fills the gaps between active days", () => {
-    const now = new Date(2026, 7, 20, 10, 0, 0).getTime();
-    const days = foldDays([
-      [new Date(2026, 7, 17, 12, 0, 0).getTime(), 5],
-      [new Date(2026, 7, 20, 12, 0, 0).getTime(), 2],
-    ]);
-
-    const filled = recentDays(days, 84, now);
-    expect(filled.map((entry) => entry.count)).toEqual([5, 0, 0, 2]);
-    expect(isoDay(filled[0]!.day)).toBe("2026-08-17");
-    expect(isoDay(filled[3]!.day)).toBe("2026-08-20");
-  });
-
-  test("caps at the window rather than reaching back to the first ever day", () => {
-    const now = new Date(2026, 7, 20, 10, 0, 0).getTime();
-    const days = foldDays([[new Date(2025, 0, 1, 12, 0, 0).getTime(), 1]]);
-    expect(recentDays(days, 7, now)).toHaveLength(7);
-  });
-
-  test("an empty library is one column, not a crash", () => {
-    const now = new Date(2026, 7, 20, 10, 0, 0).getTime();
-    expect(recentDays([], 84, now)).toEqual([
-      { day: startOfDay(now), count: 0 },
-    ]);
-  });
-
-  test("crossing a daylight-saving change keeps one column per calendar day", () => {
-    // 2026-10-25 is the European autumn change: that local day is 25 hours long, so
-    // stepping by a fixed 24h would drift and emit the same date twice.
-    const now = new Date(2026, 9, 27, 12, 0, 0).getTime();
-    const days = foldDays([[new Date(2026, 9, 23, 12, 0, 0).getTime(), 1]]);
-    const filled = recentDays(days, 84, now);
-
-    expect(filled.map((entry) => isoDay(entry.day))).toEqual([
-      "2026-10-23",
-      "2026-10-24",
-      "2026-10-25",
-      "2026-10-26",
-      "2026-10-27",
-    ]);
-    expect(new Set(filled.map((entry) => entry.day)).size).toBe(filled.length);
-  });
-
-  test("crossing the spring change does not skip a day either", () => {
-    const now = new Date(2026, 2, 31, 12, 0, 0).getTime();
-    const days = foldDays([[new Date(2026, 2, 28, 12, 0, 0).getTime(), 1]]);
-    const filled = recentDays(days, 84, now);
-    expect(filled.map((entry) => isoDay(entry.day))).toEqual([
-      "2026-03-28",
-      "2026-03-29",
-      "2026-03-30",
-      "2026-03-31",
-    ]);
   });
 });
 
@@ -179,17 +93,6 @@ describe("streaks", () => {
 });
 
 describe("summaries", () => {
-  test("activeDayCount ignores the filled zeros", () => {
-    const now = new Date(2026, 7, 20, 10, 0, 0).getTime();
-    const filled = recentDays(
-      foldDays([[new Date(2026, 7, 18, 12).getTime(), 4]]),
-      84,
-      now,
-    );
-    expect(filled.length).toBeGreaterThan(1);
-    expect(activeDayCount(filled)).toBe(1);
-  });
-
   test("busiestDay picks the peak, and null when there is none", () => {
     const days = foldDays([
       [new Date(2026, 7, 18, 12).getTime(), 4],
