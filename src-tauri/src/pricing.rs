@@ -314,11 +314,11 @@ mod tests {
 
     #[test]
     fn gemini_4_argon_prices() {
-        // Gemini 4 Argon (the only Gemini 4 model) lists at $2/$10 with $0.10
-        // implicitly-cached input through November 30, 2026, doubling to
-        // $4/$20/$0.20 from December 1, 2026; the table carries the current
-        // rates. Explicit caching is unsupported and cache writes bill at
-        // the uncached input rate, as for the other Gemini families.
+        // Gemini 4 Argon lists at $2/$10 with $0.10 implicitly-cached input
+        // through November 30, 2026, doubling to $4/$20/$0.20 from December 1,
+        // 2026; the table carries the current rates. Explicit caching is
+        // unsupported and cache writes bill at the uncached input rate, as
+        // for the other Gemini families.
         assert_eq!(rates_for("gemini-4-argon").map(|r| r.input), Some(2.0));
         assert_eq!(rates_for("gemini-4-argon").map(|r| r.output), Some(10.0));
         assert_eq!(rates_for("gemini-4-argon").map(|r| r.cache_read), Some(0.1));
@@ -330,6 +330,55 @@ mod tests {
         // and older Gemini generations keep their own rates.
         assert_eq!(rates_for("gemini-3.7-flash").map(|r| r.input), Some(0.75));
         assert_eq!(rates_for("gemini-2.5-pro").map(|r| r.input), Some(1.25));
+    }
+
+    #[test]
+    fn gemini_4_carbon_prices() {
+        // Gemini 4 Carbon (GA 2026-11-10) is priced exactly like Argon: $4/$20
+        // with $0.20 implicitly-cached input, the full rate that applies from
+        // 2026-12-01. Its launch offer ($2/$10/$0.10 until 2026-11-30) is
+        // deliberately not carried — full list pricing only. Explicit caching
+        // is unsupported, so cache writes bill at the uncached input rate, as
+        // for the other Gemini families.
+        assert_eq!(rates_for("gemini-4-carbon").map(|r| r.input), Some(4.0));
+        assert_eq!(rates_for("gemini-4-carbon").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("gemini-4-carbon").map(|r| r.cache_read), Some(0.2));
+        assert_eq!(rates_for("gemini-4-carbon").map(|r| r.cache_write), Some(4.0));
+        // Dated snapshots and provider-prefixed spellings resolve via the family.
+        assert_eq!(rates_for("gemini-4-carbon-2026-11-10").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("google/gemini-4-carbon").map(|r| r.input), Some(4.0));
+        // 1M input + 1M output = $24.
+        let e = event(Some("gemini-4-carbon"), 1_000_000, 0, 0, 1_000_000);
+        assert!((cost_usd(e.model.as_deref(), &e).unwrap() - 24.0).abs() < 1e-9);
+        // The entry outranks the generic gemini catch-all ($0.30/$2.50), and
+        // Argon keeps the launch rate the table has carried since its release.
+        assert_eq!(rates_for("gemini-4-argon").map(|r| r.input), Some(2.0));
+        assert_eq!(rates_for("gemini-3.7-flash").map(|r| r.input), Some(0.75));
+    }
+
+    #[test]
+    fn gemini_4_hydrogen_prices() {
+        // Gemini 4 Hydrogen (GA 2026-11-12) uses flat standard pricing across
+        // its full 1M-token context: $1.50 input, $7.50 output (thinking bills
+        // as output) and $0.075 implicitly-cached input (95% discount). There
+        // is no introductory rate — Batch/Flex (50% off) and Priority (1.8x)
+        // are serving tiers, not the list price. Explicit caching is
+        // unsupported, so cache writes bill at the uncached input rate, as for
+        // the other Gemini families.
+        assert_eq!(rates_for("gemini-4-hydrogen").map(|r| r.input), Some(1.5));
+        assert_eq!(rates_for("gemini-4-hydrogen").map(|r| r.output), Some(7.5));
+        assert_eq!(rates_for("gemini-4-hydrogen").map(|r| r.cache_read), Some(0.075));
+        assert_eq!(rates_for("gemini-4-hydrogen").map(|r| r.cache_write), Some(1.5));
+        // Dated snapshots and provider-prefixed spellings resolve via the family.
+        assert_eq!(rates_for("gemini-4-hydrogen-20261112").map(|r| r.output), Some(7.5));
+        assert_eq!(rates_for("google/gemini-4-hydrogen").map(|r| r.input), Some(1.5));
+        // 1M input + 1M cached input + 1M output = $9.075.
+        let e = event(Some("gemini-4-hydrogen"), 1_000_000, 0, 1_000_000, 1_000_000);
+        assert!((cost_usd(e.model.as_deref(), &e).unwrap() - 9.075).abs() < 1e-9);
+        // Argon and Carbon keep their own rates; the family outranks the
+        // generic gemini catch-all.
+        assert_eq!(rates_for("gemini-4-carbon").map(|r| r.input), Some(4.0));
+        assert_eq!(rates_for("gemini-4-argon").map(|r| r.output), Some(10.0));
     }
 
     #[test]
