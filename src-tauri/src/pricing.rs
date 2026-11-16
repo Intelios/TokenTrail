@@ -444,6 +444,24 @@ mod tests {
     }
 
     #[test]
+    fn zai_glm_prices_like_glm() {
+        // Mistral serves GLM under the "zai-glm-5-3" id family; it prices
+        // exactly like the Z.ai-spelled GLM-5.3 / GLM-5.3-Flash names.
+        assert_eq!(rates_for("zai-glm-5-3").map(|r| r.input), Some(1.4));
+        assert_eq!(rates_for("zai-glm-5-3").map(|r| r.output), Some(4.4));
+        assert_eq!(rates_for("zai-glm-5-3").map(|r| r.cache_read), Some(0.26));
+        assert_eq!(rates_for("zai-glm-5-3").map(|r| r.cache_write), Some(1.4));
+        assert_eq!(rates_for("mistral/zai-glm-5-3").map(|r| r.input), Some(1.4));
+        // The Flash spelling resolves to Flash rates, not the catch-all.
+        assert_eq!(rates_for("zai-glm-5-3-flash").map(|r| r.input), Some(0.15));
+        assert_eq!(rates_for("zai-glm-5-3-flash").map(|r| r.output), Some(0.5));
+        assert_eq!(rates_for("zai-glm-5-3-flash").map(|r| r.cache_read), Some(0.03));
+        assert_eq!(rates_for("mistral/zai-glm-5-3-flash").map(|r| r.output), Some(0.5));
+        // The zai-glm prefix sits before glm is irrelevant to glm-* spellings.
+        assert_eq!(rates_for("glm-5.3").map(|r| r.input), Some(1.4));
+    }
+
+    #[test]
     fn longcat_prices() {
         // LongCat-2.5-Preview (Meituan, limited-time rates) lists at
         // $0.30/$1.20 with $0.006 cached input; cache writes are undocumented
