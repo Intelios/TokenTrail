@@ -560,8 +560,21 @@
     padding: 13px clamp(22px, 1.8vw, 40px) 12px;
     border-bottom: 2px solid var(--ink);
   }
+  /* the title block spans the row so its two lines land on the stat stack's
+     label and hint rows instead of floating between them */
+  .hdtitle {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
   .hdtitle h1 { font-size: clamp(28px, 2vw, 40px); letter-spacing: -0.8px; margin: 0; }
-  .hdtitle .sub { font: 400 11px/1 var(--font-mono); opacity: 0.55; margin: 7px 0 0; letter-spacing: 0.6px; }
+  .hdtitle .sub {
+    font: 400 clamp(9.5px, 0.72vw, 11px)/1.3 var(--font-mono);
+    opacity: 0.55;
+    margin: 7px 0 0;
+    letter-spacing: 0.6px;
+  }
 
   .hdstats {
     display: grid;
