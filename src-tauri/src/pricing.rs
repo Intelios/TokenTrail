@@ -382,6 +382,65 @@ mod tests {
     }
 
     #[test]
+    fn gemini_3_8_flash_prices() {
+        // Gemini 3.8 Flash lists at $1.50 input / $7.50 output (thinking bills
+        // as output) with $0.15 implicitly-cached input. Google bills half
+        // that ($0.75/$3.75/$0.075) through 2026-12-31 and OpenRouter marks
+        // every endpoint discount=0.5, so the discounted rate is deliberately
+        // not carried — full list pricing only, as for Carbon's launch offer.
+        // Cache writes bill at the uncached input rate, as for the other
+        // Gemini families.
+        assert_eq!(rates_for("gemini-3.8-flash").map(|r| r.input), Some(1.5));
+        assert_eq!(rates_for("gemini-3.8-flash").map(|r| r.output), Some(7.5));
+        assert_eq!(rates_for("gemini-3.8-flash").map(|r| r.cache_read), Some(0.15));
+        assert_eq!(rates_for("gemini-3.8-flash").map(|r| r.cache_write), Some(1.5));
+        // Dated snapshots, provider prefixes and the effort/tier suffixes the
+        // harnesses write all resolve through the family.
+        assert_eq!(rates_for("gemini-3.8-flash-20260902").map(|r| r.output), Some(7.5));
+        assert_eq!(rates_for("google/gemini-3.8-flash").map(|r| r.input), Some(1.5));
+        assert_eq!(rates_for("gemini-3.8-flash-high").map(|r| r.input), Some(1.5));
+        assert_eq!(rates_for("gemini-3.8-flash-tiered").map(|r| r.output), Some(7.5));
+        assert_eq!(rates_for("gemini-3.8-flash-exp-a").map(|r| r.cache_read), Some(0.15));
+        // 1M input + 1M cached input + 1M output = $9.15.
+        let e = event(Some("gemini-3.8-flash"), 1_000_000, 0, 1_000_000, 1_000_000);
+        assert!((cost_usd(e.model.as_deref(), &e).unwrap() - 9.15).abs() < 1e-9);
+        // The prefix covers only the Flash line; a bare generation still falls
+        // through to the gemini catch-all ($0.30/$2.50), and the siblings keep
+        // their own rates.
+        assert_eq!(rates_for("gemini-3.8").map(|r| r.input), Some(0.3));
+        assert_eq!(rates_for("gemini-3.7-flash").map(|r| r.input), Some(0.75));
+        assert_eq!(rates_for("gemini-2.5-pro").map(|r| r.input), Some(1.25));
+        assert_eq!(rates_for("gemini-4-hydrogen").map(|r| r.input), Some(1.5));
+    }
+
+    #[test]
+    fn gemini_4_neon_prices() {
+        // Gemini 4 Neon (launched 2026-11-18) prices flat across its unified
+        // 1M-token context: $3 input, $15 output (thinking bills as output)
+        // and $0.15 implicitly-cached input (95% discount). Google publishes
+        // no dated or introductory rate for it, and OpenRouter lists no
+        // discount, unlike Carbon's launch offer. Batch/Flex (50% off) and
+        // Priority (1.8x) are serving tiers, not the list price. Explicit
+        // caching is unsupported, so cache writes bill at the uncached input
+        // rate, as for the other Gemini families.
+        assert_eq!(rates_for("gemini-4-neon").map(|r| r.input), Some(3.0));
+        assert_eq!(rates_for("gemini-4-neon").map(|r| r.output), Some(15.0));
+        assert_eq!(rates_for("gemini-4-neon").map(|r| r.cache_read), Some(0.15));
+        assert_eq!(rates_for("gemini-4-neon").map(|r| r.cache_write), Some(3.0));
+        // Dated snapshots and provider-prefixed spellings resolve via the family.
+        assert_eq!(rates_for("gemini-4-neon-20261118").map(|r| r.output), Some(15.0));
+        assert_eq!(rates_for("google/gemini-4-neon").map(|r| r.input), Some(3.0));
+        // 1M input + 1M cached input + 1M output = $18.15.
+        let e = event(Some("gemini-4-neon"), 1_000_000, 0, 1_000_000, 1_000_000);
+        assert!((cost_usd(e.model.as_deref(), &e).unwrap() - 18.15).abs() < 1e-9);
+        // The siblings keep their own rates; the family outranks the generic
+        // gemini catch-all ($0.30/$2.50).
+        assert_eq!(rates_for("gemini-4-hydrogen").map(|r| r.input), Some(1.5));
+        assert_eq!(rates_for("gemini-4-carbon").map(|r| r.output), Some(20.0));
+        assert_eq!(rates_for("gemini-4-argon").map(|r| r.input), Some(2.0));
+    }
+
+    #[test]
     fn muse_spark_prices() {
         // Muse Spark 1.2 (and the identically-priced 1.1) via the family prefix.
         assert_eq!(rates_for("muse-spark-1.2").map(|r| r.input), Some(1.25));
