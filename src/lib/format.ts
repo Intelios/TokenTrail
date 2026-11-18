@@ -354,6 +354,15 @@ export function modelFlat(model: string, rank: number): string {
   return flatColor(modelColor(model, rank));
 }
 
+/** Two distinguishable opponents, including same-brand matchups. */
+export function compareColors(a: string, b: string): [string, string] {
+  const first = modelFlat(a, 0);
+  const brandedSecond = modelFlat(b, 1);
+  if (colorDistance(first, brandedSecond) >= 40) return [first, brandedSecond];
+  const second = MODEL_PALETTE.find((color) => colorDistance(first, color) >= 40) ?? '#7c5cff';
+  return [first, second];
+}
+
 /** Left border accent color for achievement cards. */
 export function achColor(ach: { kind: string; tier: string | null }): string {
   if (ach.kind === 'token_milestone') {

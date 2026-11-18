@@ -347,6 +347,98 @@ export interface ModelDetail {
   total_window_tokens: number;
 }
 
+export interface TimingSource {
+  source: string;
+  timed_calls: number;
+}
+
+export interface TimingStats {
+  timed_calls: number;
+  ttft_calls: number;
+  generation_calls: number;
+  avg_duration_ms: number | null;
+  avg_ttft_ms: number | null;
+  end_to_end_output_tps: number | null;
+  generation_output_tps: number | null;
+  sources: TimingSource[];
+}
+
+export interface ComparisonDailyRow {
+  date: string;
+  a_tokens: number;
+  b_tokens: number;
+}
+
+export interface LeadChange {
+  date: string;
+  direction: 'a' | 'b';
+}
+
+export interface DailyGap {
+  date: string;
+  wider_side: 'a' | 'b';
+  margin: number;
+}
+
+export interface Rivalry {
+  a_wins: number;
+  b_wins: number;
+  ties: number;
+  lead_changes: LeadChange[];
+  latest_date: string | null;
+  latest_direction: 'a' | 'b' | null;
+  biggest_gap: DailyGap | null;
+}
+
+export interface CostComparison {
+  anchor_tokens: number;
+  a_anchor_cost_usd: number;
+  b_anchor_cost_usd: number;
+  b_equivalent_tokens: number | null;
+}
+
+export interface CompareModel {
+  model: string;
+  tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  generated_output: number;
+  reasoning_tokens: number;
+  events: number;
+  sessions: number;
+  subagent_tokens: number;
+  first_ts: number | null;
+  last_ts: number | null;
+  active_days: number;
+  current_streak: number;
+  longest_streak: number;
+  peak_day: string | null;
+  peak_day_tokens: number;
+  measured_tokens: number;
+  estimated_tokens: number;
+  priced_tokens: number;
+  priced_events: number;
+  priced_cost_usd: number | null;
+  cost_per_mtok: number | null;
+  hourly: HourRow[];
+  busiest_hour: number | null;
+  night_share: number;
+  by_source: SourceTotals[];
+  by_project: ProjectRow[];
+  timing: TimingStats;
+}
+
+export interface ModelComparison {
+  a: CompareModel;
+  b: CompareModel;
+  daily: ComparisonDailyRow[];
+  rivalry: Rivalry;
+  total_window_tokens: number;
+  cost_comparison: CostComparison | null;
+}
+
 /** One unbroken all-time Big 6 run; `exited` is null while it is still going. */
 export interface Big6Stint {
   entered: string;
@@ -506,6 +598,8 @@ export const api = {
   modelStats: (days: number) => invoke<ModelStatsRow[]>('get_model_stats', { days }),
   modelDetail: (model: string, days: number) =>
     invoke<ModelDetail | null>('get_model_detail', { model, days }),
+  modelComparison: (modelA: string, modelB: string, days: number, anchorTokens: number) =>
+    invoke<ModelComparison>('get_model_comparison', { modelA, modelB, days, anchorTokens }),
   modelAchievements: (model: string) =>
     invoke<Achievement[]>('get_model_achievements', { model }),
   modelBig6: (model: string) => invoke<Big6History | null>('get_model_big6', { model }),

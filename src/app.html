@@ -21,13 +21,15 @@
           const WEIGHT = [0.48, 0.2, 0.09, 0.06, 0.05, 0.04, 0.02, 0.02, 0.02, 0.01, 0.01];
           const MODELS = [
             ['claude-opus-5', 8.1e6, ['claude_code', 'zcode'], 118.4, 2910, 412],
-            ['claude-sonnet-5', 5.4e6, ['claude_code', 'opencode'], 61.2, 2140, 318],
+            ['claude-sonnet-5', 5.4e6, ['claude_code', 'opencode', 'wackchatter'], 61.2, 2140, 318],
             ['gemini-3-pro', 2.1e6, ['gemini', 'antigravity'], 24.8, 980, 145],
             ['gpt-5.6-sol', 1.6e6, ['codex'], 31.05, 812, 98],
             ['gpt-5.5', 1.3e6, ['codex', 'opencode'], 18.9, 660, 87],
             ['claude-haiku-4-5', 588e3, ['claude_code'], 2.1, 1240, 201],
             ['swe-1-6-slow', 420e3, ['devin'], 0, 214, 37],
             ['mistral-large-4-0', 310e3, ['vibe'], 0.31, 104, 18],
+            ['deepseek-v4-flash-free', 236e3, ['deepseek_harness', 'wackchatter'], 0, 156, 28],
+            ['kimi-k3', 194e3, ['wackchatter'], null, 88, 19],
           ];
           const PROJECTS = [
             ['~/dev/TokenTrail', 0.31], ['~/dev/aurora-api', 0.24], ['~/work/billing-svc', 0.2],
@@ -318,12 +320,309 @@
             const fams = {};
             MODELS.forEach((m) => {
               const norm = m[0].split('/').pop().split('[')[0].trim().toLowerCase();
-              const fam = norm.startsWith('claude') ? 'Claude' : norm.startsWith('gpt') ? 'GPT' : norm.startsWith('gemini') ? 'Gemini' : norm.startsWith('minimax') || norm.startsWith('abab') ? 'Minimax' : 'Other';
+              const fam = norm.startsWith('claude') ? 'Claude' : norm.startsWith('gpt') ? 'GPT' : norm.startsWith('gemini') ? 'Gemini' : norm.startsWith('deepseek') ? 'DeepSeek' : norm.startsWith('kimi') ? 'Kimi' : norm.startsWith('mistral') || norm.startsWith('codestral') || norm.startsWith('devstral') ? 'Mistral' : norm.startsWith('swe') ? 'SWE' : norm.startsWith('minimax') || norm.startsWith('abab') ? 'Minimax' : 'Other';
               if (!fams[fam]) fams[fam] = { family: fam, tokens: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, events: 0, sessions: 0, cost_usd: 0, first_ts: Date.now() - 300 * 86400000, last_ts: Date.now(), sources: new Set(), models: [] };
               const row = { model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31, cache_read_tokens: m[1] * 1.6, cache_write_tokens: m[1] * 0.5, events: m[4], sessions: m[5], cost_usd: m[3], first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - MODELS.indexOf(m) * 86400000, sources: m[2], active_days: Math.max(1, Math.min(Math.round((days ?? 90) * 0.6), 42)) };
               const f = fams[fam]; f.tokens += m[1]; f.input_tokens += row.input_tokens; f.output_tokens += row.output_tokens; f.cache_read_tokens += row.cache_read_tokens; f.cache_write_tokens += row.cache_write_tokens; f.events += m[4]; f.sessions += m[5]; f.cost_usd += m[3]; m[2].forEach((s) => f.sources.add(s)); f.models.push(row);
             });
             return Object.values(fams).map((f) => ({ ...f, sources: [...f.sources], models: f.models.sort((a, b) => b.tokens - a.tokens) })).sort((a, b) => b.tokens - a.tokens);
+          }
+
+          // ── Compare synthetic ledger ─────────────────────────────────
+          // One seeded event stream backs every comparison field. Keeping this
+          // separate from the global rng makes repeat calls and pair order stable.
+          const COMPARE_DAYS = 420;
+          const COMPARE_PROFILES = {
+            'claude-opus-5': { base: 92000, activity: 'rivalry', phase: 0, timing: 'rich', partial: true, price: 15, hours: [9, 10, 11, 13, 14, 15, 16, 17, 18, 20] },
+            'claude-sonnet-5': { base: 92000, activity: 'rivalry', phase: 1, timing: 'rich', partial: true, price: 3.6, hours: [22, 23, 0, 1, 2, 3, 13, 14] },
+            'claude-haiku-4-5': { base: 22000, activity: 'low', timing: 'rich', price: 0.8, hours: [22, 23, 0, 1, 12] },
+            'swe-1-6-slow': { base: 46000, timing: 'none', price: 0, hours: [10, 11, 12, 13, 14, 15] },
+            // Mistral is known all-time but dormant in the recent 7D/30D views.
+            'mistral-large-4-0': { base: 58000, dormant: 45, timing: 'none', price: 1, hours: [6, 7, 8, 9, 10, 11] },
+            'deepseek-v4-flash-free': { base: 38000, timing: 'rich', price: 0, hours: [21, 22, 23, 0, 1, 2, 12] },
+            // null is deliberately different from free: no invoice coverage at all.
+            'kimi-k3': { base: 34000, timing: 'none', price: null, hours: [20, 21, 22, 23, 0] },
+          };
+          const compareSum = (rows, key) => rows.reduce((total, row) => total + row[key], 0);
+          const compareDateMs = (date) => Date.parse(date + 'T00:00:00.000Z');
+
+          function compareRandom(key) {
+            let s = 2166136261;
+            for (let i = 0; i < key.length; i++) s = Math.imul(s ^ key.charCodeAt(i), 16777619);
+            return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0), s / 4294967296);
+          }
+
+          function compareActive(profile, offset, mi) {
+            if (offset < (profile.dormant ?? 0)) return false;
+            if (profile.activity === 'low') return offset % 4 === 0;
+            if (profile.activity === 'rivalry') {
+              return offset % 4 !== 1 && !(offset >= 17 && offset <= 22);
+            }
+            return (offset + mi) % 3 !== 0 && offset % 17 !== 5;
+          }
+
+          function compareEventsFor(m, mi) {
+            const [model, , sources, listedCost] = m;
+            const profile = COMPARE_PROFILES[model] ?? {};
+            const base = profile.base ?? Math.max(12000, m[1] / 90);
+            const hours = profile.hours ?? [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
+            const price = Object.prototype.hasOwnProperty.call(profile, 'price')
+              ? profile.price
+              : listedCost == null ? null : listedCost * 1e6 / Math.max(1, m[1]);
+            const rows = [];
+            for (let offset = COMPARE_DAYS - 1; offset >= 0; offset--) {
+              if (!compareActive(profile, offset, mi)) continue;
+              const r = compareRandom(profile.activity === 'rivalry' ? `rivalry|${offset}` : `${model}|${offset}`);
+              const cycle = profile.activity === 'rivalry' ? offset % 5 : (offset + mi) % 5;
+              let dayTokens = base * (0.7 + r() * 0.6) * (0.75 + cycle * 0.12);
+              if (profile.activity === 'rivalry') {
+                const leads = Math.floor(offset / 9) % 2 === profile.phase;
+                dayTokens *= leads ? 3.1 : 0.22;
+              }
+              dayTokens = Math.round(dayTokens);
+              const parts = Math.min(2, sources.length);
+              const weights = Array.from({ length: parts }, () => 0.75 + r() * 0.5);
+              const weight = weights.reduce((a, b) => a + b, 0);
+              let assigned = 0;
+              for (let part = 0; part < parts; part++) {
+                const er = compareRandom(`${model}|${offset}|${part}`);
+                const tokens = part === parts - 1 ? dayTokens - assigned : Math.round(dayTokens * weights[part] / weight);
+                assigned += tokens;
+                const source = sources[(offset + part + mi) % sources.length];
+                const estimated = source === 'wackchatter' && (offset + part + mi) % 4 === 0;
+                const uncovered = profile.partial && (offset + part + mi) % 5 === 0;
+                const input = Math.round(tokens * 0.46);
+                const output = Math.round(tokens * 0.22);
+                const cacheRead = Math.round(tokens * 0.24);
+                const hour = hours[Math.floor(er() * hours.length)];
+                const noTiming = profile.timing === 'none';
+                const ttft = !noTiming && (offset + part) % 6 !== 0 ? Math.round(150 + er() * 900) : 0;
+                const duration = noTiming ? 0 : Math.round(18000 + er() * 30000);
+                rows.push({
+                  model,
+                  ts: compareDateMs(iso(offset)) + hour * 3600000 + Math.floor(er() * 60) * 60000,
+                  source,
+                  project: PROJECTS[(offset + part + mi) % PROJECTS.length][0],
+                  // The raw id intentionally repeats across sources. The overall
+                  // and project session counts must qualify it with the source.
+                  sessionId: `shared-${Math.floor(offset / 6)}`,
+                  tokens,
+                  input,
+                  output,
+                  cacheRead,
+                  cacheWrite: tokens - input - output - cacheRead,
+                  reasoning: Math.round(output * 0.12),
+                  estimated,
+                  cost: estimated || uncovered || price == null ? null : tokens * price / 1e6,
+                  subagent: source !== 'wackchatter' && (offset + part) % 4 === 0,
+                  duration,
+                  ttft,
+                });
+              }
+            }
+            return rows;
+          }
+
+          const COMPARE_EVENTS = MODELS.flatMap(compareEventsFor);
+
+          function compareStreaks(daily) {
+            let longest = 0;
+            let run = 0;
+            let previous = null;
+            for (const day of daily) {
+              const current = compareDateMs(day.date);
+              run = previous != null && current - previous === 86400000 ? run + 1 : 1;
+              longest = Math.max(longest, run);
+              previous = current;
+            }
+            const dates = new Set(daily.map((day) => day.date));
+            let cursor = iso(0);
+            if (!dates.has(cursor)) cursor = iso(1);
+            let current = 0;
+            while (dates.has(cursor)) {
+              current++;
+              cursor = new Date(compareDateMs(cursor) - 86400000).toISOString().slice(0, 10);
+            }
+            return { current, longest };
+          }
+
+          function compareGroups(rows, keyFn, label) {
+            const groups = new Map();
+            for (const row of rows) {
+              const key = keyFn(row);
+              if (!groups.has(key)) {
+                groups.set(key, { key, tokens: 0, events: 0, sessions: new Set(), cost: null, first: null, last: null });
+              }
+              const group = groups.get(key);
+              group.tokens += row.tokens;
+              group.events++;
+              group.sessions.add(label === 'project' ? row.source + '\x1f' + row.sessionId : row.sessionId);
+              if (row.cost != null) group.cost = (group.cost ?? 0) + row.cost;
+              group.first = group.first == null ? row.ts : Math.min(group.first, row.ts);
+              group.last = group.last == null ? row.ts : Math.max(group.last, row.ts);
+            }
+            return [...groups.values()].map((group) => {
+              const out = {
+                [label]: group.key,
+                tokens: group.tokens,
+                events: group.events,
+                sessions: group.sessions.size,
+                cost_usd: group.cost,
+              };
+              if (label === 'project') {
+                out.first_ts = group.first;
+                out.last_ts = group.last;
+              }
+              return out;
+            }).sort((a, b) => b.tokens - a.tokens || a[label].localeCompare(b[label]));
+          }
+
+          function compareTiming(rows) {
+            const eligible = rows.filter((row) => !row.estimated && row.duration > 0);
+            const ttftRows = eligible.filter((row) => row.ttft > 0);
+            const generationRows = ttftRows.filter((row) => row.duration > row.ttft);
+            const generated = (items) => items.reduce((total, row) => total + row.output + (row.source === 'antigravity' ? row.reasoning : 0), 0);
+            const durationMs = compareSum(eligible, 'duration');
+            const generationMs = generationRows.reduce((total, row) => total + row.duration - row.ttft, 0);
+            const sources = new Map();
+            for (const row of eligible) sources.set(row.source, (sources.get(row.source) ?? 0) + 1);
+            const endToEnd = eligible.length && durationMs > 0 ? generated(eligible) * 1000 / durationMs : null;
+            const generation = generationRows.length && generationMs > 0 ? generated(generationRows) * 1000 / generationMs : null;
+            return {
+              timed_calls: eligible.length,
+              ttft_calls: ttftRows.length,
+              generation_calls: generationRows.length,
+              avg_duration_ms: eligible.length ? durationMs / eligible.length : null,
+              avg_ttft_ms: ttftRows.length ? compareSum(ttftRows, 'ttft') / ttftRows.length : null,
+              end_to_end_output_tps: Number.isFinite(endToEnd) ? endToEnd : null,
+              generation_output_tps: Number.isFinite(generation) ? generation : null,
+              sources: [...sources.entries()].map(([source, timed_calls]) => ({ source, timed_calls }))
+                .sort((a, b) => b.timed_calls - a.timed_calls || a.source.localeCompare(b.source)),
+            };
+          }
+
+          function compareSide(model, cutoff) {
+            const rows = COMPARE_EVENTS.filter((row) => row.model === model && row.ts >= cutoff);
+            const dailyMap = new Map();
+            for (const row of rows) {
+              const date = new Date(row.ts).toISOString().slice(0, 10);
+              dailyMap.set(date, (dailyMap.get(date) ?? 0) + row.tokens);
+            }
+            const daily = [...dailyMap.entries()].map(([date, tokens]) => ({ date, tokens }))
+              .sort((a, b) => a.date.localeCompare(b.date));
+            const tokens = compareSum(rows, 'tokens');
+            const measured = rows.filter((row) => !row.estimated);
+            const priced = measured.filter((row) => row.cost != null);
+            const pricedCost = priced.length ? compareSum(priced, 'cost') : null;
+            const pricedTokens = compareSum(priced, 'tokens');
+            const hourly = Array.from({ length: 24 }, (_, hour) => ({ hour, tokens: 0 }));
+            for (const row of rows) hourly[new Date(row.ts).getUTCHours()].tokens += row.tokens;
+            const busiest = hourly.reduce((best, row) => row.tokens > 0 && (!best || row.tokens > best.tokens) ? row : best, null);
+            const peak = daily.reduce((best, row) => !best || row.tokens > best.tokens ? row : best, null);
+            const streak = compareStreaks(daily);
+            const nightTokens = hourly.filter((row) => row.hour >= 22 || row.hour < 6).reduce((total, row) => total + row.tokens, 0);
+            const side = {
+              model,
+              tokens,
+              input_tokens: compareSum(rows, 'input'),
+              output_tokens: compareSum(rows, 'output'),
+              cache_read_tokens: compareSum(rows, 'cacheRead'),
+              cache_write_tokens: compareSum(rows, 'cacheWrite'),
+              generated_output: rows.reduce((total, row) => total + row.output + (row.source === 'antigravity' ? row.reasoning : 0), 0),
+              reasoning_tokens: compareSum(rows, 'reasoning'),
+              events: rows.length,
+              sessions: new Set(rows.map((row) => row.source + '\x1f' + row.sessionId)).size,
+              subagent_tokens: rows.filter((row) => row.subagent).reduce((total, row) => total + row.tokens, 0),
+              first_ts: rows.length ? Math.min(...rows.map((row) => row.ts)) : null,
+              last_ts: rows.length ? Math.max(...rows.map((row) => row.ts)) : null,
+              active_days: daily.length,
+              current_streak: streak.current,
+              longest_streak: streak.longest,
+              peak_day: peak?.date ?? null,
+              peak_day_tokens: peak?.tokens ?? 0,
+              measured_tokens: compareSum(measured, 'tokens'),
+              estimated_tokens: tokens - compareSum(measured, 'tokens'),
+              priced_tokens: pricedTokens,
+              priced_events: priced.length,
+              priced_cost_usd: pricedCost,
+              cost_per_mtok: pricedTokens > 0 && pricedCost != null ? pricedCost / pricedTokens * 1e6 : null,
+              hourly,
+              busiest_hour: busiest?.hour ?? null,
+              night_share: tokens > 0 ? nightTokens / tokens : 0,
+              by_source: compareGroups(rows, (row) => row.source, 'source'),
+              by_project: compareGroups(rows, (row) => row.project, 'project'),
+              timing: compareTiming(rows),
+            };
+            return { side, daily };
+          }
+
+          function compareRivalry(daily) {
+            const rivalry = { a_wins: 0, b_wins: 0, ties: 0, lead_changes: [], latest_date: null, latest_direction: null, biggest_gap: null };
+            let cumulativeA = 0;
+            let cumulativeB = 0;
+            let leader = null;
+            for (const day of daily) {
+              if (day.a_tokens > day.b_tokens) rivalry.a_wins++;
+              else if (day.a_tokens < day.b_tokens) rivalry.b_wins++;
+              else rivalry.ties++;
+              const margin = Math.abs(day.a_tokens - day.b_tokens);
+              if (margin > 0 && (!rivalry.biggest_gap || margin > rivalry.biggest_gap.margin)) {
+                rivalry.biggest_gap = { date: day.date, wider_side: day.a_tokens > day.b_tokens ? 'a' : 'b', margin };
+              }
+              cumulativeA += day.a_tokens;
+              cumulativeB += day.b_tokens;
+              if (cumulativeA === cumulativeB) continue;
+              const direction = cumulativeA > cumulativeB ? 'a' : 'b';
+              if (leader && leader !== direction) rivalry.lead_changes.push({ date: day.date, direction });
+              rivalry.latest_date = day.date;
+              rivalry.latest_direction = direction;
+              leader = direction;
+            }
+            return rivalry;
+          }
+
+          function modelComparisonMock(args) {
+            const modelA = String(args.modelA ?? '').trim();
+            const modelB = String(args.modelB ?? '').trim();
+            const rawDays = Number(args.days ?? 90);
+            const anchorTokens = Number(args.anchorTokens ?? 1000000);
+            if (!MODELS.some((m) => m[0] === modelA) || !MODELS.some((m) => m[0] === modelB)
+              || modelA === modelB || !Number.isFinite(rawDays) || !Number.isSafeInteger(anchorTokens) || anchorTokens <= 0) return null;
+            const days = Math.trunc(rawDays);
+            const cutoff = days <= 0 ? 0 : Date.now() - days * 86400000;
+            const a = compareSide(modelA, cutoff);
+            const b = compareSide(modelB, cutoff);
+            const aDaily = new Map(a.daily.map((row) => [row.date, row.tokens]));
+            const bDaily = new Map(b.daily.map((row) => [row.date, row.tokens]));
+            const daily = [...new Set([...aDaily.keys(), ...bDaily.keys()])].sort().map((date) => ({
+              date,
+              a_tokens: aDaily.get(date) ?? 0,
+              b_tokens: bDaily.get(date) ?? 0,
+            })).filter((row) => row.a_tokens > 0 || row.b_tokens > 0);
+            const rateA = a.side.cost_per_mtok == null ? null : a.side.cost_per_mtok / 1e6;
+            const rateB = b.side.cost_per_mtok == null ? null : b.side.cost_per_mtok / 1e6;
+            let costComparison = null;
+            if (rateA != null && rateB != null) {
+              const aCost = anchorTokens * rateA;
+              const bCost = anchorTokens * rateB;
+              if (Number.isFinite(aCost) && Number.isFinite(bCost)) {
+                const equivalent = rateA > 0 && rateB > 0 ? anchorTokens * (rateA / rateB) : null;
+                costComparison = {
+                  anchor_tokens: anchorTokens,
+                  a_anchor_cost_usd: aCost,
+                  b_anchor_cost_usd: bCost,
+                  b_equivalent_tokens: Number.isFinite(equivalent) ? equivalent : null,
+                };
+              }
+            }
+            return {
+              a: a.side,
+              b: b.side,
+              daily,
+              rivalry: compareRivalry(daily),
+              total_window_tokens: COMPARE_EVENTS.filter((row) => row.ts >= cutoff).reduce((total, row) => total + row.tokens, 0),
+              cost_comparison: costComparison,
+            };
           }
 
           function mockData(cmd, args) {
@@ -363,6 +662,7 @@
                   first_ts: Date.now() - 300 * 86400000, last_ts: Date.now() - MODELS.indexOf(m) * 86400000, sources: m[2],
                   active_days: Math.max(1, Math.min(Math.round((args.days ?? 90) * 0.6), 42)),
                 }));
+              case 'get_model_comparison': return modelComparisonMock(args);
               case 'get_daily_by_model': {
                 const n = Math.min(args.days ?? 90, 150);
                 const rows = [];
@@ -384,6 +684,7 @@
                 if (!m) return null;
                 const n = Math.min(args.days ?? 90, 150);
                 const daily = Array.from({ length: n }, (_, i) => ({ date: iso(n - 1 - i), tokens: Math.round(m[1] / 90 * (0.3 + rng() * 1.7)) }));
+                const sourceShare = (i) => m[2].length === 1 ? 1 : i === 0 ? 0.7 : 0.3 / (m[2].length - 1);
                 return {
                   model: m[0], tokens: m[1], input_tokens: m[1] * 0.62, output_tokens: m[1] * 0.31,
                   reasoning_tokens: Math.round(m[1] * 0.12),
@@ -392,8 +693,8 @@
                   first_ts: Date.now() - Math.min(args.days ?? 300, 300) * 86400000, last_ts: Date.now() - 3600000,
                   active_days: Math.min(187, n), current_streak: 12, longest_streak: 40,
                   peak_day: iso(9), peak_day_tokens: m[1] / 30,
-                  by_source: m[2].map((s, i) => ({ source: s, tokens: m[1] * (i ? 0.3 : 0.7), events: m[4] * (i ? 0.3 : 0.7), sessions: m[5] * (i ? 0.3 : 0.7), cost_usd: m[3] * (i ? 0.3 : 0.7) })),
-                  by_project: PROJECTS.map((p, i) => ({ project: p[0], tokens: m[1] * p[1], events: m[4] * p[1], sessions: m[5] * p[1], cost_usd: m[3] * p[1], first_ts: Date.now() - 280 * 86400000, last_ts: Date.now() - i * 7200000 })),
+                  by_source: m[2].map((s, i) => ({ source: s, tokens: m[1] * sourceShare(i), events: m[4] * sourceShare(i), sessions: m[5] * sourceShare(i), cost_usd: m[3] == null ? null : m[3] * sourceShare(i) })),
+                  by_project: PROJECTS.map((p, i) => ({ project: p[0], tokens: m[1] * p[1], events: m[4] * p[1], sessions: m[5] * p[1], cost_usd: m[3] == null ? null : m[3] * p[1], first_ts: Date.now() - 280 * 86400000, last_ts: Date.now() - i * 7200000 })),
                   daily,
                   total_window_tokens: totalTokens,
                 };

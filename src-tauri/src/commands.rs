@@ -1,8 +1,8 @@
 use crate::aggregate::{
     self, Achievement, Big6History, Big6Timeline, DailyCacheRow, DailyModelRow, DailyProjectRow, DailyRow,
     EstimatedShare,
-    FamilyDetail, FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelDetail, ModelRow, ModelStatsRow,
-    Overview, PeakDayRow, ProjectDetail, ProjectRow, ProjectSuggestion, WackCodeCallRow,
+    FamilyDetail, FamilyStatsRow, HeatmapCell, HourRow, LeaderboardEvent, ModelComparison, ModelDetail,
+    ModelRow, ModelStatsRow, Overview, PeakDayRow, ProjectDetail, ProjectRow, ProjectSuggestion, WackCodeCallRow,
     WackCodeDetail, WrappedSummary,
 };
 use crate::collectors;
@@ -82,6 +82,30 @@ pub fn get_model_detail(
     days: i64,
 ) -> Result<Option<ModelDetail>, String> {
     aggregate::model_detail(&state.store, &model, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_model_comparison(
+    state: State<AppState>,
+    model_a: String,
+    model_b: String,
+    days: i64,
+    anchor_tokens: i64,
+) -> Result<ModelComparison, String> {
+    let model_a = model_a.trim().to_string();
+    let model_b = model_b.trim().to_string();
+    if model_a.is_empty() || model_b.is_empty() {
+        return Err("model names cannot be empty".into());
+    }
+    if model_a == model_b {
+        return Err("choose two distinct models".into());
+    }
+    if anchor_tokens <= 0 {
+        return Err("anchor_tokens must be positive".into());
+    }
+    aggregate::model_comparison(&state.store, &model_a, &model_b, days, anchor_tokens)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "both models must be known, visible, and distinct".into())
 }
 
 #[tauri::command]

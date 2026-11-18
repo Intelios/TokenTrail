@@ -606,6 +606,107 @@ pub struct ModelDetail {
     pub total_window_tokens: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct TimingSource {
+    pub source: String,
+    pub timed_calls: i64,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct TimingStats {
+    pub timed_calls: i64,
+    pub ttft_calls: i64,
+    pub generation_calls: i64,
+    pub avg_duration_ms: Option<f64>,
+    pub avg_ttft_ms: Option<f64>,
+    pub end_to_end_output_tps: Option<f64>,
+    pub generation_output_tps: Option<f64>,
+    pub sources: Vec<TimingSource>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ComparisonDailyRow {
+    pub date: String,
+    pub a_tokens: i64,
+    pub b_tokens: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LeadChange {
+    pub date: String,
+    pub direction: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DailyGap {
+    pub date: String,
+    pub wider_side: String,
+    pub margin: i64,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct Rivalry {
+    pub a_wins: i64,
+    pub b_wins: i64,
+    pub ties: i64,
+    pub lead_changes: Vec<LeadChange>,
+    pub latest_date: Option<String>,
+    pub latest_direction: Option<String>,
+    pub biggest_gap: Option<DailyGap>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CostComparison {
+    pub anchor_tokens: i64,
+    pub a_anchor_cost_usd: f64,
+    pub b_anchor_cost_usd: f64,
+    pub b_equivalent_tokens: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct CompareModel {
+    pub model: String,
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub generated_output: i64,
+    pub reasoning_tokens: i64,
+    pub events: i64,
+    pub sessions: i64,
+    pub subagent_tokens: i64,
+    pub first_ts: Option<i64>,
+    pub last_ts: Option<i64>,
+    pub active_days: i64,
+    pub current_streak: i64,
+    pub longest_streak: i64,
+    pub peak_day: Option<String>,
+    pub peak_day_tokens: i64,
+    pub measured_tokens: i64,
+    pub estimated_tokens: i64,
+    pub priced_tokens: i64,
+    pub priced_events: i64,
+    pub priced_cost_usd: Option<f64>,
+    pub cost_per_mtok: Option<f64>,
+    pub hourly: Vec<HourRow>,
+    pub busiest_hour: Option<i64>,
+    pub night_share: f64,
+    pub by_source: Vec<SourceTotals>,
+    pub by_project: Vec<ProjectRow>,
+    pub timing: TimingStats,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelComparison {
+    pub a: CompareModel,
+    pub b: CompareModel,
+    pub daily: Vec<ComparisonDailyRow>,
+    pub rivalry: Rivalry,
+    pub total_window_tokens: i64,
+    pub cost_comparison: Option<CostComparison>,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct Achievement {
     pub kind: String,
@@ -1102,6 +1203,400 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
         by_project,
         daily,
         total_window_tokens,
+    }))
+}
+
+fn finite(value: Option<f64>) -> Option<f64> {
+    value.filter(|v| v.is_finite())
+}
+
+fn blended_rate(priced_tokens: i64, priced_cost_usd: Option<f64>) -> Option<f64> {
+    if priced_tokens <= 0 {
+        return None;
+    }
+    finite(priced_cost_usd.map(|cost| cost / priced_tokens as f64))
+}
+
+fn comparison_timing(
+    conn: &rusqlite::Connection,
+    model: &str,
+    cutoff_ts: i64,
+) -> DbResult<TimingStats> {
+    let eligible = "u.estimated = 0 AND u.duration_ms > 0
+                    AND (u.outcome IS NULL OR u.outcome NOT IN ('failed','cancelled'))";
+    let generated = "CASE WHEN u.source = 'antigravity'
+                          THEN u.output_tokens + COALESCE(u.reasoning_tokens,0)
+                          ELSE u.output_tokens END";
+    let sql = format!(
+        "SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN u.ttft_ms > 0 THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN u.ttft_ms > 0 AND u.duration_ms > u.ttft_ms THEN 1 ELSE 0 END),0),
+                AVG(u.duration_ms),
+                AVG(CASE WHEN u.ttft_ms > 0 THEN u.ttft_ms END),
+                COALESCE(SUM({G}),0), COALESCE(SUM(u.duration_ms),0),
+                COALESCE(SUM(CASE WHEN u.ttft_ms > 0 AND u.duration_ms > u.ttft_ms THEN {G} ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN u.ttft_ms > 0 AND u.duration_ms > u.ttft_ms THEN u.duration_ms - u.ttft_ms ELSE 0 END),0)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2
+           AND {H} AND {E}",
+        G = generated,
+        H = NOT_HIDDEN,
+        E = eligible
+    );
+    let mut stats = conn.query_row(&sql, rusqlite::params![cutoff_ts, model], |r| {
+        let timed_calls = r.get::<_, i64>(0)?;
+        let generation_calls = r.get::<_, i64>(2)?;
+        let generated_output = r.get::<_, i64>(5)?;
+        let duration_ms = r.get::<_, i64>(6)?;
+        let generation_output = r.get::<_, i64>(7)?;
+        let generation_ms = r.get::<_, i64>(8)?;
+        let end_to_end_output_tps = (timed_calls > 0 && duration_ms > 0)
+            .then(|| generated_output as f64 * 1000.0 / duration_ms as f64);
+        let generation_output_tps = (generation_calls > 0 && generation_ms > 0)
+            .then(|| generation_output as f64 * 1000.0 / generation_ms as f64);
+        Ok(TimingStats {
+            timed_calls,
+            ttft_calls: r.get(1)?,
+            generation_calls,
+            avg_duration_ms: finite(r.get(3)?),
+            avg_ttft_ms: finite(r.get(4)?),
+            end_to_end_output_tps: finite(end_to_end_output_tps),
+            generation_output_tps: finite(generation_output_tps),
+            sources: Vec::new(),
+        })
+    })?;
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT u.source, COUNT(*)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2
+           AND {H} AND {E}
+         GROUP BY u.source ORDER BY 2 DESC, 1",
+        H = NOT_HIDDEN,
+        E = eligible
+    ))?;
+    stats.sources = stmt
+        .query_map(rusqlite::params![cutoff_ts, model], |r| {
+            Ok(TimingSource { source: r.get(0)?, timed_calls: r.get(1)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(stats)
+}
+
+fn comparison_side(
+    conn: &rusqlite::Connection,
+    model: &str,
+    cutoff_ts: i64,
+) -> DbResult<(CompareModel, Vec<HeatmapCell>)> {
+    let totals_sql = format!(
+        "SELECT COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+                COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
+                COALESCE(SUM(CASE WHEN u.source = 'antigravity'
+                                  THEN u.output_tokens + COALESCE(u.reasoning_tokens,0)
+                                  ELSE u.output_tokens END),0),
+                COALESCE(SUM(u.reasoning_tokens),0), COALESCE(SUM({T}),0), COUNT(*),
+                COUNT(DISTINCT u.source || char(31) || u.session_id),
+                COALESCE(SUM(CASE WHEN u.is_subagent = 1 THEN {T} ELSE 0 END),0),
+                MIN(u.ts), MAX(u.ts),
+                COALESCE(SUM(CASE WHEN u.estimated = 0 THEN {T} ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN u.estimated = 1 THEN {T} ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN {T} ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN 1 ELSE 0 END),0),
+                SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN u.cost_usd END)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    );
+    let mut side = conn.query_row(&totals_sql, rusqlite::params![cutoff_ts, model], |r| {
+        let priced_tokens = r.get::<_, i64>(14)?;
+        let priced_cost_usd = finite(r.get::<_, Option<f64>>(16)?);
+        let cost_per_mtok = blended_rate(priced_tokens, priced_cost_usd)
+            .and_then(|rate| finite(Some(rate * 1e6)));
+        Ok(CompareModel {
+            model: model.to_string(),
+            input_tokens: r.get(0)?,
+            output_tokens: r.get(1)?,
+            cache_read_tokens: r.get(2)?,
+            cache_write_tokens: r.get(3)?,
+            generated_output: r.get(4)?,
+            reasoning_tokens: r.get(5)?,
+            tokens: r.get(6)?,
+            events: r.get(7)?,
+            sessions: r.get(8)?,
+            subagent_tokens: r.get(9)?,
+            first_ts: r.get(10)?,
+            last_ts: r.get(11)?,
+            measured_tokens: r.get(12)?,
+            estimated_tokens: r.get(13)?,
+            priced_tokens,
+            priced_events: r.get(15)?,
+            priced_cost_usd,
+            cost_per_mtok,
+            ..Default::default()
+        })
+    })?;
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*),
+                COUNT(DISTINCT u.session_id),
+                SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN u.cost_usd END)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
+         GROUP BY u.source ORDER BY 2 DESC, 1",
+        T = TOKENS,
+        H = NOT_HIDDEN
+    ))?;
+    side.by_source = stmt
+        .query_map(rusqlite::params![cutoff_ts, model], |r| {
+            Ok(SourceTotals {
+                source: r.get(0)?,
+                tokens: r.get(1)?,
+                events: r.get(2)?,
+                sessions: r.get(3)?,
+                cost_usd: finite(r.get(4)?),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
+                COUNT(DISTINCT u.source || char(31) || u.session_id),
+                SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN u.cost_usd END),
+                MIN(u.ts), MAX(u.ts)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         LEFT JOIN project_alias pj ON pj.alias = u.project
+         WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
+         GROUP BY 1 ORDER BY 2 DESC, 1",
+        P = PROJECT,
+        T = TOKENS,
+        H = NOT_HIDDEN
+    ))?;
+    side.by_project = stmt
+        .query_map(rusqlite::params![cutoff_ts, model], |r| {
+            Ok(ProjectRow {
+                project: r.get(0)?,
+                tokens: r.get(1)?,
+                events: r.get(2)?,
+                sessions: r.get(3)?,
+                cost_usd: finite(r.get(4)?),
+                first_ts: r.get(5)?,
+                last_ts: r.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let daily: Vec<HeatmapCell> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT date(u.ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
+             GROUP BY d ORDER BY d",
+            T = TOKENS,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt.query_map(rusqlite::params![cutoff_ts, model], |r| {
+            Ok(HeatmapCell { date: r.get(0)?, tokens: r.get(1)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let dates: Vec<String> = daily.iter().map(|d| d.date.clone()).collect();
+    side.active_days = dates.len() as i64;
+    (side.current_streak, side.longest_streak) = streaks(&dates);
+    let mut peak: Option<&HeatmapCell> = None;
+    for day in &daily {
+        if peak.is_none_or(|p| day.tokens > p.tokens) {
+            peak = Some(day);
+        }
+    }
+    side.peak_day = peak.map(|p| p.date.clone());
+    side.peak_day_tokens = peak.map(|p| p.tokens).unwrap_or(0);
+
+    let sparse_hours: Vec<HourRow> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT CAST(strftime('%H', u.ts/1000, 'unixepoch') AS INTEGER), COALESCE(SUM({T}),0)
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE u.ts >= ?1 AND COALESCE(a.canonical, u.model, 'unknown') = ?2 AND {H}
+             GROUP BY 1 ORDER BY 1",
+            T = TOKENS,
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt.query_map(rusqlite::params![cutoff_ts, model], |r| {
+            Ok(HourRow { hour: r.get(0)?, tokens: r.get(1)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    side.hourly = (0..24)
+        .map(|hour| HourRow {
+            hour,
+            tokens: sparse_hours.iter().find(|h| h.hour == hour).map(|h| h.tokens).unwrap_or(0),
+        })
+        .collect();
+    let mut busiest: Option<&HourRow> = None;
+    for hour in &side.hourly {
+        if hour.tokens > 0 && busiest.is_none_or(|b| hour.tokens > b.tokens) {
+            busiest = Some(hour);
+        }
+    }
+    side.busiest_hour = busiest.map(|h| h.hour);
+    let night_tokens: i64 = side
+        .hourly
+        .iter()
+        .filter(|h| h.hour >= 22 || h.hour < 6)
+        .map(|h| h.tokens)
+        .sum();
+    side.night_share = if side.tokens > 0 {
+        night_tokens as f64 / side.tokens as f64
+    } else {
+        0.0
+    };
+    side.timing = comparison_timing(conn, model, cutoff_ts)?;
+    Ok((side, daily))
+}
+
+fn comparison_rivalry(daily: &[ComparisonDailyRow]) -> Rivalry {
+    let mut rivalry = Rivalry::default();
+    let mut cumulative_a = 0i64;
+    let mut cumulative_b = 0i64;
+    let mut leader: Option<String> = None;
+
+    for day in daily {
+        match day.a_tokens.cmp(&day.b_tokens) {
+            std::cmp::Ordering::Greater => rivalry.a_wins += 1,
+            std::cmp::Ordering::Less => rivalry.b_wins += 1,
+            std::cmp::Ordering::Equal => rivalry.ties += 1,
+        }
+        let margin = (day.a_tokens - day.b_tokens).abs();
+        if margin > 0 && rivalry.biggest_gap.as_ref().is_none_or(|gap| margin > gap.margin) {
+            rivalry.biggest_gap = Some(DailyGap {
+                date: day.date.clone(),
+                wider_side: if day.a_tokens > day.b_tokens { "a" } else { "b" }.to_string(),
+                margin,
+            });
+        }
+
+        cumulative_a += day.a_tokens;
+        cumulative_b += day.b_tokens;
+        if cumulative_a == cumulative_b {
+            continue;
+        }
+        let direction = if cumulative_a > cumulative_b { "a" } else { "b" }.to_string();
+        if let Some(previous) = &leader {
+            if previous != &direction {
+                rivalry.lead_changes.push(LeadChange {
+                    date: day.date.clone(),
+                    direction: direction.clone(),
+                });
+            }
+        }
+        rivalry.latest_date = Some(day.date.clone());
+        rivalry.latest_direction = Some(direction.clone());
+        leader = Some(direction);
+    }
+    rivalry
+}
+
+/// Compare two canonical display names in one trailing window. `None` means
+/// that a name is unknown, hidden, or the inputs are not two distinct models.
+pub fn model_comparison(
+    store: &Store,
+    model_a: &str,
+    model_b: &str,
+    days: i64,
+    anchor_tokens: i64,
+) -> DbResult<Option<ModelComparison>> {
+    let model_a = model_a.trim();
+    let model_b = model_b.trim();
+    if model_a.is_empty() || model_b.is_empty() || model_a == model_b || anchor_tokens <= 0 {
+        return Ok(None);
+    }
+    let conn = store.read_conn();
+    let known: HashSet<String> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT DISTINCT COALESCE(a.canonical, u.model, 'unknown')
+             FROM usage_event u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE COALESCE(a.canonical, u.model, 'unknown') IN (?1, ?2) AND {H}",
+            H = NOT_HIDDEN
+        ))?;
+        let rows = stmt.query_map(rusqlite::params![model_a, model_b], |r| r.get(0))?
+            .collect::<Result<HashSet<_>, _>>()?;
+        rows
+    };
+    if known.len() != 2 || !known.contains(model_a) || !known.contains(model_b) {
+        return Ok(None);
+    }
+
+    let cutoff_ts = cutoff(days);
+    let (a, daily_a) = comparison_side(&conn, model_a, cutoff_ts)?;
+    let (b, daily_b) = comparison_side(&conn, model_b, cutoff_ts)?;
+    let mut by_date: BTreeMap<String, [i64; 2]> = BTreeMap::new();
+    for day in daily_a {
+        by_date.entry(day.date).or_default()[0] = day.tokens;
+    }
+    for day in daily_b {
+        by_date.entry(day.date).or_default()[1] = day.tokens;
+    }
+    let daily: Vec<ComparisonDailyRow> = by_date
+        .into_iter()
+        .filter(|(_, tokens)| tokens[0] > 0 || tokens[1] > 0)
+        .map(|(date, tokens)| ComparisonDailyRow {
+            date,
+            a_tokens: tokens[0],
+            b_tokens: tokens[1],
+        })
+        .collect();
+    let rivalry = comparison_rivalry(&daily);
+    let total_window_tokens = conn.query_row(
+        &format!(
+            "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ?1 AND {H}",
+            T = TOKENS,
+            H = NOT_HIDDEN
+        ),
+        [cutoff_ts],
+        |r| r.get(0),
+    )?;
+
+    let rate_a = blended_rate(a.priced_tokens, a.priced_cost_usd);
+    let rate_b = blended_rate(b.priced_tokens, b.priced_cost_usd);
+    let cost_comparison = match (rate_a, rate_b) {
+        (Some(rate_a), Some(rate_b)) => {
+            let a_anchor_cost_usd = anchor_tokens as f64 * rate_a;
+            let b_anchor_cost_usd = anchor_tokens as f64 * rate_b;
+            let b_equivalent_tokens = if rate_a > 0.0 && rate_b > 0.0 {
+                finite(Some(anchor_tokens as f64 * (rate_a / rate_b)))
+            } else {
+                None
+            };
+            match (finite(Some(a_anchor_cost_usd)), finite(Some(b_anchor_cost_usd))) {
+                (Some(a_anchor_cost_usd), Some(b_anchor_cost_usd)) => Some(CostComparison {
+                    anchor_tokens,
+                    a_anchor_cost_usd,
+                    b_anchor_cost_usd,
+                    b_equivalent_tokens,
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
+    Ok(Some(ModelComparison {
+        a,
+        b,
+        daily,
+        rivalry,
+        total_window_tokens,
+        cost_comparison,
     }))
 }
 
@@ -5411,6 +5906,441 @@ mod tests {
 
         let active_days_all = active_days_for_range(&store, 3650).unwrap();
         assert_eq!(active_days_all, 2);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+
+    fn utc_date(ts: i64) -> String {
+        time::OffsetDateTime::from_unix_timestamp(ts / 1000)
+            .unwrap()
+            .date()
+            .format(&format_description!("[year]-[month]-[day]"))
+            .unwrap()
+    }
+
+    #[test]
+    fn model_comparison_exact_cost_and_equivalence_use_stored_costs() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                wrapped_event("cost-a", "gpt-5", now, 1_000_000, None, None, false),
+                wrapped_event("cost-b", "claude-sonnet-4.5", now, 1_000_000, None, None, false),
+            ])
+            .unwrap();
+
+        let cmp = model_comparison(&store, "gpt-5", "claude-sonnet-4.5", 0, 2_000_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cmp.a.priced_tokens, 1_000_000);
+        assert_eq!(cmp.b.priced_tokens, 1_000_000);
+        assert_close(cmp.a.priced_cost_usd.unwrap(), 1.25);
+        assert_close(cmp.b.priced_cost_usd.unwrap(), 3.0);
+        assert_close(cmp.a.cost_per_mtok.unwrap(), 1.25);
+        assert_close(cmp.b.cost_per_mtok.unwrap(), 3.0);
+        let cost = cmp.cost_comparison.unwrap();
+        assert_eq!(cost.anchor_tokens, 2_000_000);
+        assert_close(cost.a_anchor_cost_usd, 2.5);
+        assert_close(cost.b_anchor_cost_usd, 6.0);
+        assert_close(cost.b_equivalent_tokens.unwrap(), 2_000_000.0 * 1.25 / 3.0);
+
+        // Comparison reprices nothing: an existing historical cost is the input.
+        store
+            .read_conn()
+            .execute("UPDATE usage_event SET cost_usd=2.0 WHERE source_event_id='cost-a'", [])
+            .unwrap();
+        let cmp = model_comparison(&store, "gpt-5", "claude-sonnet-4.5", 0, 1_000_000)
+            .unwrap()
+            .unwrap();
+        let cost = cmp.cost_comparison.unwrap();
+        assert_close(cost.a_anchor_cost_usd, 2.0);
+        assert_close(cost.b_equivalent_tokens.unwrap(), 1_000_000.0 * 2.0 / 3.0);
+    }
+
+    #[test]
+    fn model_comparison_distinguishes_free_from_unpriced() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        store
+            .insert_events(&[
+                wrapped_event("free", "deepseek-v4-flash-free", now, 1000, None, None, false),
+                wrapped_event("paid", "gpt-5", now, 1000, None, None, false),
+                wrapped_event("unpriced", "never-priced-model", now, 2000, None, None, false),
+            ])
+            .unwrap();
+
+        let cmp = model_comparison(&store, "deepseek-v4-flash-free", "gpt-5", 0, 1_000_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cmp.a.priced_events, 1);
+        assert_eq!(cmp.a.priced_tokens, 1000);
+        assert_eq!(cmp.a.priced_cost_usd, Some(0.0));
+        assert_eq!(cmp.a.cost_per_mtok, Some(0.0));
+        let cost = cmp.cost_comparison.unwrap();
+        assert_eq!(cost.a_anchor_cost_usd, 0.0);
+        assert_close(cost.b_anchor_cost_usd, 1.25);
+        assert_eq!(cost.b_equivalent_tokens, None);
+
+        let cmp = model_comparison(
+            &store,
+            "deepseek-v4-flash-free",
+            "never-priced-model",
+            0,
+            1_000_000,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(cmp.a.cost_per_mtok, Some(0.0));
+        assert_eq!(cmp.b.measured_tokens, 2000);
+        assert_eq!(cmp.b.priced_tokens, 0);
+        assert_eq!(cmp.b.priced_events, 0);
+        assert_eq!(cmp.b.priced_cost_usd, None);
+        assert_eq!(cmp.b.cost_per_mtok, None);
+        assert!(cmp.cost_comparison.is_none());
+    }
+
+    #[test]
+    fn model_comparison_estimated_unpriced_and_breakdown_coverage() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let priced = wrapped_event("cover-1", "gpt-5", now, 1000, Some("shared"), Some("/raw/a"), false);
+        let unpriced = wrapped_event("cover-2", "gpt-5", now + 1, 500, Some("shared"), Some("/raw/a"), false);
+        let mut estimated = wrapped_event("cover-3", "gpt-5", now + 2, 300, Some("shared"), Some("/raw/a"), true);
+        estimated.is_subagent = true;
+        let mut other_source = wrapped_event("cover-4", "gpt-5", now + 3, 2000, Some("shared"), Some("/raw/b"), false);
+        other_source.source = Source::ClaudeCode;
+        let control = wrapped_event("cover-b", "coverage-control", now, 7, None, None, false);
+        store.insert_events(&[priced, unpriced, estimated, other_source, control]).unwrap();
+        store
+            .read_conn()
+            .execute("UPDATE usage_event SET cost_usd=NULL WHERE source_event_id='cover-2'", [])
+            .unwrap();
+        let estimated_cost: Option<f64> = store
+            .read_conn()
+            .query_row("SELECT cost_usd FROM usage_event WHERE source_event_id='cover-3'", [], |r| r.get(0))
+            .unwrap();
+        assert!(estimated_cost.is_some(), "the live ingest path can leave a cost on an estimate");
+        {
+            let conn = store.read_conn();
+            for alias in ["/raw/a", "/raw/b"] {
+                conn.execute(
+                    "INSERT INTO project_alias(alias,canonical) VALUES(?1,'/repo')",
+                    [alias],
+                )
+                .unwrap();
+            }
+        }
+
+        let cmp = model_comparison(&store, "gpt-5", "coverage-control", 0, 1000)
+            .unwrap()
+            .unwrap();
+        let a = &cmp.a;
+        assert_eq!(a.tokens, 3800);
+        assert_eq!(a.measured_tokens, 3500);
+        assert_eq!(a.estimated_tokens, 300);
+        assert_eq!(a.priced_tokens, 3000);
+        assert_eq!(a.priced_events, 2);
+        assert_close(a.priced_cost_usd.unwrap(), 0.00375);
+        assert_close(a.cost_per_mtok.unwrap(), 1.25);
+        assert_eq!(a.sessions, 2, "the same session id in two sources is two sessions");
+        assert_eq!(a.subagent_tokens, 300);
+        assert_eq!(a.hourly.iter().map(|h| h.tokens).sum::<i64>(), 3800);
+
+        let zcode = a.by_source.iter().find(|s| s.source == "zcode").unwrap();
+        assert_eq!((zcode.tokens, zcode.events, zcode.sessions), (1800, 3, 1));
+        assert_close(zcode.cost_usd.unwrap(), 0.00125);
+        let claude = a.by_source.iter().find(|s| s.source == "claude_code").unwrap();
+        assert_close(claude.cost_usd.unwrap(), 0.0025);
+        assert_eq!(a.by_project.len(), 1);
+        let project = &a.by_project[0];
+        assert_eq!(project.project, "/repo");
+        assert_eq!((project.tokens, project.events, project.sessions), (3800, 4, 2));
+        assert_close(project.cost_usd.unwrap(), 0.00375);
+        assert_eq!(cmp.total_window_tokens, 3807);
+    }
+
+    #[test]
+    fn model_comparison_aliases_dated_names_hidden_and_qualified_sessions() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let cut = now_ms() - 2 * 86_400_000;
+        let old = wrapped_event("alias-old", "float", cut - 1000, 100, Some("shared"), None, false);
+        let new = wrapped_event("alias-new", "float", cut + 1000, 40, Some("shared"), None, false);
+        let mut variant = wrapped_event("alias-variant", "variant", cut, 50, Some("shared"), None, false);
+        variant.source = Source::ClaudeCode;
+        store.insert_events(&[old, new, variant]).unwrap();
+        store.rename_model("float", "Old Display").unwrap();
+        store.split_model_alias("float", cut, "New Display").unwrap();
+        store.rename_model("variant", "Old Display").unwrap();
+
+        let cmp = model_comparison(&store, "Old Display", "New Display", 0, 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cmp.a.model, "Old Display");
+        assert_eq!(cmp.a.tokens, 150);
+        assert_eq!(cmp.a.sessions, 2);
+        assert_eq!(cmp.b.model, "New Display");
+        assert_eq!(cmp.b.tokens, 40);
+        assert_eq!(cmp.daily.iter().map(|d| d.a_tokens).sum::<i64>(), 150);
+        assert_eq!(cmp.daily.iter().map(|d| d.b_tokens).sum::<i64>(), 40);
+
+        assert!(model_comparison(&store, "missing", "New Display", 0, 1000)
+            .unwrap()
+            .is_none());
+        store.hide_models(&["Old Display".into()]).unwrap();
+        assert!(model_comparison(&store, "Old Display", "New Display", 0, 1000)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn model_comparison_rivalry_replays_daily_and_cumulative_races() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let mut events = Vec::new();
+        let mut add = |id: &str, days_ago: i64, a: i64, b: i64| {
+            let ts = ts_at(days_ago, 12);
+            if a > 0 || days_ago == 3 {
+                events.push(wrapped_event(&format!("{id}-a"), "race-a", ts, a, None, None, false));
+            }
+            if b > 0 || days_ago == 3 {
+                events.push(wrapped_event(&format!("{id}-b"), "race-b", ts, b, None, None, false));
+            }
+        };
+        add("d1", 8, 100, 80);
+        add("d2", 7, 0, 50);
+        add("d3", 6, 20, 20);
+        add("d4", 5, 30, 0);
+        add("d5", 4, 100, 0);
+        add("zeros", 3, 0, 0);
+        add("d7", 2, 10, 70);
+        add("d8", 1, 0, 50);
+        events.push(wrapped_event("outside", "race-a", ts_at(10, 12), 10_000, None, None, false));
+        events.push(wrapped_event("other", "race-other", ts_at(1, 12), 5, None, None, false));
+        store.insert_events(&events).unwrap();
+
+        let cmp = model_comparison(&store, "race-a", "race-b", 9, 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!((cmp.a.tokens, cmp.b.tokens), (260, 270));
+        assert_eq!(cmp.total_window_tokens, 535);
+        assert_eq!(cmp.daily.len(), 7, "the both-zero date is absent");
+        assert!(!cmp.daily.iter().any(|d| d.date == utc_date(ts_at(3, 12))));
+        assert!(cmp.daily.windows(2).all(|w| w[0].date < w[1].date));
+        assert_eq!((cmp.rivalry.a_wins, cmp.rivalry.b_wins, cmp.rivalry.ties), (3, 3, 1));
+        let changes: Vec<(&str, &str)> = cmp
+            .rivalry
+            .lead_changes
+            .iter()
+            .map(|c| (c.date.as_str(), c.direction.as_str()))
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                (utc_date(ts_at(7, 12)).as_str(), "b"),
+                (utc_date(ts_at(4, 12)).as_str(), "a"),
+                (utc_date(ts_at(1, 12)).as_str(), "b"),
+            ]
+        );
+        assert_eq!(cmp.rivalry.latest_date.as_deref(), Some(utc_date(ts_at(1, 12)).as_str()));
+        assert_eq!(cmp.rivalry.latest_direction.as_deref(), Some("b"));
+        let gap = cmp.rivalry.biggest_gap.unwrap();
+        assert_eq!(gap.date, utc_date(ts_at(4, 12)));
+        assert_eq!(gap.wider_side, "a");
+        assert_eq!(gap.margin, 100);
+        assert_eq!(cmp.a.peak_day.as_deref(), Some(utc_date(ts_at(8, 12)).as_str()));
+        assert_eq!(cmp.a.peak_day_tokens, 100, "equal peaks choose the earliest date");
+    }
+
+    #[test]
+    fn model_comparison_utc_hours_night_peak_and_streaks() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let mut events = Vec::new();
+        for (id, days_ago, hour, tokens) in [
+            ("h1", 0, 1, 10),
+            ("h2", 0, 22, 20),
+            ("h3", 0, 6, 30),
+            ("h4", 0, 7, 20),
+            ("h5", 1, 5, 40),
+            ("h6", 1, 5, 40),
+            ("h7", 2, 23, 5),
+        ] {
+            events.push(wrapped_event(id, "utc-a", ts_at(days_ago, hour), tokens, None, None, false));
+        }
+        events.push(wrapped_event("utc-b", "utc-b", ts_at(0, 12), 1, None, None, false));
+        store.insert_events(&events).unwrap();
+
+        let cmp = model_comparison(&store, "utc-a", "utc-b", 3, 1000)
+            .unwrap()
+            .unwrap();
+        let a = &cmp.a;
+        assert_eq!(a.tokens, 165);
+        assert_eq!((a.active_days, a.current_streak, a.longest_streak), (3, 3, 3));
+        assert_eq!(a.hourly.len(), 24);
+        assert!(a.hourly.iter().enumerate().all(|(hour, row)| row.hour == hour as i64));
+        assert_eq!(a.hourly.iter().map(|h| h.tokens).sum::<i64>(), 165);
+        assert_eq!(a.hourly[1].tokens, 10);
+        assert_eq!(a.hourly[22].tokens, 20);
+        assert_eq!(a.hourly[5].tokens, 80);
+        assert_eq!(a.busiest_hour, Some(5));
+        assert_close(a.night_share, 115.0 / 165.0);
+        assert_eq!(a.peak_day.as_deref(), Some(utc_date(ts_at(1, 12)).as_str()));
+        assert_eq!(a.peak_day_tokens, 80);
+    }
+
+    #[test]
+    fn model_comparison_timing_uses_ratio_of_sums_and_eligibility() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let mut events = Vec::new();
+        let mut add = |id: &str,
+                       output: i64,
+                       duration: Option<i64>,
+                       ttft: Option<i64>,
+                       outcome: Option<&str>,
+                       estimated: bool,
+                       source: Source| {
+            let mut e = wrapped_event(id, "timing-a", now, 0, None, None, estimated);
+            e.output_tokens = output;
+            e.duration_ms = duration;
+            e.ttft_ms = ttft;
+            e.outcome = outcome.map(str::to_string);
+            e.source = source;
+            events.push(e);
+        };
+        add("t1", 100, Some(1000), Some(200), Some("completed"), false, Source::Zcode);
+        add("t2", 40, Some(500), Some(100), Some("completed"), false, Source::WackCode);
+        add("t3", 0, Some(2000), None, None, false, Source::Zcode);
+        add("t4", 30, Some(300), Some(0), Some("other"), false, Source::Zcode);
+        add("t5", 10, Some(500), Some(500), None, false, Source::Zcode);
+        add("failed", 1000, Some(10_000), Some(100), Some("failed"), false, Source::Zcode);
+        add("cancelled", 1000, Some(10_000), Some(100), Some("cancelled"), false, Source::Zcode);
+        add("estimated", 1000, Some(1000), Some(100), None, true, Source::Zcode);
+        add("missing", 1000, None, Some(100), None, false, Source::Zcode);
+        add("zero", 1000, Some(0), Some(0), None, false, Source::Zcode);
+        events.push(wrapped_event("timing-b", "timing-b", now, 1, None, None, false));
+        store.insert_events(&events).unwrap();
+
+        let cmp = model_comparison(&store, "timing-a", "timing-b", 0, 1000)
+            .unwrap()
+            .unwrap();
+        let timing = &cmp.a.timing;
+        assert_eq!(timing.timed_calls, 5);
+        assert_eq!(timing.ttft_calls, 3);
+        assert_eq!(timing.generation_calls, 2, "duration == ttft is not generation time");
+        assert_close(timing.avg_duration_ms.unwrap(), 860.0);
+        assert_close(timing.avg_ttft_ms.unwrap(), 800.0 / 3.0);
+        assert_close(timing.end_to_end_output_tps.unwrap(), 180.0 / 4.3);
+        assert_close(timing.generation_output_tps.unwrap(), 140.0 / 1.2);
+        assert_eq!(timing.sources.len(), 2);
+        assert_eq!(timing.sources[0].source, "zcode");
+        assert_eq!(timing.sources[0].timed_calls, 4);
+        assert_eq!(timing.sources[1].source, "wackcode");
+        assert_eq!(timing.sources[1].timed_calls, 1);
+        assert_eq!(cmp.b.timing.timed_calls, 0);
+        assert_eq!(cmp.b.timing.avg_duration_ms, None);
+        assert_eq!(cmp.b.timing.end_to_end_output_tps, None);
+        assert!(cmp.b.timing.sources.is_empty());
+    }
+
+    #[test]
+    fn model_comparison_antigravity_generated_output_excludes_reasoning_from_total() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let now = now_ms();
+        let mut gravity = wrapped_event("generated-a", "generated-a", now, 100, None, None, false);
+        gravity.source = Source::Antigravity;
+        gravity.output_tokens = 20;
+        gravity.reasoning_tokens = Some(30);
+        gravity.cache_read_tokens = 4;
+        gravity.cache_write_tokens = 5;
+        gravity.duration_ms = Some(1000);
+        gravity.ttft_ms = Some(200);
+        let mut ordinary = wrapped_event("generated-b", "generated-b", now, 100, None, None, false);
+        ordinary.output_tokens = 20;
+        ordinary.reasoning_tokens = Some(30);
+        ordinary.cache_read_tokens = 4;
+        ordinary.cache_write_tokens = 5;
+        ordinary.duration_ms = Some(1000);
+        ordinary.ttft_ms = Some(200);
+        store.insert_events(&[gravity, ordinary]).unwrap();
+
+        let cmp = model_comparison(&store, "generated-a", "generated-b", 0, 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cmp.a.tokens, 129);
+        assert_eq!(cmp.a.output_tokens, 20);
+        assert_eq!(cmp.a.reasoning_tokens, 30);
+        assert_eq!(cmp.a.generated_output, 50);
+        assert_close(cmp.a.timing.end_to_end_output_tps.unwrap(), 50.0);
+        assert_close(cmp.a.timing.generation_output_tps.unwrap(), 62.5);
+        assert_eq!(cmp.b.tokens, 129);
+        assert_eq!(cmp.b.reasoning_tokens, 30);
+        assert_eq!(cmp.b.generated_output, 20);
+        assert_close(cmp.b.timing.end_to_end_output_tps.unwrap(), 20.0);
+        assert_close(cmp.b.timing.generation_output_tps.unwrap(), 25.0);
+    }
+
+    #[test]
+    fn model_comparison_empty_side_and_degenerate_inputs() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        store
+            .insert_events(&[
+                wrapped_event("empty-a", "gpt-5", now_ms(), 100, None, None, false),
+                wrapped_event("empty-b", "gpt-4", ts_at(10, 12), 200, None, None, false),
+                wrapped_event("empty-hidden", "secret", now_ms(), 50, None, None, false),
+            ])
+            .unwrap();
+        store.hide_models(&["secret".into()]).unwrap();
+
+        let cmp = model_comparison(&store, " gpt-5 ", "gpt-4", 5, 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cmp.a.model, "gpt-5");
+        assert_eq!(cmp.a.tokens, 100);
+        assert_eq!(cmp.b.model, "gpt-4");
+        assert_eq!(cmp.b.tokens, 0);
+        assert_eq!(cmp.b.events, 0);
+        assert_eq!(cmp.b.sessions, 0);
+        assert_eq!(cmp.b.first_ts, None);
+        assert_eq!(cmp.b.last_ts, None);
+        assert_eq!(cmp.b.active_days, 0);
+        assert_eq!(cmp.b.peak_day, None);
+        assert_eq!(cmp.b.peak_day_tokens, 0);
+        assert_eq!(cmp.b.busiest_hour, None);
+        assert_eq!(cmp.b.night_share, 0.0);
+        assert_eq!(cmp.b.hourly.len(), 24);
+        assert!(cmp.b.hourly.iter().all(|h| h.tokens == 0));
+        assert!(cmp.b.by_source.is_empty() && cmp.b.by_project.is_empty());
+        assert_eq!(cmp.b.priced_cost_usd, None);
+        assert_eq!(cmp.b.cost_per_mtok, None);
+        assert!(cmp.cost_comparison.is_none());
+        assert_eq!(cmp.total_window_tokens, 100);
+
+        for (a, b, anchor) in [
+            ("", "gpt-4", 1000),
+            ("gpt-5", "  ", 1000),
+            ("gpt-5", "gpt-5", 1000),
+            ("gpt-5", "gpt-4", 0),
+            ("gpt-5", "gpt-4", -1),
+        ] {
+            assert!(model_comparison(&store, a, b, 0, anchor).unwrap().is_none());
+        }
+        assert!(model_comparison(&store, "gpt-5", "secret", 0, 1000)
+            .unwrap()
+            .is_none());
+
+        let no_race = comparison_rivalry(&[]);
+        assert_eq!((no_race.a_wins, no_race.b_wins, no_race.ties), (0, 0, 0));
+        assert_eq!(no_race.latest_date, None);
+        assert_eq!(no_race.latest_direction, None);
+        assert!(no_race.biggest_gap.is_none());
+        let tied = comparison_rivalry(&[ComparisonDailyRow {
+            date: "2025-01-01".into(),
+            a_tokens: 10,
+            b_tokens: 10,
+        }]);
+        assert_eq!(tied.ties, 1);
+        assert!(tied.biggest_gap.is_none());
     }
 }
 

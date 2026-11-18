@@ -19,6 +19,7 @@
   const links = [
     { href: '/', label: 'Overview' },
     { href: '/models', label: 'Models' },
+    { href: '/compare', label: 'Compare' },
     { href: '/families', label: 'Families' },
     { href: '/trends', label: 'Trends' },
     { href: '/projects', label: 'Projects' },
@@ -121,7 +122,7 @@
   <div class="mk">TokenTrail</div>
   <nav bind:this={navEl}>
     {#each links as l, i}
-      <a href={l.href} class:on={isActive(l.href)} bind:this={linkEls[i]}><u>0{i + 1}</u>{l.label}</a>
+      <a href={l.href} class:on={isActive(l.href)} bind:this={linkEls[i]}><u>{String(i + 1).padStart(2, '0')}</u>{l.label}</a>
     {/each}
   </nav>
   <button class="sy" onclick={doSync} disabled={syncing} title="Sync now">

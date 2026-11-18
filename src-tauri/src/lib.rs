@@ -113,6 +113,7 @@ pub fn run() {
             commands::get_active_days,
             commands::get_model_stats,
             commands::get_model_detail,
+            commands::get_model_comparison,
             commands::get_model_achievements,
             commands::get_model_big6,
             commands::get_big6_timeline,
