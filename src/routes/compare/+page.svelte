@@ -487,7 +487,6 @@
   <header class="thd">
     <div class="up">
       <h1>Compare</h1>
-      <p class="sub">Two models. Your actual history. Every habit under the microscope.</p>
     </div>
     <div class="head-controls up">
       {#if busy}<span class="updating" aria-live="polite">updating…</span>{/if}
@@ -548,11 +547,8 @@
     {@const latestChange = result.rivalry.lead_changes[result.rivalry.lead_changes.length - 1]}
 
     <section class="mileage up">
-      <div class="sectionhead">
-        <div>
-          <h2>{hero?.title ?? 'Cost mileage'}</h2>
-          <p>{RANGE_LABEL[days]} · each model’s own recorded token mix</p>
-        </div>
+      <div class="sectionhead tight">
+        <h2>{hero?.title ?? 'Cost mileage'} <span class="head-range">{RANGE_LABEL[days]}</span></h2>
         <div class="pills" aria-label="Anchor token amount">
           {#each ANCHORS as value}
             <button class="pill" class:on={anchorTokens === value} aria-pressed={anchorTokens === value} onclick={() => (anchorTokens = value)}>{fmtTokens(value)}</button>
@@ -583,21 +579,6 @@
             <div class="mile-rate">{fmtRate(b.cost_per_mtok)}</div>
           </div>
         </div>
-        <div class="coverage-row">
-          {#each [[a, coverage(a)], [b, coverage(b)]] as [model, covered]}
-            <div>
-              <strong>{(model as CompareModel).model}</strong>
-              {#if covered === null}
-                no measured, priced token base
-              {:else}
-                based on {fmtPct(covered as number)} of measured tokens · {fmtTokens((model as CompareModel).priced_tokens)} priced
-              {/if}
-              {#if (model as CompareModel).estimated_tokens > 0}
-                <span class="tag est">{fmtTokens((model as CompareModel).estimated_tokens)} app-estimated excluded</span>
-              {/if}
-            </div>
-          {/each}
-        </div>
       {:else}
         <div class="unavailable">
           <strong>Not enough priced usage for cost mileage.</strong>
@@ -605,14 +586,11 @@
           <p>Unpriced and app-estimated rows never acquire a cost.</p>
         </div>
       {/if}
-      <div class="methodnote">
-        Scales each model’s own recorded token mix and historical bundled list prices. API-equivalent estimate only—not an identical-workload benchmark or actual subscription spend.
-      </div>
     </section>
 
     <section class="scorecard up">
-      <div class="sectionhead">
-        <div><h2>Tale of the tape</h2><p>{RANGE_LABEL[days]} · recorded usage and priced history</p></div>
+      <div class="sectionhead tight">
+        <h2>Tale of the tape</h2>
         <span class="fig">FIG. 01</span>
       </div>
       <div class="tablewrap">
@@ -672,7 +650,7 @@
 
     <div class="split2">
       <section class="mixpanel up">
-        <div class="sectionhead"><div><h2>Recorded token mix</h2><p>Same categories, same colours</p></div><span class="fig">FIG. 02</span></div>
+        <div class="sectionhead tight"><h2>Recorded token mix</h2><span class="fig">FIG. 02</span></div>
         <div class="mixlegend">
           {#each ['Fresh input', 'Output', 'Cache read', 'Cache write'] as label, i}
             <span><i style="background:{MIX_COLORS[i]}"></i>{label}</span>
@@ -698,7 +676,7 @@
       </section>
 
       <section class="efficiency up">
-        <div class="sectionhead"><div><h2>Efficiency duels</h2><p>Different shapes of work</p></div><span class="fig">FIG. 03</span></div>
+        <div class="sectionhead tight"><h2>Efficiency duels</h2><span class="fig">FIG. 03</span></div>
         <div class="tablewrap">
           <table>
             <thead><tr><th>Metric</th><th class="num">A</th><th class="num">B</th><th class="num">Delta</th></tr></thead>
@@ -716,7 +694,7 @@
     </div>
 
     <section class="rhythm up">
-      <div class="sectionhead"><div><h2>Rhythm and habits</h2><p>Share of each model’s own tokens · UTC</p></div><span class="fig">NIGHT 22:00—06:00</span></div>
+      <div class="sectionhead tight"><h2>Rhythm and habits</h2></div>
       <div class="chart-legend">
         <span><i style="background:{colors[0]}"></i>A · {a.model}</span>
         <span><i class="dashed" style="border-color:{colors[1]}"></i>B · {b.model}</span>
@@ -762,7 +740,7 @@
     {/if}
 
     <section class="home up">
-      <div class="sectionhead"><div><h2>Home turf</h2><p>{sharedSourceSet.size} shared {sharedSourceSet.size === 1 ? 'harness' : 'harnesses'} · {sharedProjectSet.size} shared {sharedProjectSet.size === 1 ? 'project' : 'projects'}</p></div><span class="fig">TOP 5 EACH</span></div>
+      <div class="sectionhead tight"><h2>Home turf</h2><span class="fig">TOP 5 EACH</span></div>
       <div class="homegrid">
         {#each [a, b] as model, index}
           <div class="turf">
@@ -789,9 +767,8 @@
 <style>
   .cframe { flex: 1; min-width: 0; }
   .cframe :is(button, a, select):focus-visible { outline: 3px solid var(--vio); outline-offset: 2px; }
-  .thd { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px clamp(22px, 1.8vw, 40px) 14px; border-bottom: 2px solid var(--ink); flex-wrap: wrap; }
+  .thd { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px clamp(22px, 1.8vw, 40px) 14px; border-bottom: 2px solid var(--ink); flex-wrap: wrap; }
   .thd h1 { margin: 0; font-size: clamp(30px, 2.6vw, 46px); }
-  .thd .sub { margin: 6px 0 0; }
   .head-controls { display: flex; align-items: center; gap: 12px; }
   .updating { font: 500 10px/1 var(--font-mono); color: var(--dim); }
   .notice, .errorband { padding: 12px clamp(22px, 1.8vw, 40px); border-bottom: 2px solid var(--ink); }
@@ -810,7 +787,9 @@
   .sectionhead { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px clamp(22px, 1.8vw, 40px) 12px; flex-wrap: wrap; }
   .sectionhead h2 { margin: 0; font: 600 12px/1.2 var(--font-ui); letter-spacing: 1.5px; text-transform: uppercase; }
   .sectionhead p { margin: 5px 0 0; color: var(--dim); font: 400 10px/1.4 var(--font-mono); }
-  .mileage-grid { display: grid; grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr); border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); }
+  .sectionhead.tight { padding-top: 12px; padding-bottom: 10px; }
+  .head-range { margin-left: 8px; font: 400 10px/1 var(--font-mono); letter-spacing: 0.8px; opacity: 0.55; }
+  .mileage-grid { display: grid; grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr); border-top: 2px solid var(--ink); }
   .mile { min-width: 0; padding: clamp(18px, 2vw, 34px) clamp(22px, 2.4vw, 48px); border-top: 7px solid var(--side); }
   .mile-name { display: flex; align-items: center; gap: 9px; min-width: 0; font: 600 clamp(12px, 1vw, 16px)/1.3 var(--font-ui); overflow-wrap: break-word; }
   .mile-name:hover { color: var(--org); }
@@ -825,13 +804,7 @@
   .relation { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; border-left: 2px solid var(--ink); border-right: 2px solid var(--ink); background: var(--ink); color: var(--bone); text-align: center; }
   .relation strong { font: 400 64px/1 var(--font-disp); color: var(--org); }
   .relation span { padding: 0 8px; font: 500 9px/1.5 var(--font-mono); text-transform: uppercase; letter-spacing: 1px; }
-  .coverage-row { display: grid; grid-template-columns: 1fr 1fr; }
-  .coverage-row > div { min-width: 0; padding: 11px clamp(22px, 1.8vw, 40px); color: var(--dim); font: 400 10px/1.6 var(--font-mono); }
-  .coverage-row > div:first-child { border-right: 2px solid var(--ink); }
-  .coverage-row strong { color: var(--ink); }
-  .coverage-row .tag { margin-left: 6px; }
-  .methodnote, .caveat { padding: 11px clamp(22px, 1.8vw, 40px); color: var(--dim); font: 400 10px/1.55 var(--font-mono); }
-  .methodnote { border-top: 1px solid var(--hair); }
+  .caveat { padding: 11px clamp(22px, 1.8vw, 40px); color: var(--dim); font: 400 10px/1.55 var(--font-mono); }
   .unavailable { padding: 34px clamp(22px, 1.8vw, 40px); border-top: 2px solid var(--ink); }
   .unavailable strong { display: block; font: 400 clamp(24px, 2.2vw, 42px)/1.1 var(--font-disp); text-transform: uppercase; }
   .unavailable span { display: block; margin-top: 12px; font: 500 12px/1.4 var(--font-mono); }
@@ -918,8 +891,8 @@
     .swap { margin: 8px auto; }
     .mileage-grid { grid-template-columns: 1fr; }
     .relation { min-height: 76px; border: none; border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); }
-    .coverage-row, .rivalry-grid, .timing-sources, .homegrid { grid-template-columns: 1fr; }
-    .coverage-row > div:first-child, .rivalstat, .timing-sources > div:first-child, .turf:first-child { border-right: none; border-bottom: 2px solid var(--ink); }
+    .rivalry-grid, .timing-sources, .homegrid { grid-template-columns: 1fr; }
+    .rivalstat, .timing-sources > div:first-child, .turf:first-child { border-right: none; border-bottom: 2px solid var(--ink); }
     .rivalstat:last-child { border-bottom: none; }
     .skeleton { grid-template-columns: 1fr; }
     .skeleton span { grid-column: 1; }
