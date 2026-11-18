@@ -94,15 +94,6 @@
       }));
   });
 
-  // ── NOTE 01: burst concentration over the loaded window ──
-  const burst = $derived.by(() => {
-    const active = dailyTotals.filter((v) => v > 0);
-    const total = active.reduce((a, b) => a + b, 0);
-    if (active.length < 10 || total === 0) return null;
-    const topN = Math.max(1, Math.ceil(active.length * 0.1));
-    const topSum = [...active].sort((a, b) => b - a).slice(0, topN).reduce((a, b) => a + b, 0);
-    return { share: Math.round((topSum / total) * 100), topN, days: active.length };
-  });
 </script>
 
 {#if error}
@@ -130,26 +121,21 @@
       <div class="q org up" style="animation-delay:70ms">
         <div class="k">Est. cost</div>
         <div class="v"><AnimatedNumber value={overview.cost_usd ?? 0} format={fmtCost} /></div>
-        <div class="h">api-equivalent estimate</div>
       </div>
       <div class="q up" style="animation-delay:140ms">
         <div class="k">Avg tokens / month</div>
         <div class="v"><AnimatedNumber value={overview.avg_monthly_tokens} format={fmtTokens} /></div>
-        {#if overview.months_tracked > 0}
-          <div class="h">over {overview.months_tracked} {overview.months_tracked === 1 ? 'month' : 'months'}</div>
-        {:else}
+        {#if overview.months_tracked === 0}
           <div class="h">no usage yet</div>
         {/if}
       </div>
       <div class="q acd up" style="animation-delay:210ms">
         <div class="k">Streak</div>
         <div class="v"><AnimatedNumber value={overview.current_streak} format={(n) => `${Math.round(n)}d`} /></div>
-        <div class="h">longest {overview.longest_streak}d ever</div>
       </div>
       <div class="q cyn up" style="animation-delay:280ms">
         <div class="k">Cache served</div>
         <div class="v"><AnimatedNumber value={cachePct} format={(n) => `${Math.round(n)}%`} /></div>
-        <div class="h">{fmtTokens(overview.cache_read_tokens)} tokens re-served</div>
       </div>
     </div>
   </section>
@@ -213,13 +199,6 @@
     </div>
   </section>
 
-  <!-- note band -->
-  {#if burst}
-    <div class="noteband up" style="animation-delay:420ms">
-      <span class="fg">NOTE</span>
-      <p>You work in bursts — <b>{burst.share}%</b> of your tokens land on just <b>{burst.topN} {burst.topN === 1 ? 'day' : 'days'}</b> of the last {burst.days} active.</p>
-    </div>
-  {/if}
   {/if}
 
   <style>
@@ -265,7 +244,7 @@
   .q .v { font: 400 clamp(32px, 2.7vw, 58px)/1 var(--font-disp); margin-top: clamp(8px, 1vh, 16px); letter-spacing: -1px; font-variant-numeric: tabular-nums; }
   .q .h { font: 400 clamp(10px, 0.75vw, 13px)/1.3 var(--font-mono); margin-top: clamp(7px, 0.8vh, 13px); opacity: 0.52; }
   .q.org { background: var(--org); color: #fff; }
-  .q.org .k, .q.org .h { opacity: 0.82; }
+  .q.org .k { opacity: 0.82; }
   .q.cyn { background: var(--cyn); }
   .q.acd { background: var(--acd); }
 
@@ -326,14 +305,6 @@
     letter-spacing: 0.9px;
     text-transform: uppercase;
     opacity: 0.55;
-  }
-
-  .noteband {
-    border-left: none;
-    border-right: none;
-    border-bottom: none;
-    border-top: 2px solid var(--ink);
-    margin-top: 0;
   }
 
   @media (max-width: 900px) {
