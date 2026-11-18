@@ -293,11 +293,44 @@
 <div class="mframe">
   <!-- header -->
   <div class="thd">
-    <div class="up">
+    <div class="hdtitle up">
       <h1>Models</h1>
       <div class="sub">{rows.length} models · {totalEvents.toLocaleString()} calls · {RANGE_LABEL[days]}</div>
     </div>
-    <div class="pillsrow up" style="animation-delay:80ms">
+
+    {#if rows.length}
+      <div class="hdstats up" style="animation-delay:60ms">
+        <div class="hs hl">
+          <div class="k">Top model</div>
+          <div class="v name ell" title={sorted[0]?.model}>{sorted[0]?.model ?? '—'}</div>
+          <div class="h ell">
+            {totalMetric ? ((metricVal(sorted[0]) / totalMetric) * 100).toFixed(1) : 0}% of {metricLabel}
+          </div>
+        </div>
+        <div class="hs">
+          <div class="k">Costliest</div>
+          <div class="v name ell" title={costliest?.model}>{costliest?.model ?? '—'}</div>
+          <div class="h ell">{fmtCost(costliest?.cost_usd ?? null)} est.</div>
+        </div>
+        <div class="hs">
+          <div class="k">Est. cost</div>
+          <div class="v"><AnimatedNumber value={totalCost} format={fmtCost} /></div>
+          <div class="h ell">{fmtTokens(totalTokens)} tokens</div>
+        </div>
+        <div class="hs">
+          <div class="k">Avg tok / day</div>
+          <div class="v">
+            <AnimatedNumber value={activeDays ? totalTokens / activeDays : 0} format={(n) => fmtTokensSplit(n).value} />
+            {#if activeDays}
+              <span class="unit">{fmtTokensSplit(totalTokens / activeDays).unit || ' '}</span>
+            {/if}
+          </div>
+          <div class="h ell">{activeDays} active day{activeDays !== 1 ? 's' : ''}</div>
+        </div>
+      </div>
+    {/if}
+
+    <div class="pillsrow up" style="animation-delay:120ms">
       <div class="pills">
         {#each RANGES as [d, label]}
           <button class="pill" class:on={days === d} onclick={() => (days = d)}>{label}</button>
@@ -316,40 +349,6 @@
   {:else if !rows.length}
     <div class="loading">no models recorded yet</div>
   {:else}
-    <!-- stat cards -->
-    <div class="mcards">
-      <div class="mc up">
-        <div class="k">Models used</div>
-        <div class="v"><AnimatedNumber value={rows.length} /></div>
-        <div class="h">{totalEvents.toLocaleString()} calls total</div>
-      </div>
-      <div class="mc hl up" style="animation-delay:60ms">
-        <div class="k">Top model</div>
-        <div class="v name ell" title={sorted[0]?.model}>{sorted[0]?.model ?? '—'}</div>
-        <div class="h">{totalMetric ? ((metricVal(sorted[0]) / totalMetric) * 100).toFixed(1) : 0}% of {metricLabel}</div>
-      </div>
-      <div class="mc up" style="animation-delay:120ms">
-        <div class="k">Costliest</div>
-        <div class="v name ell" title={costliest?.model}>{costliest?.model ?? '—'}</div>
-        <div class="h">{fmtCost(costliest?.cost_usd ?? null)} est.</div>
-      </div>
-      <div class="mc up" style="animation-delay:180ms">
-        <div class="k">Est. cost</div>
-        <div class="v"><AnimatedNumber value={totalCost} format={fmtCost} /></div>
-        <div class="h">{fmtTokens(totalTokens)} tokens</div>
-      </div>
-      <div class="mc up" style="animation-delay:240ms">
-        <div class="k">Avg tok / day</div>
-        <div class="v">
-          <AnimatedNumber value={activeDays ? totalTokens / activeDays : 0} format={(n) => fmtTokensSplit(n).value} />
-          {#if activeDays}
-            <span class="unit">{fmtTokensSplit(totalTokens / activeDays).unit || ' '}</span>
-          {/if}
-        </div>
-        <div class="h">{activeDays} active day{activeDays !== 1 ? 's' : ''}</div>
-      </div>
-    </div>
-
     <!-- bars + donut -->
     <div class="mcharts">
       <div class="mbars">
@@ -539,7 +538,7 @@
     {#if topModelShare !== null}
       <div class="noteband up" style="animation-delay:400ms">
         <span class="fg">NOTE</span>
-        <p><b>{topModelShare.model}</b> accounts for <b>{topModelShare.pct}%</b> of your {topModelShare.label} in this period. Merging aliases in Settings keeps this list honest.</p>
+        <p><b>{topModelShare.model}</b> accounts for <b>{topModelShare.pct}%</b> of your {topModelShare.label} in this period.</p>
       </div>
     {/if}
   {/if}
@@ -554,35 +553,57 @@
   }
 
   .thd {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 15px clamp(22px, 1.8vw, 40px) 14px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: end;
+    column-gap: clamp(18px, 1.6vw, 30px);
+    padding: 13px clamp(22px, 1.8vw, 40px) 12px;
     border-bottom: 2px solid var(--ink);
-    flex-wrap: wrap;
   }
-  .thd .sub { font: 400 11px/1 var(--font-mono); opacity: 0.55; margin-top: 6px; letter-spacing: 0.6px; }
-  .pillsrow { display: flex; gap: 12px; flex-wrap: wrap; }
+  .hdtitle h1 { font-size: clamp(28px, 2vw, 40px); letter-spacing: -0.8px; margin: 0; }
+  .hdtitle .sub { font: 400 11px/1 var(--font-mono); opacity: 0.55; margin: 7px 0 0; letter-spacing: 0.6px; }
+
+  .hdstats {
+    display: grid;
+    grid-template-columns: 1.35fr 1.35fr 0.9fr 1fr;
+    min-width: 0;
+  }
+  .hs {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    min-width: 0;
+    padding-left: clamp(12px, 1.1vw, 18px);
+    border-left: 1px solid var(--hair);
+  }
+  .hs.hl { border-left: 2px solid var(--org); }
+  .hs .k {
+    font: 600 clamp(9px, 0.7vw, 11px)/1 var(--font-ui);
+    letter-spacing: 1.3px;
+    text-transform: uppercase;
+    opacity: 0.55;
+  }
+  .hs .v {
+    font: 400 clamp(20px, 1.5vw, 26px)/1 var(--font-disp);
+    min-height: clamp(20px, 1.5vw, 26px);
+    margin-top: 6px;
+    letter-spacing: -0.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .hs .v.name {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: clamp(12px, 0.95vw, 15px);
+    line-height: clamp(20px, 1.5vw, 26px);
+    letter-spacing: 0;
+  }
+  .hs .v .unit { color: var(--org); font-size: 0.6em; }
+  .hs .h { font: 400 clamp(9.5px, 0.72vw, 11px)/1.3 var(--font-mono); margin-top: 5px; opacity: 0.45; }
+
+  .pillsrow { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; align-self: center; }
 
   .errpad { padding: 20px 22px; }
-
-  .mcards { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 2px solid var(--ink); }
-  .mc { padding: clamp(12px, 1.2vh, 22px) clamp(16px, 1.2vw, 26px); border-right: 2px solid var(--ink); min-width: 0; }
-  .mc:last-child { border-right: none; }
-  .mc .k { font: 600 clamp(9px, 0.7vw, 12px)/1 var(--font-ui); letter-spacing: 1.3px; text-transform: uppercase; opacity: 0.55; }
-  .mc .v { font: 400 clamp(26px, 2.1vw, 44px)/1 var(--font-disp); margin-top: 8px; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
-  .mc .v.name {
-    font-size: clamp(16px, 1.3vw, 27px);
-    line-height: 1.25;
-    margin-top: 10px;
-    letter-spacing: 0.2px;
-    padding-bottom: 3px;
-  }
-  .mc .v .unit { color: var(--org); font-size: 0.55em; }
-  .mc .h { font: 400 clamp(10px, 0.75vw, 12px)/1.3 var(--font-mono); margin-top: 7px; opacity: 0.48; }
-  .mc.hl { background: var(--org); color: #fff; }
-  .mc.hl .k, .mc.hl .h { opacity: 0.82; }
 
   .mcharts { display: grid; grid-template-columns: 1.3fr 0.7fr; border-bottom: 2px solid var(--ink); }
   .mbars { padding: 14px clamp(22px, 1.8vw, 40px) 15px; border-right: 2px solid var(--ink); }
@@ -846,9 +867,14 @@
     border-top: 2px solid var(--ink);
   }
 
+  @media (max-width: 1200px) {
+    .thd { grid-template-columns: minmax(0, 1fr) auto; row-gap: 12px; }
+    .hdtitle { grid-column: 1; grid-row: 1; }
+    .pillsrow { grid-column: 2; grid-row: 1; }
+    .hdstats { grid-column: 1 / -1; grid-row: 2; border-top: 1px solid var(--hair); padding-top: 11px; }
+  }
+
   @media (max-width: 900px) {
-    .mcards { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
-    .mc { border-bottom: 2px solid var(--ink); }
     .mcharts { grid-template-columns: 1fr; }
     .mbars { border-right: none; border-bottom: 2px solid var(--ink); }
     .feed { border-bottom: 2px solid var(--ink); max-height: 280px; }
