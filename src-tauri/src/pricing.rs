@@ -541,15 +541,31 @@ mod tests {
 
     #[test]
     fn hy4_prices() {
-        // Tencent Hunyuan Hy4 preview: $0.834/$2.501 with $0.042 cached input;
-        // cache writes are undocumented and bill at the uncached input rate.
-        assert_eq!(rates_for("hy4-preview").map(|r| r.input), Some(0.834));
-        assert_eq!(rates_for("hy4-preview").map(|r| r.output), Some(2.501));
-        assert_eq!(rates_for("hy4-preview").map(|r| r.cache_read), Some(0.042));
-        assert_eq!(rates_for("hy4-preview").map(|r| r.cache_write), Some(0.834));
+        // Tencent Hunyuan Hy4 lists at $0.834/$2.501 with $0.042 cached input
+        // (CNY 6/18/0.3). The official release continues the preview's list
+        // rates, and the current 50%-off launch price is deliberately ignored.
+        // Cache writes are undocumented and bill at the uncached input rate.
+        for model in ["hy4", "hy4-preview"] {
+            assert_eq!(rates_for(model).map(|r| r.input), Some(0.834));
+            assert_eq!(rates_for(model).map(|r| r.output), Some(2.501));
+            assert_eq!(rates_for(model).map(|r| r.cache_read), Some(0.042));
+            assert_eq!(rates_for(model).map(|r| r.cache_write), Some(0.834));
+        }
         // Both provider-stripped and Hunyuan-branded spellings resolve.
+        assert_eq!(rates_for("tencent/hy4").map(|r| r.input), Some(0.834));
+        assert_eq!(rates_for("hunyuan-hy4").map(|r| r.input), Some(0.834));
         assert_eq!(rates_for("tencent/hy4-preview").map(|r| r.input), Some(0.834));
         assert_eq!(rates_for("hunyuan-hy4-preview").map(|r| r.input), Some(0.834));
+
+        // Hy4 Flash (launched 2026-11-16) lists at $0.07/$0.281 with $0.003
+        // cached input (CNY 0.5/2/0.02); its prefixes must beat the hy4 and
+        // hunyuan-hy4 catch-alls. Cache writes bill at the input rate.
+        for model in ["hy4-flash", "tencent/hy4-flash", "hunyuan-hy4-flash"] {
+            assert_eq!(rates_for(model).map(|r| r.input), Some(0.07));
+            assert_eq!(rates_for(model).map(|r| r.output), Some(0.281));
+            assert_eq!(rates_for(model).map(|r| r.cache_read), Some(0.003));
+            assert_eq!(rates_for(model).map(|r| r.cache_write), Some(0.07));
+        }
     }
 
     #[test]
