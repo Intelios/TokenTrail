@@ -1,7 +1,8 @@
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::path::{Path, PathBuf};
+use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use crate::models::{
@@ -45,6 +46,40 @@ pub struct Store {
     /// stored (collectors overlap their windows on purpose) doesn't make every
     /// page re-run its queries.
     generation: AtomicU64,
+    /// `aggregate::daily_standings`: every visible model's tokens per day, which
+    /// the Big-6, leaderboard, podium, champion badges and family lists all read.
+    pub standings: Memo,
+}
+
+/// One cached value, recomputed when its key changes. The key must name
+/// everything the value depends on; see `aggregate::standings_key`.
+///
+/// The lock is held while computing, so a page's parallel queries that all need
+/// the value wait for one computation instead of each running it.
+#[derive(Default)]
+pub struct Memo(Mutex<Option<(String, Arc<dyn Any + Send + Sync>)>>);
+
+impl Memo {
+    pub fn get_or_compute<T, E>(
+        &self,
+        key: String,
+        compute: impl FnOnce() -> Result<T, E>,
+    ) -> Result<Arc<T>, E>
+    where
+        T: Any + Send + Sync,
+    {
+        let mut slot = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((cached_key, value)) = slot.as_ref() {
+            if *cached_key == key {
+                if let Ok(hit) = Arc::clone(value).downcast::<T>() {
+                    return Ok(hit);
+                }
+            }
+        }
+        let value = Arc::new(compute()?);
+        *slot = Some((key, Arc::clone(&value) as Arc<dyn Any + Send + Sync>));
+        Ok(value)
+    }
 }
 
 /// Open end of a `model_alias` segment. A sentinel rather than NULL so the
@@ -243,6 +278,7 @@ impl Store {
             path: path.to_path_buf(),
             readers: Mutex::new(Vec::new()),
             generation: AtomicU64::new(0),
+            standings: Memo::default(),
         })
     }
 
