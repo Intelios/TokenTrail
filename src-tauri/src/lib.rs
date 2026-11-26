@@ -10,6 +10,7 @@ mod store;
 mod wackchatter;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -79,25 +80,33 @@ pub fn run() {
                 write: Mutex::new(()),
                 store,
                 home: home.clone(),
+                sync_passes: AtomicU64::new(0),
             });
 
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
-                let stats = {
+                let done = {
                     let state = handle.state::<AppState>();
                     // Held across the whole pass so a manual refresh can't run
                     // concurrently; UI queries read through the store's reader
                     // pool and never queue behind it.
                     let Ok(_sync) = state.write.lock() else { break };
-                    collectors::sync_all(&state.store, &state.home)
+                    let before = state.store.generation();
+                    let stats = collectors::sync_all(&state.store, &state.home);
+                    let changed = state.store.generation() != before;
+                    // Counted before the emit: a webview that checks the count
+                    // after subscribing then never misses a pass.
+                    state.sync_passes.fetch_add(1, Ordering::SeqCst);
+                    models::SyncDone { changed, stats }
                 };
-                let _ = handle.emit("sync-done", &stats);
+                let _ = handle.emit("sync-done", &done);
                 std::thread::sleep(SYNC_INTERVAL);
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::sync_now,
+            commands::get_sync_passes,
             commands::get_overview,
             commands::get_wackchatter_libraries,
             commands::get_wackchatter_stats,

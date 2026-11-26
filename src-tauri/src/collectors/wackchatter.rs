@@ -798,7 +798,8 @@ mod tests {
         seed_library(&home, SWIPE);
         seed_log(&home, &format!("{LINE}\n"));
 
-        assert_eq!(collect(&store, &home).unwrap(), 2); // one insert, one upsert
+        // One insert; the twin re-delivers the same numbers, which counts zero.
+        assert_eq!(collect(&store, &home).unwrap(), 1);
         let rows: i64 = store
             .read_conn()
             .query_row("SELECT COUNT(*) FROM usage_event", [], |r| r.get(0))

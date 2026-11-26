@@ -52,12 +52,20 @@
   // project colors
   let projectColorRows = $state<ProjectColor[]>([]);
 
+  // Commands run in parallel, so a refresh that started before a merge or rename
+  // can resolve after the one that followed it; only the latest of each may write.
+  let loadSeq = 0;
+  let mergeSeq = 0;
+
   async function load() {
+    const seq = ++loadSeq;
     try {
-      [sources, estimated] = await Promise.all([api.sourceStatus(), api.estimatedShare()]);
+      const [src, est] = await Promise.all([api.sourceStatus(), api.estimatedShare()]);
+      if (seq !== loadSeq) return;
+      [sources, estimated] = [src, est];
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     }
   }
 
@@ -74,6 +82,7 @@
   }
 
   async function loadMerges() {
+    const seq = ++mergeSeq;
     try {
       const [
         byModel,
@@ -100,6 +109,7 @@
         api.projectAutoLinks(20),
         api.projectIgnores(),
       ]);
+      if (seq !== mergeSeq) return;
       modelNames = byModel.map((r) => r.model);
       aliases = aliasRows;
       hidden = hiddenRows;
@@ -118,7 +128,7 @@
       if (!projSelected.includes(projCanonical)) projCanonical = projSelected[0] ?? '';
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === mergeSeq) error = String(e);
     }
   }
 
@@ -664,7 +674,7 @@
               {#each stats as s}
                 <div class="res-row">
                   <span class="stag"><i style="background:{sourceSwatch(s.source)}"></i>{s.source}</span>
-                  <span class="res-cnt">{s.processed} events</span>
+                  <span class="res-cnt">{s.processed} new or updated</span>
                   {#if s.error}
                     <span class="error">{s.error}</span>
                   {/if}

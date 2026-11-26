@@ -62,8 +62,13 @@
     }
   });
 
+  // Commands run in parallel, so the project just left (or an earlier range) can
+  // resolve after the current one; only the latest load may write.
+  let loadSeq = 0;
+
   async function load() {
     if (!projectName) return;
+    const seq = ++loadSeq;
     if (!detail) loading = true;
     try {
       const [dInit, colors, aliasRows, stackRows] = await Promise.all([
@@ -76,6 +81,7 @@
       if (!d && !projectName.startsWith('/') && projectName !== 'unknown') {
         d = await api.projectDetail('/' + projectName, days);
       }
+      if (seq !== loadSeq) return;
       detail = d;
       aliases = aliasRows;
       allStacks = stackRows;
@@ -85,9 +91,9 @@
       stack = d ? (stackRows.find((s) => s.project === d.project)?.stack ?? []) : [];
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 

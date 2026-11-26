@@ -54,8 +54,13 @@
 
   const name = $derived($page.params.family ?? '');
 
+  // Commands run in parallel, so the family just left (or an earlier range) can
+  // resolve after the current one; only the latest load may write.
+  let loadSeq = 0;
+
   async function load() {
     if (!name) return;
+    const seq = ++loadSeq;
     if (!detail) loading = true;
     try {
       const [d, achs, trends, colors] = await Promise.all([
@@ -64,15 +69,16 @@
         api.dailyByModel(90),
         api.projectColors(),
       ]);
+      if (seq !== loadSeq) return;
       detail = d;
       achievements = achs;
       trendRows = trends;
       projectColors = markedColors(colors);
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 

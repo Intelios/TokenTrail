@@ -15,6 +15,7 @@
   import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
   import { tokenTrailDestination } from '$lib/wackchatter/navigation';
   import { listen } from '@tauri-apps/api/event';
+  import { api, type SyncDone } from '$lib/api';
 
   const links = [
     { href: '/', label: 'Overview' },
@@ -79,25 +80,36 @@
     syncing = true;
     try {
       await invoke('sync_now');
-      touch();
+      touch(true);
     } finally {
       syncing = false;
     }
   }
 
-  function touch() {
+  /** Stamp the sync time; refresh the page only when the sync stored something new. */
+  function touch(changed: boolean) {
     lastSync = new Date().toLocaleTimeString(undefined, {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
     });
-    window.dispatchEvent(new CustomEvent('tt-sync'));
+    if (changed) window.dispatchEvent(new CustomEvent('tt-sync'));
   }
 
   onMount(async () => {
-    await listen('sync-done', () => touch());
-    // the Rust side runs its first sync immediately on launch; refresh shortly after mount
-    setTimeout(touch, 1500);
+    let heard = false;
+    await listen<SyncDone>('sync-done', (e) => {
+      heard = true;
+      touch(e.payload.changed);
+    });
+    // The first background pass starts at launch and can finish before this
+    // listener exists. Rust counts a pass before emitting it, so a count above
+    // zero with nothing heard means that pass was missed: refresh once for it.
+    try {
+      if (!heard && (await api.syncPasses()) > 0 && !heard) touch(true);
+    } catch {
+      /* browser preview: no backend to ask */
+    }
   });
 
   onMount(() => {

@@ -63,7 +63,12 @@
     return `${n.toLocaleString()} calls`;
   }
 
+  // Commands run in parallel, so a load for an earlier range can resolve after
+  // the current one; only the latest may write.
+  let loadSeq = 0;
+
   async function load() {
+    const seq = ++loadSeq;
     try {
       const [rs, trends, evs, ad] = await Promise.all([
         api.modelStats(days),
@@ -71,16 +76,18 @@
         api.leaderboardEvents(days),
         api.activeDays(days),
       ]);
+      if (seq !== loadSeq) return;
       rows = rs;
       trendRows = trends;
       events = evs;
       activeDays = ad;
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     }
   }
 
+  // Also the first load on mount — onMount only wires the sync refresh.
   $effect(() => {
     days;
     load();
@@ -93,7 +100,6 @@
   });
 
   onMount(() => {
-    load();
     const h = () => load();
     window.addEventListener('tt-sync', h);
     return () => window.removeEventListener('tt-sync', h);

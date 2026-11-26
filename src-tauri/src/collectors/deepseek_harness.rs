@@ -386,7 +386,8 @@ mod tests {
             .unwrap()
             .set_times(FileTimes::new().set_modified(later))
             .unwrap();
-        assert_eq!(collect(&store, &home).unwrap(), 3);
+        // msg-1 and msg-2 come back identical and count zero; only msg-3 is new.
+        assert_eq!(collect(&store, &home).unwrap(), 1);
         assert_eq!(rows(&store).0, 4);
     }
 
@@ -413,9 +414,10 @@ mod tests {
         assert_eq!(collect(&store, &home).unwrap(), 2);
         assert_eq!(rows(&store).0, 2);
 
-        // The unfinished frame was never marked read, so the next sync picks it up.
+        // The unfinished frame was never marked read, so the next sync picks it up;
+        // the two complete calls are re-read unchanged and count zero.
         write(&main, &prefix);
-        assert_eq!(collect(&store, &home).unwrap(), 3);
+        assert_eq!(collect(&store, &home).unwrap(), 1);
         assert_eq!(rows(&store).0, 3);
     }
 

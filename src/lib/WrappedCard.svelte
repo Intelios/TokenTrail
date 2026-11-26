@@ -32,16 +32,23 @@
     return 'ALL TIME';
   }
 
+  // Commands run in parallel, so an earlier period can resolve after the current
+  // one; only the latest load may write.
+  let loadSeq = 0;
+
   async function load() {
+    const seq = ++loadSeq;
     loading = true;
     try {
       const days = PERIODS.find((p) => p.key === period)?.days ?? 30;
-      summary = await api.wrappedSummary(days);
+      const next = await api.wrappedSummary(days);
+      if (seq !== loadSeq) return;
+      summary = next;
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 

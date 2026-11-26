@@ -111,8 +111,18 @@ pub struct UsageEvent {
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestStats {
     pub source: String,
+    /// Events inserted or changed; re-reading an identical event counts zero.
     pub processed: usize,
     pub error: Option<String>,
+}
+
+/// Payload of the `sync-done` event after each background pass. `changed` is
+/// false when the pass stored nothing new, and the frontend then skips the
+/// page refresh: the queries would only redraw identical numbers.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncDone {
+    pub changed: bool,
+    pub stats: Vec<IngestStats>,
 }
 
 #[derive(Debug, Clone, Serialize)]

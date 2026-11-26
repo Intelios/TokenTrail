@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -39,6 +40,11 @@ pub struct Store {
     writer: Mutex<Connection>,
     path: PathBuf,
     readers: Mutex<Vec<Connection>>,
+    /// Bumped whenever ingest actually changes stored data. A sync compares it
+    /// before and after its pass, so a pass that only re-read what was already
+    /// stored (collectors overlap their windows on purpose) doesn't make every
+    /// page re-run its queries.
+    generation: AtomicU64,
 }
 
 /// Open end of a `model_alias` segment. A sentinel rather than NULL so the
@@ -236,7 +242,14 @@ impl Store {
             writer: Mutex::new(conn),
             path: path.to_path_buf(),
             readers: Mutex::new(Vec::new()),
+            generation: AtomicU64::new(0),
         })
+    }
+
+    /// Changes to stored usage since the store opened; see the field. Only
+    /// compared for equality — the value itself means nothing.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
     }
 
     /// The single write connection, for ingest state and all mutations. Poison
@@ -309,8 +322,16 @@ impl Store {
         // large sync spent most of its time in per-row WAL commits.
         let conn = self.writer();
         let tx = conn.unchecked_transaction()?;
+        // Events inserted or actually changed — what a collector reports as processed.
         let mut n = 0;
+        // Everything else this batch really changed: WackChatter identity repairs and
+        // bookkeeping, and project folding. Feeds `generation`, not the processed count.
+        let mut side = 0;
         {
+            // The WHERE makes re-ingesting an identical row a no-op that reports zero
+            // changes: collectors re-read overlapping windows on purpose (OpenCode's
+            // five minutes, WackChatter's transcripts), and only a real change should
+            // count as processed or make the pages refresh.
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO usage_event (source, source_event_id, ts, session_id, project, provider, provider_name, model,
                     input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens,
@@ -325,15 +346,25 @@ impl Store {
                     duration_ms=excluded.duration_ms, ttft_ms=excluded.ttft_ms,
                     is_subagent=excluded.is_subagent, cost_usd=excluded.cost_usd,
                     estimated=excluded.estimated, purpose=excluded.purpose, outcome=excluded.outcome,
-                    workspace=excluded.workspace, subagent_id=excluded.subagent_id, mode=excluded.mode",
+                    workspace=excluded.workspace, subagent_id=excluded.subagent_id, mode=excluded.mode
+                 WHERE (ts, session_id, project, provider, provider_name, model,
+                        input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens,
+                        duration_ms, ttft_ms, is_subagent, cost_usd, estimated, purpose, outcome,
+                        workspace, subagent_id, mode)
+                    IS NOT (excluded.ts, excluded.session_id, excluded.project, excluded.provider,
+                        excluded.provider_name, excluded.model, excluded.input_tokens, excluded.output_tokens,
+                        excluded.reasoning_tokens, excluded.cache_read_tokens, excluded.cache_write_tokens,
+                        excluded.duration_ms, excluded.ttft_ms, excluded.is_subagent, excluded.cost_usd,
+                        excluded.estimated, excluded.purpose, excluded.outcome, excluded.workspace,
+                        excluded.subagent_id, excluded.mode)",
             )?;
             for (index, incoming) in events.iter().enumerate() {
                 let mut merged = incoming.clone();
                 if let Some(ctx) = contexts.get(index) {
                     // Repair pre-library fallback identities in place, never duplicate them.
                     if let Some(old) = &ctx.legacy_id {
-                        tx.execute("UPDATE OR IGNORE usage_event SET source_event_id=?1 WHERE source='wackchatter' AND source_event_id=?2", params![incoming.source_event_id, old])?;
-                        tx.execute("DELETE FROM usage_event WHERE source='wackchatter' AND source_event_id=?1 AND EXISTS(SELECT 1 FROM usage_event WHERE source='wackchatter' AND source_event_id=?2)", params![old, incoming.source_event_id])?;
+                        side += tx.execute("UPDATE OR IGNORE usage_event SET source_event_id=?1 WHERE source='wackchatter' AND source_event_id=?2", params![incoming.source_event_id, old])?;
+                        side += tx.execute("DELETE FROM usage_event WHERE source='wackchatter' AND source_event_id=?1 AND EXISTS(SELECT 1 FROM usage_event WHERE source='wackchatter' AND source_event_id=?2)", params![old, incoming.source_event_id])?;
                     }
                     let previous = tx.query_row("SELECT ts,session_id,project,provider,provider_name,model,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,duration_ms,ttft_ms,is_subagent,estimated,purpose,outcome,COALESCE((SELECT rank FROM wackchatter_provenance WHERE event_id=u.source_event_id),0) FROM usage_event u WHERE source='wackchatter' AND source_event_id=?1", [&incoming.source_event_id], |r| {
                         Ok((UsageEvent { source: Source::WackChatter, source_event_id: incoming.source_event_id.clone(), ts:r.get(0)?,session_id:r.get(1)?,project:r.get(2)?,provider:r.get(3)?,provider_name:r.get(4)?,model:r.get(5)?,input_tokens:r.get(6)?,output_tokens:r.get(7)?,reasoning_tokens:r.get(8)?,cache_read_tokens:r.get(9)?,cache_write_tokens:r.get(10)?,duration_ms:r.get(11)?,ttft_ms:r.get(12)?,is_subagent:r.get(13)?,estimated:r.get(14)?,purpose:r.get(15)?,outcome:r.get(16)?,workspace:None,subagent_id:None,mode:None },r.get::<_,i64>(17)?))
@@ -362,9 +393,9 @@ impl Store {
                                 merged.reasoning_tokens.or(loser.reasoning_tokens);
                         }
                     }
-                    tx.execute("INSERT INTO wackchatter_provenance(event_id,rank) VALUES(?1,?2) ON CONFLICT(event_id) DO UPDATE SET rank=excluded.rank", params![incoming.source_event_id,rank])?;
+                    side += tx.execute("INSERT INTO wackchatter_provenance(event_id,rank) VALUES(?1,?2) ON CONFLICT(event_id) DO UPDATE SET rank=excluded.rank WHERE rank IS NOT excluded.rank", params![incoming.source_event_id,rank])?;
                     if let Some(library) = &ctx.library_id {
-                        tx.execute("INSERT INTO wackchatter_membership(event_id,library_id,session_id,character_id,rank) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(event_id,library_id,session_id,character_id) DO UPDATE SET rank=MAX(rank,excluded.rank)",params![incoming.source_event_id,library,incoming.session_id.as_deref().unwrap_or(""),ctx.character_id.as_deref().unwrap_or(""),ctx.rank])?;
+                        side += tx.execute("INSERT INTO wackchatter_membership(event_id,library_id,session_id,character_id,rank) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(event_id,library_id,session_id,character_id) DO UPDATE SET rank=MAX(rank,excluded.rank) WHERE excluded.rank > rank",params![incoming.source_event_id,library,incoming.session_id.as_deref().unwrap_or(""),ctx.character_id.as_deref().unwrap_or(""),ctx.rank])?;
                     }
                 }
                 let e = &merged;
@@ -407,9 +438,12 @@ impl Store {
             }
         }
         for p in &projects {
-            fold_project_alias(&tx, p)?;
+            side += fold_project_alias(&tx, p)?;
         }
         tx.commit()?;
+        if n + side > 0 {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(n)
     }
 
@@ -2518,6 +2552,69 @@ mod tests {
                 stack: vec!["SvelteKit".into(), "Rust".into(), "Tauri".into()],
             }]
         );
+    }
+
+    /// Collectors re-read overlapping windows every pass. An identical re-read must
+    /// count zero and leave `generation` alone, or every 30-second sync would make
+    /// the open page re-run all its queries for nothing.
+    #[test]
+    fn identical_reingest_is_not_a_change() {
+        let store = test_store();
+        let g0 = store.generation();
+        assert_eq!(store.insert_events(&[ev("a", None), ev("b", None)]).unwrap(), 2);
+        let g1 = store.generation();
+        assert_ne!(g1, g0, "new events are a change");
+
+        assert_eq!(store.insert_events(&[ev("a", None), ev("b", None)]).unwrap(), 0);
+        assert_eq!(store.generation(), g1, "identical re-read is not a change");
+
+        // A late-finalized count (ZCode) is a change, and only that row counts.
+        let mut grown = ev("a", None);
+        grown.output_tokens = 40;
+        assert_eq!(store.insert_events(&[grown, ev("b", None)]).unwrap(), 1);
+        let g2 = store.generation();
+        assert_ne!(g2, g1);
+
+        // NULL -> value and value -> NULL are changes too (IS NOT, not <>).
+        let mut timed = ev("b", None);
+        timed.duration_ms = Some(1200);
+        assert_eq!(store.insert_events(&[timed]).unwrap(), 1);
+        assert_eq!(store.insert_events(&[ev("b", None)]).unwrap(), 1);
+        assert_ne!(store.generation(), g2);
+        let duration: Option<i64> = store
+            .read_conn()
+            .query_row("SELECT duration_ms FROM usage_event WHERE source_event_id='b'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(duration, None);
+    }
+
+    /// WackChatter's bookkeeping is a change even when the event's numbers are not:
+    /// the ledger outranking a transcript copy alters provenance, not the row.
+    #[test]
+    fn wackchatter_provenance_upgrade_is_a_change_but_not_processed() {
+        let store = test_store();
+        let mut e = ev("gen-1", None);
+        e.source = Source::WackChatter;
+        let transcript = WackContext { rank: 1, library_id: Some("lib".into()), ..Default::default() };
+        assert_eq!(store.insert_wackchatter(std::slice::from_ref(&e), &[transcript]).unwrap(), 1);
+
+        let g = store.generation();
+        let again = WackContext { rank: 1, library_id: Some("lib".into()), ..Default::default() };
+        assert_eq!(store.insert_wackchatter(std::slice::from_ref(&e), &[again]).unwrap(), 0);
+        assert_eq!(store.generation(), g, "same event, same rank: nothing changed");
+
+        let ledger = WackContext { rank: 2, library_id: Some("lib".into()), ..Default::default() };
+        assert_eq!(store.insert_wackchatter(std::slice::from_ref(&e), &[ledger]).unwrap(), 0);
+        assert_ne!(store.generation(), g, "rank upgrade changes provenance");
+        let rank: i64 = store
+            .read_conn()
+            .query_row("SELECT rank FROM wackchatter_provenance WHERE event_id='gen-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(rank, 2);
     }
 
     #[test]

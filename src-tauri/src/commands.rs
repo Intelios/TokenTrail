@@ -11,82 +11,133 @@ use crate::models::{
     ProjectPathRow, ProjectStack, SourceStatus,
 };
 use crate::state::AppState;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
-#[tauri::command]
-pub fn sync_now(state: State<AppState>) -> Result<Vec<IngestStats>, String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    Ok(collectors::sync_all(&state.store, &state.home))
+/// Run a command body on Tauri's blocking thread pool.
+///
+/// A plain `#[tauri::command] fn` runs on the main thread, which on macOS is the
+/// thread that paints the window: while a query ran, the whole window stopped
+/// repainting, scrolling and animating, and a page's parallel invokes queued
+/// behind each other on that one thread. Every command that touches the store,
+/// the sync lock or the filesystem goes through here instead, so the window stays
+/// live and concurrent reads spread across the store's reader pool. Blocking pool
+/// rather than `#[tauri::command(async)]`, which would run the body inline on one
+/// of the async runtime's few worker threads.
+async fn blocking<T, F>(app: AppHandle, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&AppState) -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>()))
+        .await
+        .map_err(|e| format!("command task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn get_overview(state: State<AppState>) -> Result<Overview, String> {
-    aggregate::overview(&state.store).map_err(|e| e.to_string())
+pub async fn sync_now(app: AppHandle) -> Result<Vec<IngestStats>, String> {
+    blocking(app, |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        Ok(collectors::sync_all(&state.store, &state.home))
+    })
+    .await
+}
+
+/// Background sync passes completed so far. The layout reads it once after
+/// subscribing to `sync-done`, to catch a first pass that finished before the
+/// webview was listening. An atomic read, so it stays a plain main-thread command.
+#[tauri::command]
+pub fn get_sync_passes(state: tauri::State<AppState>) -> u64 {
+    state.sync_passes.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 #[tauri::command]
-pub fn get_wackcode_detail(state: State<AppState>, days: i64) -> Result<WackCodeDetail, String> {
-    aggregate::wackcode_detail(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_overview(app: AppHandle) -> Result<Overview, String> {
+    blocking(app, |state| aggregate::overview(&state.store).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn get_wackcode_session_calls(
-    state: State<AppState>,
+pub async fn get_wackcode_detail(app: AppHandle, days: i64) -> Result<WackCodeDetail, String> {
+    blocking(app, move |state| {
+        aggregate::wackcode_detail(&state.store, days).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_wackcode_session_calls(
+    app: AppHandle,
     session_id: String,
 ) -> Result<Vec<WackCodeCallRow>, String> {
-    aggregate::wackcode_session_calls(&state.store, &session_id).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::wackcode_session_calls(&state.store, &session_id).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_leaderboard_events(
-    state: State<AppState>,
+pub async fn get_leaderboard_events(
+    app: AppHandle,
     days: i64,
 ) -> Result<Vec<LeaderboardEvent>, String> {
-    aggregate::leaderboard_events(&state.store, days).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::leaderboard_events(&state.store, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_daily(state: State<AppState>, days: i64) -> Result<Vec<DailyRow>, String> {
-    aggregate::daily(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_daily(app: AppHandle, days: i64) -> Result<Vec<DailyRow>, String> {
+    blocking(app, move |state| aggregate::daily(&state.store, days).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn get_daily_by_model(state: State<AppState>, days: i64) -> Result<Vec<DailyModelRow>, String> {
-    aggregate::daily_by_model(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_daily_by_model(app: AppHandle, days: i64) -> Result<Vec<DailyModelRow>, String> {
+    blocking(app, move |state| {
+        aggregate::daily_by_model(&state.store, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_daily_cache(state: State<AppState>, days: i64) -> Result<Vec<DailyCacheRow>, String> {
-    aggregate::daily_cache(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_daily_cache(app: AppHandle, days: i64) -> Result<Vec<DailyCacheRow>, String> {
+    blocking(app, move |state| aggregate::daily_cache(&state.store, days).map_err(|e| e.to_string()))
+        .await
 }
 
 #[tauri::command]
-pub fn get_by_model(state: State<AppState>, days: i64) -> Result<Vec<ModelRow>, String> {
-    aggregate::by_model(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_by_model(app: AppHandle, days: i64) -> Result<Vec<ModelRow>, String> {
+    blocking(app, move |state| aggregate::by_model(&state.store, days).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn get_active_days(state: State<AppState>, days: i64) -> Result<i64, String> {
-    aggregate::active_days_for_range(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_active_days(app: AppHandle, days: i64) -> Result<i64, String> {
+    blocking(app, move |state| {
+        aggregate::active_days_for_range(&state.store, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_model_stats(state: State<AppState>, days: i64) -> Result<Vec<ModelStatsRow>, String> {
-    aggregate::model_stats(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_model_stats(app: AppHandle, days: i64) -> Result<Vec<ModelStatsRow>, String> {
+    blocking(app, move |state| aggregate::model_stats(&state.store, days).map_err(|e| e.to_string()))
+        .await
 }
 
 #[tauri::command]
-pub fn get_model_detail(
-    state: State<AppState>,
+pub async fn get_model_detail(
+    app: AppHandle,
     model: String,
     days: i64,
 ) -> Result<Option<ModelDetail>, String> {
-    aggregate::model_detail(&state.store, &model, days).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::model_detail(&state.store, &model, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_model_comparison(
-    state: State<AppState>,
+pub async fn get_model_comparison(
+    app: AppHandle,
     model_a: String,
     model_b: String,
     days: i64,
@@ -103,320 +154,389 @@ pub fn get_model_comparison(
     if anchor_tokens <= 0 {
         return Err("anchor_tokens must be positive".into());
     }
-    aggregate::model_comparison(&state.store, &model_a, &model_b, days, anchor_tokens)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "both models must be known, visible, and distinct".into())
+    blocking(app, move |state| {
+        aggregate::model_comparison(&state.store, &model_a, &model_b, days, anchor_tokens)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "both models must be known, visible, and distinct".into())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_model_achievements(
-    state: State<AppState>,
+pub async fn get_model_achievements(
+    app: AppHandle,
     model: String,
 ) -> Result<Vec<Achievement>, String> {
-    aggregate::model_achievements(&state.store, &model).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::model_achievements(&state.store, &model).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_model_big6(state: State<AppState>, model: String) -> Result<Option<Big6History>, String> {
-    aggregate::model_big6(&state.store, &model).map_err(|e| e.to_string())
+pub async fn get_model_big6(app: AppHandle, model: String) -> Result<Option<Big6History>, String> {
+    blocking(app, move |state| aggregate::model_big6(&state.store, &model).map_err(|e| e.to_string()))
+        .await
 }
 
 #[tauri::command]
-pub fn get_big6_timeline(state: State<AppState>) -> Result<Big6Timeline, String> {
-    aggregate::big6_timeline(&state.store).map_err(|e| e.to_string())
+pub async fn get_big6_timeline(app: AppHandle) -> Result<Big6Timeline, String> {
+    blocking(app, |state| aggregate::big6_timeline(&state.store).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn get_daily_by_project(
-    state: State<AppState>,
+pub async fn get_daily_by_project(
+    app: AppHandle,
     days: i64,
 ) -> Result<Vec<DailyProjectRow>, String> {
-    aggregate::daily_by_project(&state.store, days).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::daily_by_project(&state.store, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_by_project(state: State<AppState>, days: i64) -> Result<Vec<ProjectRow>, String> {
-    aggregate::by_project(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_by_project(app: AppHandle, days: i64) -> Result<Vec<ProjectRow>, String> {
+    blocking(app, move |state| aggregate::by_project(&state.store, days).map_err(|e| e.to_string()))
+        .await
 }
 
 #[tauri::command]
-pub fn get_project_detail(
-    state: State<AppState>,
+pub async fn get_project_detail(
+    app: AppHandle,
     project: String,
     days: i64,
 ) -> Result<Option<ProjectDetail>, String> {
-    aggregate::project_detail(&state.store, &project, days).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::project_detail(&state.store, &project, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_heatmap(state: State<AppState>, days: i64) -> Result<Vec<HeatmapCell>, String> {
-    aggregate::heatmap(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_heatmap(app: AppHandle, days: i64) -> Result<Vec<HeatmapCell>, String> {
+    blocking(app, move |state| aggregate::heatmap(&state.store, days).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn get_hourly(state: State<AppState>) -> Result<Vec<HourRow>, String> {
-    aggregate::hourly(&state.store).map_err(|e| e.to_string())
+pub async fn get_hourly(app: AppHandle) -> Result<Vec<HourRow>, String> {
+    blocking(app, |state| aggregate::hourly(&state.store).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn get_source_status(state: State<AppState>) -> Vec<SourceStatus> {
-    collectors::source_status(&state.home)
+pub async fn get_source_status(app: AppHandle) -> Result<Vec<SourceStatus>, String> {
+    blocking(app, |state| Ok(collectors::source_status(&state.home))).await
 }
 
 #[tauri::command]
-pub fn get_estimated_share(state: State<AppState>) -> Result<Vec<EstimatedShare>, String> {
-    aggregate::estimated_share(&state.store).map_err(|e| e.to_string())
+pub async fn get_estimated_share(app: AppHandle) -> Result<Vec<EstimatedShare>, String> {
+    blocking(app, |state| aggregate::estimated_share(&state.store).map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn get_raw_models(state: State<AppState>) -> Vec<String> {
-    state.store.get_raw_models().unwrap_or_default()
+pub async fn get_raw_models(app: AppHandle) -> Result<Vec<String>, String> {
+    blocking(app, |state| Ok(state.store.get_raw_models().unwrap_or_default())).await
 }
 
 #[tauri::command]
-pub fn get_model_aliases(state: State<AppState>) -> Vec<ModelAlias> {
-    state.store.get_model_aliases().unwrap_or_default()
+pub async fn get_model_aliases(app: AppHandle) -> Result<Vec<ModelAlias>, String> {
+    blocking(app, |state| Ok(state.store.get_model_aliases().unwrap_or_default())).await
 }
 
 #[tauri::command]
-pub fn merge_models(state: State<AppState>, names: Vec<String>, canonical: String) -> Result<(), String> {
+pub async fn merge_models(app: AppHandle, names: Vec<String>, canonical: String) -> Result<(), String> {
     let names: Vec<String> = names
         .into_iter()
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
     let canonical = canonical.trim().to_string();
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.merge_models(&names, &canonical).map(|_| ())
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.merge_models(&names, &canonical).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn unmerge_models(state: State<AppState>, canonical: String) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state
-        .store
-        .remove_aliases_for(&canonical)
-        .map(|_| ())
-        .map_err(|e| format!("unmerge models: {e}"))
+pub async fn unmerge_models(app: AppHandle, canonical: String) -> Result<(), String> {
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state
+            .store
+            .remove_aliases_for(&canonical)
+            .map(|_| ())
+            .map_err(|e| format!("unmerge models: {e}"))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn remove_model_alias(state: State<AppState>, alias: String) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state
-        .store
-        .remove_model_alias(&alias)
-        .map(|_| ())
-        .map_err(|e| format!("remove model alias: {e}"))
+pub async fn remove_model_alias(app: AppHandle, alias: String) -> Result<(), String> {
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state
+            .store
+            .remove_model_alias(&alias)
+            .map(|_| ())
+            .map_err(|e| format!("remove model alias: {e}"))
+    })
+    .await
 }
 
 /// From `at_ms` onward, show raw model `alias` as `canonical`; earlier usage
 /// keeps the name it had. For floating API names that move to each new release.
 #[tauri::command]
-pub fn split_model_alias(
-    state: State<AppState>,
+pub async fn split_model_alias(
+    app: AppHandle,
     alias: String,
     at_ms: i64,
     canonical: String,
 ) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.split_model_alias(&alias, at_ms, &canonical)
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.split_model_alias(&alias, at_ms, &canonical)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn remove_model_alias_segment(
-    state: State<AppState>,
+pub async fn remove_model_alias_segment(
+    app: AppHandle,
     alias: String,
     from_ts: i64,
 ) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.remove_model_alias_segment(&alias, from_ts)
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.remove_model_alias_segment(&alias, from_ts)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn rename_model(
-    state: State<AppState>,
+pub async fn rename_model(
+    app: AppHandle,
     current_name: String,
     new_name: String,
 ) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.rename_model(&current_name, &new_name)
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.rename_model(&current_name, &new_name)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_hidden_models(state: State<AppState>) -> Vec<String> {
-    state.store.get_hidden_models().unwrap_or_default()
+pub async fn get_hidden_models(app: AppHandle) -> Result<Vec<String>, String> {
+    blocking(app, |state| Ok(state.store.get_hidden_models().unwrap_or_default())).await
 }
 
 #[tauri::command]
-pub fn hide_models(state: State<AppState>, names: Vec<String>) -> Result<(), String> {
+pub async fn hide_models(app: AppHandle, names: Vec<String>) -> Result<(), String> {
     let names: Vec<String> = names
         .into_iter()
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.hide_models(&names).map(|_| ())
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.hide_models(&names).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn unhide_model(state: State<AppState>, name: String) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state
-        .store
-        .unhide_model(&name)
-        .map(|_| ())
-        .map_err(|e| format!("unhide model: {e}"))
+pub async fn unhide_model(app: AppHandle, name: String) -> Result<(), String> {
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state
+            .store
+            .unhide_model(&name)
+            .map(|_| ())
+            .map_err(|e| format!("unhide model: {e}"))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_project_colors(state: State<AppState>) -> Vec<ProjectColor> {
-    state.store.get_project_colors().unwrap_or_default()
+pub async fn get_project_colors(app: AppHandle) -> Result<Vec<ProjectColor>, String> {
+    blocking(app, |state| Ok(state.store.get_project_colors().unwrap_or_default())).await
 }
 
 /// `color: None` clears the project's color and returns it to the auto palette.
 #[tauri::command]
-pub fn set_project_color(
-    state: State<AppState>,
+pub async fn set_project_color(
+    app: AppHandle,
     project: String,
     color: Option<String>,
 ) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    match color {
-        Some(c) => state.store.set_project_color(&project, &c),
-        None => state
-            .store
-            .clear_project_color(&project)
-            .map(|_| ())
-            .map_err(|e| format!("clear project color: {e}")),
-    }
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        match color {
+            Some(c) => state.store.set_project_color(&project, &c),
+            None => state
+                .store
+                .clear_project_color(&project)
+                .map(|_| ())
+                .map_err(|e| format!("clear project color: {e}")),
+        }
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_project_stacks(state: State<AppState>) -> Vec<ProjectStack> {
-    state.store.get_project_stacks().unwrap_or_default()
+pub async fn get_project_stacks(app: AppHandle) -> Result<Vec<ProjectStack>, String> {
+    blocking(app, |state| Ok(state.store.get_project_stacks().unwrap_or_default())).await
 }
 
 /// Replace `project`'s tech stack tags; an empty `stack` clears all tags for the project.
 #[tauri::command]
-pub fn set_project_stack(
-    state: State<AppState>,
+pub async fn set_project_stack(
+    app: AppHandle,
     project: String,
     stack: Vec<String>,
 ) -> Result<(), String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.set_project_stack(&project, &stack)
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.set_project_stack(&project, &stack)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_project_aliases(state: State<AppState>) -> Vec<ProjectAlias> {
-    state.store.get_project_aliases().unwrap_or_default()
+pub async fn get_project_aliases(app: AppHandle) -> Result<Vec<ProjectAlias>, String> {
+    blocking(app, |state| Ok(state.store.get_project_aliases().unwrap_or_default())).await
 }
 
 /// Every recorded folder with the project it counts under and whether it still
 /// exists — the merge list uses the last two to flag a project whose folder moved.
 #[tauri::command]
-pub fn get_project_paths(state: State<AppState>) -> Vec<ProjectPathRow> {
-    state.store.get_project_paths().unwrap_or_default()
+pub async fn get_project_paths(app: AppHandle) -> Result<Vec<ProjectPathRow>, String> {
+    blocking(app, |state| Ok(state.store.get_project_paths().unwrap_or_default())).await
 }
 
 /// Projects whose folder is gone but which look like a live project's old home.
 #[tauri::command]
-pub fn get_project_suggestions(state: State<AppState>) -> Result<Vec<ProjectSuggestion>, String> {
-    aggregate::project_suggestions(&state.store).map_err(|e| e.to_string())
+pub async fn get_project_suggestions(app: AppHandle) -> Result<Vec<ProjectSuggestion>, String> {
+    blocking(app, |state| aggregate::project_suggestions(&state.store).map_err(|e| e.to_string()))
+        .await
 }
 
 #[tauri::command]
-pub fn get_project_auto_links(
-    state: State<AppState>,
+pub async fn get_project_auto_links(
+    app: AppHandle,
     limit: i64,
-) -> Vec<ProjectAutoLink> {
-    state.store.get_project_auto_links(limit).unwrap_or_default()
+) -> Result<Vec<ProjectAutoLink>, String> {
+    blocking(app, move |state| Ok(state.store.get_project_auto_links(limit).unwrap_or_default()))
+        .await
 }
 
 /// Undo the automatic links from `through_id` upward, newest first.
 #[tauri::command]
-pub fn undo_project_auto_links(state: State<AppState>, through_id: i64) -> Result<usize, String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.undo_project_auto_links(through_id)
+pub async fn undo_project_auto_links(app: AppHandle, through_id: i64) -> Result<usize, String> {
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.undo_project_auto_links(through_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_project_ignores(state: State<AppState>) -> Vec<ProjectIgnore> {
-    state.store.get_project_ignores().unwrap_or_default()
+pub async fn get_project_ignores(app: AppHandle) -> Result<Vec<ProjectIgnore>, String> {
+    blocking(app, |state| Ok(state.store.get_project_ignores().unwrap_or_default())).await
 }
 
 /// Hide a folder subtree from Projects; its usage still counts, as Unknown.
 #[tauri::command]
-pub fn add_project_ignore(state: State<AppState>, prefix: String) -> Result<usize, String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.add_project_ignore(&prefix)
+pub async fn add_project_ignore(app: AppHandle, prefix: String) -> Result<usize, String> {
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.add_project_ignore(&prefix)
+    })
+    .await
 }
 
 /// Hand an ignored subtree back to automatic grouping.
 #[tauri::command]
-pub fn remove_project_ignore(state: State<AppState>, prefix: String) -> Result<usize, String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.remove_project_ignore(&prefix)
+pub async fn remove_project_ignore(app: AppHandle, prefix: String) -> Result<usize, String> {
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.remove_project_ignore(&prefix)
+    })
+    .await
 }
 
 /// Re-run the project resolution pass on demand (after moving folders around).
 #[tauri::command]
-pub fn rescan_projects(state: State<AppState>) -> Result<usize, String> {
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.refresh_project_links()
+pub async fn rescan_projects(app: AppHandle) -> Result<usize, String> {
+    blocking(app, |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.refresh_project_links()
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn merge_projects(state: State<AppState>, names: Vec<String>, canonical: String) -> Result<(), String> {
+pub async fn merge_projects(app: AppHandle, names: Vec<String>, canonical: String) -> Result<(), String> {
     let names: Vec<String> = names
         .into_iter()
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
     let canonical = canonical.trim().to_string();
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.merge_projects(&names, &canonical).map(|_| ())
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.merge_projects(&names, &canonical).map(|_| ())
+    })
+    .await
 }
 
 /// Folders kept as their own projects, overriding automatic root-folding.
 #[tauri::command]
-pub fn unmerge_projects(state: State<AppState>, names: Vec<String>) -> Result<(), String> {
+pub async fn unmerge_projects(app: AppHandle, names: Vec<String>) -> Result<(), String> {
     let names: Vec<String> = names
         .into_iter()
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.unmerge_projects(&names).map(|_| ())
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.unmerge_projects(&names).map(|_| ())
+    })
+    .await
 }
 
 /// Folders handed back to automatic root-folding.
 #[tauri::command]
-pub fn regroup_projects(state: State<AppState>, names: Vec<String>) -> Result<(), String> {
+pub async fn regroup_projects(app: AppHandle, names: Vec<String>) -> Result<(), String> {
     let names: Vec<String> = names
         .into_iter()
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .collect();
-    let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
-    state.store.regroup_projects(&names).map(|_| ())
+    blocking(app, move |state| {
+        let _sync = state.write.lock().map_err(|_| "sync lock poisoned")?;
+        state.store.regroup_projects(&names).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn export_data(
-    app: AppHandle,
-    state: State<AppState>,
-    format: String,
-) -> Result<String, String> {
-    use std::io::Write;
+pub async fn export_data(app: AppHandle, format: String) -> Result<String, String> {
     let dir = app
         .path()
         .data_dir()
         .map_err(|e| e.to_string())?
         .join("TokenTrail")
         .join("exports");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    blocking(app, move |state| export_rows(state, &dir, &format)).await
+}
+
+/// The body of `export_data`, run on the blocking pool: a full-table read and a
+/// file write that can take seconds on a large history.
+fn export_rows(state: &AppState, dir: &std::path::Path, format: &str) -> Result<String, String> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -465,12 +585,12 @@ pub fn export_data(
         .map_err(|e| e.to_string())?;
     drop(stmt);
 
-    let path = match format.as_str() {
+    let path = match format {
         "json" => dir.join(format!("tokentrail-{stamp}.json")),
         _ => dir.join(format!("tokentrail-{stamp}.csv")),
     };
     let mut out = std::io::BufWriter::new(std::fs::File::create(&path).map_err(|e| e.to_string())?);
-    match format.as_str() {
+    match format {
         "json" => {
             let items: Vec<serde_json::Value> = rows
                 .iter()
@@ -527,51 +647,65 @@ pub fn export_data(
 }
 
 #[tauri::command]
-pub fn get_family_stats(state: State<AppState>, days: i64) -> Result<Vec<FamilyStatsRow>, String> {
-    aggregate::family_stats(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_family_stats(app: AppHandle, days: i64) -> Result<Vec<FamilyStatsRow>, String> {
+    blocking(app, move |state| aggregate::family_stats(&state.store, days).map_err(|e| e.to_string()))
+        .await
 }
 
 #[tauri::command]
-pub fn get_family_detail(
-    state: State<AppState>,
+pub async fn get_family_detail(
+    app: AppHandle,
     family: String,
     days: i64,
 ) -> Result<Option<FamilyDetail>, String> {
-    aggregate::family_detail(&state.store, &family, days).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::family_detail(&state.store, &family, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_family_achievements(
-    state: State<AppState>,
+pub async fn get_family_achievements(
+    app: AppHandle,
     family: String,
 ) -> Result<Vec<Achievement>, String> {
-    aggregate::family_achievements(&state.store, &family).map_err(|e| e.to_string())
+    blocking(app, move |state| {
+        aggregate::family_achievements(&state.store, &family).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_wrapped_summary(state: State<AppState>, days: i64) -> Result<WrappedSummary, String> {
-    aggregate::wrapped_summary(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_wrapped_summary(app: AppHandle, days: i64) -> Result<WrappedSummary, String> {
+    blocking(app, move |state| {
+        aggregate::wrapped_summary(&state.store, days).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Write a PNG the webview rendered to a path the user picked in the save
 /// dialog. A pure file write — the bytes are already final, so unlike
 /// `export_data` there is no store read and no lock to hold.
 #[tauri::command]
-pub fn export_wrapped_png(path: String, data_b64: String) -> Result<String, String> {
-    use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_b64.as_bytes())
-        .map_err(|e| format!("decode png: {e}"))?;
-    if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
-        return Err("not a PNG payload".into());
-    }
-    std::fs::write(&path, &bytes).map_err(|e| format!("write png: {e}"))?;
-    Ok(path)
+pub async fn export_wrapped_png(app: AppHandle, path: String, data_b64: String) -> Result<String, String> {
+    blocking(app, move |_| {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_b64.as_bytes())
+            .map_err(|e| format!("decode png: {e}"))?;
+        if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+            return Err("not a PNG payload".into());
+        }
+        std::fs::write(&path, &bytes).map_err(|e| format!("write png: {e}"))?;
+        Ok(path)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_peak_days(state: State<AppState>, days: i64) -> Result<Vec<PeakDayRow>, String> {
-    aggregate::peak_days(&state.store, days).map_err(|e| e.to_string())
+pub async fn get_peak_days(app: AppHandle, days: i64) -> Result<Vec<PeakDayRow>, String> {
+    blocking(app, move |state| aggregate::peak_days(&state.store, days).map_err(|e| e.to_string()))
+        .await
 }
 
 #[cfg(test)]

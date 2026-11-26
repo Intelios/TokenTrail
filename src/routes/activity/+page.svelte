@@ -19,7 +19,14 @@
   let peakWindow = $state(readPref(PREF_PEAK_DAYS, 0, (v) => PEAK_RANGES.includes(v as number)));
   let error = $state('');
 
+  // Commands run in parallel, so an older request can resolve after a newer one.
+  // The peak chart has two writers (page load, window picker), hence its own count.
+  let loadSeq = 0;
+  let peakSeq = 0;
+
   async function load() {
+    const seq = ++loadSeq;
+    const peak = ++peakSeq;
     try {
       const [h, o, ov, pk] = await Promise.all([
         api.heatmap(365),
@@ -27,23 +34,26 @@
         api.overview(),
         api.peakDays(peakWindow),
       ]);
+      if (seq !== loadSeq) return;
       heatmap = h;
       hourly = o;
       overview = ov;
-      peakRows = pk;
+      if (peak === peakSeq) peakRows = pk;
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     }
   }
 
   async function setPeakWindow(w: number) {
     peakWindow = w;
     writePref(PREF_PEAK_DAYS, w);
+    const peak = ++peakSeq;
     try {
-      peakRows = await api.peakDays(w);
+      const rows = await api.peakDays(w);
+      if (peak === peakSeq) peakRows = rows;
     } catch (e) {
-      error = String(e);
+      if (peak === peakSeq) error = String(e);
     }
   }
 

@@ -20,14 +20,20 @@
   let timeline = $state<Big6Timeline | null>(null);
   let error = $state('');
 
+  // Commands run in parallel, so a load for an earlier range can resolve after
+  // the current one; only the latest may write.
+  let chartSeq = 0;
+
   async function loadCharts() {
+    const seq = ++chartSeq;
     try {
       const [m, c] = await Promise.all([api.dailyByModel(days), api.dailyCache(days)]);
+      if (seq !== chartSeq) return;
       byModel = m;
       cache = c;
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === chartSeq) error = String(e);
     }
   }
 

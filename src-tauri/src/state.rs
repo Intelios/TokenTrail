@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 
 use crate::store::Store;
@@ -11,4 +12,7 @@ pub struct AppState {
     pub write: Mutex<()>,
     pub store: Store,
     pub home: PathBuf,
+    /// Background sync passes completed. Incremented before `sync-done` is
+    /// emitted, so a webview that subscribes late can tell it missed one.
+    pub sync_passes: AtomicU64,
 }

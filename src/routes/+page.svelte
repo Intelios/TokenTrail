@@ -23,15 +23,21 @@
   let models = $state<ModelRow[]>([]);
   let error = $state('');
 
+  // Commands run in parallel, so an older load can resolve after a newer one;
+  // only the latest may write.
+  let loadSeq = 0;
+
   async function load() {
+    const seq = ++loadSeq;
     try {
       const [o, d, m] = await Promise.all([api.overview(), api.daily(150), api.byModel(30)]);
+      if (seq !== loadSeq) return;
       overview = o;
       daily = d;
       models = m.slice(0, 5);
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     }
   }
 

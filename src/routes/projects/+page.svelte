@@ -45,7 +45,12 @@
     return '/projects/' + encodeURIComponent(p);
   }
 
+  // Commands run in parallel, so a load for an earlier range can resolve after
+  // the current one; only the latest may write.
+  let loadSeq = 0;
+
   async function load() {
+    const seq = ++loadSeq;
     try {
       const [p, d, c, s] = await Promise.all([
         api.byProject(days),
@@ -53,13 +58,14 @@
         api.projectColors(),
         api.projectStacks(),
       ]);
+      if (seq !== loadSeq) return;
       projects = p;
       dailyProjectRows = d;
       marked = markedColors(c);
       stacks = projectStacksMap(s);
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     }
   }
 

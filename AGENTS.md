@@ -74,9 +74,11 @@ bun run tauri build  # production build
 
 ## Communication between layers
 
-- Rust emits `sync-done` after each background sync via `app_handle.emit("sync-done", &stats)`.
-- `+layout.svelte` listens via `@tauri-apps/api/event` and dispatches `window.dispatchEvent(new CustomEvent('tt-sync'))`.
-- Every route that needs live data listens for `tt-sync` and calls `load()` again.
+- **Commands never run on the main thread.** A plain `#[tauri::command] fn` runs on the main thread, which paints the window, so a query there freezes scrolling and animation and serialises every other invoke behind it. Anything that touches the store, the sync lock or the filesystem is an `async fn` that runs its body through `blocking()` in `commands.rs` (Tauri's blocking pool). Only trivial reads like `get_sync_passes` stay synchronous.
+- Rust emits `sync-done` after each background sync with a `SyncDone { changed, stats }` payload. `changed` comes from `Store::generation()`, which only moves when ingest really changed something: the `usage_event` upsert has a `WHERE … IS NOT …` guard so an identical re-read is a no-op and counts zero in `processed`. Collectors re-read overlapping windows on purpose, so keep that guard on any new write path.
+- `+layout.svelte` listens via `@tauri-apps/api/event` and dispatches `window.dispatchEvent(new CustomEvent('tt-sync'))` only when `changed` is true. The first pass can finish before the listener exists, so after subscribing the layout asks `get_sync_passes` (incremented before the emit) and refreshes once if it missed one.
+- Every route that needs live data listens for `tt-sync` and calls `load()` again. Load once on mount from either a `$effect` or `onMount`, never both.
+- Commands run in parallel, so responses can arrive out of order. Every `load()` takes a ticket (`const seq = ++loadSeq`) and writes state only while `seq === loadSeq`; otherwise a slow request for the previous model, range or pre-merge state overwrites the current one.
 - Do not add a global Svelte store unless you are adding cross-route state; the event-based refresh is the current pattern.
 
 ## Data / schema gotchas

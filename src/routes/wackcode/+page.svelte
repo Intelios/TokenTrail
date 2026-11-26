@@ -86,17 +86,24 @@
   let callsBySession = $state<Record<string, WackCodeCallRow[]>>({});
   let loadingCalls = $state<Record<string, boolean>>({});
 
+  // Commands run in parallel, so a load for an earlier range can resolve after
+  // the current one; only the latest may write.
+  let loadSeq = 0;
+
   async function load() {
+    const seq = ++loadSeq;
     try {
       const [d, pc] = await Promise.all([api.wackcodeDetail(days), api.projectColors()]);
+      if (seq !== loadSeq) return;
       detail = d;
       projectColors = pc;
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     }
   }
 
+  // Also the first load on mount — onMount only wires the sync refresh.
   $effect(() => {
     days;
     load();
@@ -107,7 +114,6 @@
   });
 
   onMount(() => {
-    load();
     const h = () => load();
     window.addEventListener('tt-sync', h);
     return () => window.removeEventListener('tt-sync', h);

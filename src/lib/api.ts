@@ -196,8 +196,16 @@ export interface SourceStatus {
 
 export interface IngestStats {
   source: string;
+  /** Events inserted or changed; re-reading an identical event counts zero. */
   processed: number;
   error: string | null;
+}
+
+/** Payload of the Rust `sync-done` event, emitted after each background pass. */
+export interface SyncDone {
+  /** False when the pass stored nothing new — pages skip their refresh. */
+  changed: boolean;
+  stats: IngestStats[];
 }
 
 /**
@@ -614,6 +622,8 @@ export const api = {
 
   estimatedShare: () => invoke<EstimatedShare[]>('get_estimated_share'),
   syncNow: () => invoke<IngestStats[]>('sync_now'),
+  /** Background sync passes completed since launch. */
+  syncPasses: () => invoke<number>('get_sync_passes'),
   exportData: (format: 'csv' | 'json') => invoke<string>('export_data', { format }),
   modelAliases: () => invoke<ModelAlias[]>('get_model_aliases'),
   rawModels: () => invoke<string[]>('get_raw_models'),

@@ -366,9 +366,9 @@ mod tests {
         std::fs::write(&path, lines[..3].join("\n") + "\n").unwrap();
         assert_eq!(collect(&store, &home).unwrap(), 0);
 
-        // Whole file re-read from offset 0: the surviving turn is upserted (a
-        // touched row counts as processed), the dropped turn is retained.
-        assert_eq!(collect(&store, &home).unwrap(), 1);
+        // Whole file re-read from offset 0: the surviving turn comes back
+        // identical (an unchanged row counts zero), the dropped turn is retained.
+        assert_eq!(collect(&store, &home).unwrap(), 0);
         let rows: Vec<(String, i64)> = store
             .read_conn()
             .prepare("SELECT source_event_id, input_tokens + cache_read_tokens + cache_write_tokens + output_tokens FROM usage_event ORDER BY ts")

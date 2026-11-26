@@ -51,8 +51,13 @@
 
   const name = $derived($page.params.model ?? '');
 
+  // Commands run in parallel, so the model just left (or an earlier range) can
+  // resolve after the current one; only the latest load may write.
+  let loadSeq = 0;
+
   async function load() {
     if (!name) return;
+    const seq = ++loadSeq;
     if (!detail) loading = true;
     try {
       const [d, achs, b6, colors] = await Promise.all([
@@ -61,15 +66,16 @@
         api.modelBig6(name),
         api.projectColors(),
       ]);
+      if (seq !== loadSeq) return;
       detail = d;
       achievements = achs;
       big6 = b6;
       projectColors = markedColors(colors);
       error = '';
     } catch (e) {
-      error = String(e);
+      if (seq === loadSeq) error = String(e);
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 
