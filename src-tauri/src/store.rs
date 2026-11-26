@@ -196,6 +196,219 @@ CREATE TABLE IF NOT EXISTS project_auto_link (
 );
 "#;
 
+/// Layout version of `usage_rollup` and its triggers, carried in the trigger
+/// names. Bump it whenever either changes: `ensure_rollup` finds no triggers of
+/// the current version and rebuilds the table from `usage_event`.
+const ROLLUP_VERSION: u32 = 2;
+
+/// What puts `row` (`new`, `old` or a table alias) in a bucket: its UTC hour and
+/// everything a query may group or filter it by. Whether it is priced is part
+/// of it, so a bucket's cost is either every event's or none (as `SUM` over the
+/// events would give), and "priced tokens" and "priced calls" stay exact.
+fn rollup_place(row: &str) -> String {
+    format!(
+        "({row}.ts, {row}.source, {row}.model, {row}.project, {row}.session_id, {row}.estimated, \
+         {row}.is_subagent, {row}.cost_usd IS NOT NULL)"
+    )
+}
+
+/// What `row` adds to its bucket.
+fn rollup_sums(row: &str) -> String {
+    format!(
+        "({row}.input_tokens, {row}.output_tokens, {row}.cache_read_tokens, {row}.cache_write_tokens, \
+         {row}.reasoning_tokens, {row}.cost_usd)"
+    )
+}
+
+/// The hour bucket `row` falls in, as one text key. `quote()` keeps it
+/// injective — every part is a self-delimiting SQL literal — and gives NULL a
+/// key of its own, which a composite UNIQUE could not: NULLs never conflict, so
+/// an upsert on one would never merge them.
+fn rollup_key(row: &str) -> String {
+    format!(
+        "quote({row}.ts / 3600000) || ',' || quote({row}.source) || ',' || quote({row}.model) || ',' || \
+         quote({row}.project) || ',' || quote({row}.session_id) || ',' || quote({row}.estimated) || ',' || \
+         quote({row}.is_subagent) || ',' || quote({row}.cost_usd IS NOT NULL)"
+    )
+}
+
+/// Trigger body that counts `row` into its bucket. Rows before 1970 stay out:
+/// `ts / 3600000` truncates toward zero, so they would share hour 0 with rows
+/// after it, and `aggregate::usage_rows` reads them from `usage_event` instead.
+fn rollup_add(row: &str) -> String {
+    format!(
+        "INSERT INTO usage_rollup (bucket, hour, source, model, project, session_id, estimated, is_subagent,
+                                   priced, n, input_tokens, output_tokens, cache_read_tokens,
+                                   cache_write_tokens, reasoning_tokens, cost_sum, min_ts, max_ts)
+         SELECT {key}, {row}.ts / 3600000, {row}.source, {row}.model, {row}.project, {row}.session_id,
+                {row}.estimated, {row}.is_subagent, {row}.cost_usd IS NOT NULL, 1, {row}.input_tokens,
+                {row}.output_tokens, {row}.cache_read_tokens, {row}.cache_write_tokens,
+                COALESCE({row}.reasoning_tokens, 0), COALESCE({row}.cost_usd, 0.0), {row}.ts, {row}.ts
+         WHERE {row}.ts >= 0
+         ON CONFLICT(bucket) DO UPDATE SET
+             n = n + 1,
+             input_tokens = input_tokens + excluded.input_tokens,
+             output_tokens = output_tokens + excluded.output_tokens,
+             cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+             cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+             reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens,
+             cost_sum = cost_sum + excluded.cost_sum,
+             min_ts = MIN(min_ts, excluded.min_ts),
+             max_ts = MAX(max_ts, excluded.max_ts);",
+        key = rollup_key(row)
+    )
+}
+
+/// Trigger body that takes `row` back out of its bucket: the sums step down,
+/// an emptied bucket goes, and if `row` was the bucket's first or last event
+/// its time span is read again from the events still in it (one short walk of
+/// `idx_usage_session`). The fallbacks to the stored span only matter if the
+/// table had drifted; a trigger must never fail an ingest over it.
+fn rollup_remove(row: &str) -> String {
+    let key = rollup_key(row);
+    format!(
+        "UPDATE usage_rollup SET
+             n = n - 1,
+             input_tokens = input_tokens - {row}.input_tokens,
+             output_tokens = output_tokens - {row}.output_tokens,
+             cache_read_tokens = cache_read_tokens - {row}.cache_read_tokens,
+             cache_write_tokens = cache_write_tokens - {row}.cache_write_tokens,
+             reasoning_tokens = reasoning_tokens - COALESCE({row}.reasoning_tokens, 0),
+             cost_sum = cost_sum - COALESCE({row}.cost_usd, 0.0)
+         WHERE bucket = {key} AND {row}.ts >= 0;
+         DELETE FROM usage_rollup WHERE bucket = {key} AND {row}.ts >= 0 AND n <= 0;
+         UPDATE usage_rollup SET (min_ts, max_ts) = (
+             SELECT COALESCE(MIN(e.ts), usage_rollup.min_ts), COALESCE(MAX(e.ts), usage_rollup.max_ts)
+             FROM usage_event e
+             WHERE e.source = {row}.source AND e.session_id IS {row}.session_id
+               AND e.ts >= {row}.ts / 3600000 * 3600000 AND e.ts < ({row}.ts / 3600000 + 1) * 3600000
+               AND e.model IS {row}.model AND e.project IS {row}.project AND e.estimated = {row}.estimated
+               AND e.is_subagent = {row}.is_subagent
+               AND (e.cost_usd IS NOT NULL) = ({row}.cost_usd IS NOT NULL))
+         WHERE bucket = {key} AND {row}.ts >= 0 AND (min_ts = {row}.ts OR max_ts = {row}.ts);"
+    )
+}
+
+/// The triggers that keep `usage_rollup` equal to `usage_event` summed by hour
+/// bucket, through every write path — ingest upserts, WackChatter's repairs,
+/// the startup cost repair and anything added later — without the write path
+/// knowing about it.
+fn rollup_triggers() -> String {
+    let v = ROLLUP_VERSION;
+    let (old_place, new_place) = (rollup_place("old"), rollup_place("new"));
+    let (old_sums, new_sums) = (rollup_sums("old"), rollup_sums("new"));
+    format!(
+        "CREATE TRIGGER usage_rollup_v{v}_insert AFTER INSERT ON usage_event
+         BEGIN {add_new} END;
+         CREATE TRIGGER usage_rollup_v{v}_delete AFTER DELETE ON usage_event
+         BEGIN {remove_old} END;
+         -- Same row in the same place, new counts: a late-finalized reply or a
+         -- reprice. The common update, so it is one step on the bucket's key.
+         CREATE TRIGGER usage_rollup_v{v}_recount AFTER UPDATE ON usage_event
+         WHEN new.ts >= 0 AND {old_place} IS {new_place} AND {old_sums} IS NOT {new_sums}
+         BEGIN
+             UPDATE usage_rollup SET
+                 input_tokens = input_tokens + new.input_tokens - old.input_tokens,
+                 output_tokens = output_tokens + new.output_tokens - old.output_tokens,
+                 cache_read_tokens = cache_read_tokens + new.cache_read_tokens - old.cache_read_tokens,
+                 cache_write_tokens = cache_write_tokens + new.cache_write_tokens - old.cache_write_tokens,
+                 reasoning_tokens = reasoning_tokens + COALESCE(new.reasoning_tokens, 0)
+                                    - COALESCE(old.reasoning_tokens, 0),
+                 cost_sum = cost_sum + COALESCE(new.cost_usd, 0.0) - COALESCE(old.cost_usd, 0.0)
+             WHERE bucket = {new_key};
+         END;
+         -- Anything that moves the row (its time, model, project, session, whether
+         -- it is priced…): out of the old bucket, into the new one.
+         CREATE TRIGGER usage_rollup_v{v}_move AFTER UPDATE ON usage_event
+         WHEN {old_place} IS NOT {new_place}
+         BEGIN {remove_old} {add_new} END;",
+        add_new = rollup_add("new"),
+        remove_old = rollup_remove("old"),
+        new_key = rollup_key("new"),
+    )
+}
+
+fn drop_rollup_triggers(conn: &Connection) -> rusqlite::Result<()> {
+    let names: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'trigger' AND tbl_name = 'usage_event' AND name LIKE 'usage\\_rollup\\_%' ESCAPE '\\'",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for name in names {
+        conn.execute(&format!("DROP TRIGGER IF EXISTS \"{name}\""), [])?;
+    }
+    Ok(())
+}
+
+/// Lay `usage_rollup` out again from every event and install the triggers that
+/// keep it current. Run inside the caller's transaction, so readers see the old
+/// table or the new one, never a half-built one.
+fn rebuild_rollup(conn: &Connection) -> rusqlite::Result<()> {
+    drop_rollup_triggers(conn)?;
+    conn.execute_batch(&format!(
+        "DROP TABLE IF EXISTS usage_rollup;
+         CREATE TABLE usage_rollup (
+             bucket TEXT PRIMARY KEY,
+             hour INTEGER NOT NULL,
+             source TEXT NOT NULL,
+             model TEXT,
+             project TEXT,
+             session_id TEXT,
+             estimated INTEGER NOT NULL,
+             is_subagent INTEGER NOT NULL,
+             priced INTEGER NOT NULL,
+             n INTEGER NOT NULL,
+             input_tokens INTEGER NOT NULL,
+             output_tokens INTEGER NOT NULL,
+             cache_read_tokens INTEGER NOT NULL,
+             cache_write_tokens INTEGER NOT NULL,
+             reasoning_tokens INTEGER NOT NULL,
+             cost_sum REAL NOT NULL,
+             min_ts INTEGER NOT NULL,
+             max_ts INTEGER NOT NULL
+         );
+         CREATE INDEX idx_rollup_hour ON usage_rollup(hour);
+         CREATE INDEX idx_rollup_model ON usage_rollup(model, hour);
+         CREATE INDEX idx_rollup_project ON usage_rollup(project, hour);
+         INSERT INTO usage_rollup
+         SELECT {key}, u.ts / 3600000, u.source, u.model, u.project, u.session_id, u.estimated, u.is_subagent,
+                u.cost_usd IS NOT NULL, COUNT(*), SUM(u.input_tokens), SUM(u.output_tokens),
+                SUM(u.cache_read_tokens), SUM(u.cache_write_tokens), SUM(COALESCE(u.reasoning_tokens, 0)),
+                TOTAL(u.cost_usd), MIN(u.ts), MAX(u.ts)
+         FROM usage_event u WHERE u.ts >= 0
+         GROUP BY u.ts / 3600000, u.source, u.model, u.project, u.session_id, u.estimated, u.is_subagent,
+                  u.cost_usd IS NOT NULL;",
+        key = rollup_key("u")
+    ))?;
+    conn.execute_batch(&rollup_triggers())
+}
+
+/// Make sure `usage_rollup` exists, is this build's layout and agrees with
+/// `usage_event`. The triggers keep it exact on their own; the count check is a
+/// cheap tripwire (one walk of `idx_usage_ts`) for a database that was ever
+/// written without them.
+fn ensure_rollup(conn: &Connection) -> rusqlite::Result<()> {
+    let current = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?1")?
+        .exists([format!("usage_rollup_v{ROLLUP_VERSION}_insert")])?;
+    if current {
+        let (rolled, events): (i64, i64) = conn.query_row(
+            "SELECT (SELECT COALESCE(SUM(n), 0) FROM usage_rollup),
+                    (SELECT COUNT(*) FROM usage_event WHERE ts >= 0)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if rolled == events {
+            return Ok(());
+        }
+    }
+    let tx = conn.unchecked_transaction()?;
+    rebuild_rollup(&tx)?;
+    tx.commit()
+}
+
 impl Store {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         if let Some(parent) = path.parent() {
@@ -273,6 +486,8 @@ impl Store {
                  CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_event(source, session_id, ts DESC);",
             );
         }
+        // Last: the rollup's triggers read every column added above.
+        ensure_rollup(&conn)?;
         Ok(Self {
             writer: Mutex::new(conn),
             path: path.to_path_buf(),
@@ -511,6 +726,8 @@ impl Store {
             q.collect::<Result<Vec<_>, _>>()?
         };
         let tx = conn.unchecked_transaction()?;
+        // Every row's cost moves, so one rebuild beats a trigger step per row.
+        drop_rollup_triggers(&tx)?;
         let mut n = 0usize;
         for (id, source_s, model, ts, input, output, reasoning, cr, cw) in rows {
             // Unknown sources behave like ZCode: no reasoning-token surcharge.
@@ -522,7 +739,11 @@ impl Store {
                 params![id, cost],
             )?;
         }
+        rebuild_rollup(&tx)?;
         tx.commit()?;
+        if n > 0 {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(n)
     }
 
@@ -3235,6 +3456,117 @@ mod tests {
         assert!(store.merge_projects(&[sub, repo_s], "/elsewhere").is_err());
     }
 
+    /// The stored rollup against one laid out afresh from the events.
+    fn assert_rollup_exact(store: &Store) {
+        use rusqlite::types::Value;
+        let conn = store.read_conn();
+        let read = |sql: &str| -> Vec<Vec<Value>> {
+            let mut st = conn.prepare(sql).unwrap();
+            let n = st.column_count();
+            st.query_map([], |r| (0..n).map(|i| r.get::<_, Value>(i)).collect::<Result<Vec<_>, _>>())
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let stored = read("SELECT * FROM usage_rollup ORDER BY bucket");
+        let fresh = read(&format!(
+            "SELECT {key}, u.ts / 3600000, u.source, u.model, u.project, u.session_id, u.estimated,
+                    u.is_subagent, u.cost_usd IS NOT NULL, COUNT(*), SUM(u.input_tokens), SUM(u.output_tokens),
+                    SUM(u.cache_read_tokens), SUM(u.cache_write_tokens), SUM(COALESCE(u.reasoning_tokens, 0)),
+                    TOTAL(u.cost_usd), MIN(u.ts), MAX(u.ts)
+             FROM usage_event u WHERE u.ts >= 0
+             GROUP BY u.ts / 3600000, u.source, u.model, u.project, u.session_id, u.estimated, u.is_subagent,
+                      u.cost_usd IS NOT NULL
+             ORDER BY 1",
+            key = rollup_key("u")
+        ));
+        assert_eq!(stored.len(), fresh.len(), "buckets: {stored:?} vs {fresh:?}");
+        for (s, f) in stored.iter().zip(&fresh) {
+            for (a, b) in s.iter().zip(f) {
+                match (a, b) {
+                    (Value::Real(a), Value::Real(b)) => assert!((a - b).abs() < 1e-9, "{s:?} vs {f:?}"),
+                    _ => assert_eq!(a, b, "{s:?} vs {f:?}"),
+                }
+            }
+        }
+    }
 
+    /// The triggers keep `usage_rollup` exact through every way an event can
+    /// change — new rows, a late count, a cost appearing or going, a move to
+    /// another hour, model, project or bucket, a delete — and through a reprice;
+    /// a rollup that drifted or belongs to another layout is laid out again.
+    #[test]
+    fn rollup_follows_every_write() {
+        let store = test_store();
+        let hour = 3_600_000;
+        let h0 = 1_700_000_000_000 / hour * hour;
+        let at = |id: &str, ts: i64, session: Option<&str>, model: Option<&str>| UsageEvent {
+            ts,
+            session_id: session.map(String::from),
+            model: model.map(String::from),
+            ..ev(id, Some("/p"))
+        };
+        store
+            .insert_events(&[
+                at("a", h0 + 10, Some("s1"), Some("gpt-5")),
+                at("b", h0 + 20, Some("s1"), Some("gpt-5")),
+                at("c", h0 + hour - 1, Some("s1"), Some("gpt-5")),
+                at("d", h0 + hour, Some("s1"), Some("gpt-5")),
+                at("e", h0 + 30, None, None),
+                // Before 1970: left to `usage_event`, never in hour 0.
+                at("f", -5, Some("s1"), Some("gpt-5")),
+            ])
+            .unwrap();
+        assert_rollup_exact(&store);
+        let buckets = |store: &Store| -> i64 {
+            store.read_conn().query_row("SELECT COUNT(*) FROM usage_rollup", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(buckets(&store), 3);
+
+        // A late-finalized count through ingest: the recount trigger.
+        let mut grown = at("b", h0 + 20, Some("s1"), Some("gpt-5"));
+        grown.output_tokens = 500;
+        assert_eq!(store.insert_events(&[grown]).unwrap(), 1);
+        assert_rollup_exact(&store);
+
+        for sql in [
+            // The bucket's first event leaves it: its span is read again.
+            "UPDATE usage_event SET ts = ts + 7200000 WHERE source_event_id = 'a'",
+            // And its last one goes.
+            "DELETE FROM usage_event WHERE source_event_id = 'c'",
+            "UPDATE usage_event SET model = 'gpt-5-mini' WHERE source_event_id = 'b'",
+            "UPDATE usage_event SET project = NULL WHERE source_event_id = 'd'",
+            "UPDATE usage_event SET cost_usd = 0.25 WHERE source_event_id IN ('d', 'e')",
+            "UPDATE usage_event SET cost_usd = NULL WHERE source_event_id = 'e'",
+            "UPDATE usage_event SET input_tokens = input_tokens + 3, cost_usd = 0.5 WHERE source_event_id = 'd'",
+            "UPDATE usage_event SET reasoning_tokens = 40 WHERE source_event_id = 'd'",
+            "UPDATE usage_event SET reasoning_tokens = NULL, output_tokens = 9 WHERE source_event_id = 'd'",
+            "UPDATE usage_event SET is_subagent = 1 WHERE source_event_id = 'b'",
+            // Into the rollup from before 1970 and back out.
+            "UPDATE usage_event SET ts = 5 WHERE source_event_id = 'f'",
+            "UPDATE usage_event SET ts = -5 WHERE source_event_id = 'f'",
+            "UPDATE usage_event SET estimated = 1 WHERE source_event_id = 'e'",
+            "DELETE FROM usage_event WHERE source_event_id = 'e'",
+        ] {
+            store.read_conn().execute(sql, []).unwrap();
+            assert_rollup_exact(&store);
+        }
+
+        // A reprice lays the table out again and leaves the triggers working.
+        store.reprice_all().unwrap();
+        assert_rollup_exact(&store);
+        store.insert_events(&[at("g", h0 + 5 * hour, Some("s2"), Some("gpt-5"))]).unwrap();
+        assert_rollup_exact(&store);
+
+        // Drift is caught on open; so is a rollup of another layout.
+        store.writer().execute("UPDATE usage_rollup SET n = n + 1", []).unwrap();
+        ensure_rollup(&store.writer()).unwrap();
+        assert_rollup_exact(&store);
+        drop_rollup_triggers(&store.writer()).unwrap();
+        store.writer().execute("DELETE FROM usage_rollup", []).unwrap();
+        ensure_rollup(&store.writer()).unwrap();
+        assert_rollup_exact(&store);
+        store.insert_events(&[at("h", h0 + 6 * hour, Some("s2"), Some("gpt-5"))]).unwrap();
+        assert_rollup_exact(&store);
+    }
 }
-

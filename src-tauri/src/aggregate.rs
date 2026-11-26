@@ -401,6 +401,24 @@ const MODEL_IS_2: &str = "COALESCE(a.canonical, u.model, 'unknown') = ?2
     AND (u.model IN (SELECT ?2 UNION SELECT alias FROM model_alias WHERE canonical = ?2)
          OR u.model IS NULL)";
 
+/// `MODEL_IS_1`'s exact test alone, for queries over `usage_rows_where(..,
+/// &model_rows(1))`, which does the narrowing inside.
+const SHOWS_AS_1: &str = "COALESCE(a.canonical, u.model, 'unknown') = ?1";
+/// `SHOWS_AS_1` for queries that bind the model as `?2`.
+const SHOWS_AS_2: &str = "COALESCE(a.canonical, u.model, 'unknown') = ?2";
+
+/// `MODEL_IS_n`'s narrowing as a `usage_rows_where` predicate over the row
+/// alias it is given: rows whose raw name is model `?param` or an alias with a
+/// segment shown as it, plus NULL models (shown as 'unknown').
+fn model_rows(param: u8) -> impl Fn(&str) -> String {
+    move |row| {
+        format!(
+            "({row}.model IN (SELECT ?{param} UNION SELECT alias FROM model_alias WHERE canonical = ?{param})
+              OR {row}.model IS NULL)"
+        )
+    }
+}
+
 /// The project a row counts under: its folder resolved through `project_alias`
 /// (folded to its project root at ingest, or folded/kept separate by hand), with
 /// NULL landing in the shared 'unknown' bucket. Every query using this needs
@@ -413,8 +431,102 @@ const PROJECT: &str = "COALESCE(pj.canonical, u.project, 'unknown')";
 /// the folders aliased to it, so SQLite walks `idx_usage_project` instead of
 /// every event. Only a narrowing: the exact `PROJECT = ?n` test stays beside it.
 /// NULL projects show as 'unknown', so they can never match a named project.
-fn project_rows(param: u8) -> String {
-    format!("u.project IN (SELECT ?{param} UNION SELECT alias FROM project_alias WHERE canonical = ?{param})")
+/// `row` is the alias of the table it filters (`u` or a `usage_rows_where` row).
+fn project_rows(row: &str, param: u8) -> String {
+    format!("{row}.project IN (SELECT ?{param} UNION SELECT alias FROM project_alias WHERE canonical = ?{param})")
+}
+
+/// Columns of a `usage_rows` row: an event's own, plus `n` (events it stands
+/// for) and `min_ts`/`max_ts` (its first and last). A bucket's `ts` is its
+/// first event's, which sits in the same UTC hour, day and alias segment as
+/// every other event in it — all that `date()`, `strftime('%H')`, the alias
+/// join and `NOT_HIDDEN` ever ask of `ts`.
+///
+/// Every event in a bucket is priced or none is, so its `cost_usd` is NULL
+/// exactly when `SUM` over its events would be, and `cost_usd IS NOT NULL`
+/// still tells priced rows apart. `reasoning_tokens` is a bucket's sum (0 when
+/// none reported, which every query already reads through `COALESCE`).
+const ROLLUP_COLS: &str = "r.source, r.model, r.project, r.session_id, r.estimated, r.is_subagent,
+    r.min_ts AS ts, r.n, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
+    r.reasoning_tokens, CASE WHEN r.priced = 1 THEN r.cost_sum END AS cost_usd, r.min_ts, r.max_ts";
+const EVENT_COLS: &str = "e.source, e.model, e.project, e.session_id, e.estimated, e.is_subagent,
+    e.ts, 1 AS n, e.input_tokens, e.output_tokens, e.cache_read_tokens, e.cache_write_tokens,
+    e.reasoning_tokens, e.cost_usd, e.ts AS min_ts, e.ts AS max_ts";
+
+/// A bucket whose events fall on both sides of one of its model's alias
+/// cutovers (a segment starting or ending after its first event and no later
+/// than its last), so they do not all show as one display name. Almost always
+/// none: the `IN` list is the aliases that have any cutover at all.
+const STRADDLES: &str = "r.model IS NOT NULL
+    AND r.model IN (SELECT alias FROM model_alias WHERE from_ts > 0 OR until_ts < 9223372036854775807)
+    AND EXISTS (
+        SELECT 1 FROM model_alias x WHERE x.alias = r.model
+          AND ((x.from_ts > r.min_ts AND x.from_ts <= r.max_ts)
+            OR (x.until_ts > r.min_ts AND x.until_ts <= r.max_ts)))";
+
+/// What an aggregate over many events reads in place of `usage_event`: the
+/// hourly `usage_rollup` (`store.rs`), which is about one row per busy
+/// session-hour instead of one per call, with exact results. Use it as
+/// `FROM {usage_rows(..)} u` and write the query as over events, except that
+/// a row stands for `u.n` of them: `COUNT(*)` is `SUM(u.n)`, `MIN(ts)` is
+/// `MIN(u.min_ts)`, `MAX(ts)` is `MAX(u.max_ts)`, and a per-event count of a
+/// column is `SUM(col * u.n)`. Sums of the token and cost columns, distinct
+/// sessions, sources, days and hours all read as they did.
+///
+/// `since` is the SQL for the window's start (a bound parameter, `"?1"`) and
+/// replaces the query's own `u.ts >= ?1`; `None` is all time. The window's
+/// first, partial hour comes from `usage_event` (one `idx_usage_ts` range), as
+/// do the events of a bucket that straddles an alias cutover and anything
+/// before 1970, which the rollup leaves out.
+///
+/// Only for queries that need no other column: anything about purpose, mode,
+/// outcome, timing, provider or one event at a time stays on `usage_event`.
+fn usage_rows(since: Option<&str>) -> String {
+    usage_rows_where(since, &|_| "1".to_string())
+}
+
+/// `usage_rows` for a query about one model, family or project: `narrow` is a
+/// predicate over a row's own columns, given the alias to write it against,
+/// and is applied inside every branch so each reads only the rows that can
+/// match (`model_rows`, `family_rows`, `project_rows`). Like `MODEL_IS_n`'s
+/// `IN`, it only narrows; the exact display-name test stays in the outer query.
+fn usage_rows_where(since: Option<&str>, narrow: &dyn Fn(&str) -> String) -> String {
+    let (r, e) = (narrow("r"), narrow("e"));
+    let (hours, events) = match since {
+        Some(c) => {
+            // The first whole hour at or after the window start; before 1970
+            // the rollup holds nothing, so from there on it is all events.
+            let edge = format!("(CASE WHEN {c} < 0 THEN 0 ELSE ({c} / 3600000 + 1) * 3600000 END)");
+            (format!("r.hour >= {edge} / 3600000"), format!("e.ts >= {c} AND e.ts < {edge}"))
+        }
+        None => ("1".to_string(), "e.ts < 0".to_string()),
+    };
+    format!(
+        "(SELECT {ROLLUP_COLS} FROM usage_rollup r WHERE {hours} AND {r} AND NOT ({STRADDLES})
+          UNION ALL
+          SELECT {EVENT_COLS} FROM usage_event e WHERE {events} AND {e}
+          UNION ALL
+          SELECT {EVENT_COLS} FROM usage_rollup r JOIN usage_event e
+            ON e.model = r.model AND e.ts >= r.hour * 3600000 AND e.ts < (r.hour + 1) * 3600000
+           AND e.source = r.source AND e.project IS r.project AND e.session_id IS r.session_id
+           AND e.estimated = r.estimated AND e.is_subagent = r.is_subagent
+           AND (e.cost_usd IS NOT NULL) = r.priced
+          WHERE {hours} AND {r} AND {STRADDLES})"
+    )
+}
+
+/// Every visible token since `since`: the denominator of a detail page's share.
+fn window_tokens(conn: &rusqlite::Connection, since: i64) -> DbResult<i64> {
+    conn.query_row(
+        &format!(
+            "SELECT COALESCE(SUM({T}),0) FROM {R} u WHERE {H}",
+            T = TOKENS,
+            H = NOT_HIDDEN,
+            R = usage_rows(Some("?1"))
+        ),
+        [since],
+        |r| r.get(0),
+    )
 }
 
 fn now_ms() -> i64 {
@@ -887,13 +999,14 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
     // One pass: the grand totals are the per-source rows added up (SUM skips
     // NULL costs, so the total is NULL only when every source's is).
     let source_sql = format!(
-        "SELECT source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT session_id), SUM(cost_usd),
+        "SELECT source, COALESCE(SUM({T}),0), SUM(u.n), COUNT(DISTINCT session_id), SUM(cost_usd),
                 COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
                 COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0),
-                MIN(ts), MAX(ts)
-         FROM usage_event u WHERE {H} GROUP BY source ORDER BY 2 DESC",
+                MIN(u.min_ts), MAX(u.max_ts)
+         FROM {R} u WHERE {H} GROUP BY source ORDER BY 2 DESC",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(None)
     );
     let mut stmt = conn.prepare(&source_sql)?;
     let by_source = stmt
@@ -961,8 +1074,9 @@ pub fn overview(store: &Store) -> DbResult<Overview> {
 pub fn active_days_for_range(store: &Store, days: i64) -> DbResult<i64> {
     let sql = format!(
         "SELECT COUNT(DISTINCT date(ts/1000, 'unixepoch'))
-         FROM usage_event u WHERE u.ts >= ?1 AND {H}",
-        H = NOT_HIDDEN
+         FROM {R} u WHERE {H}",
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     );
     store.read_conn().query_row(&sql, [cutoff(days)], |r| r.get(0))
 }
@@ -970,9 +1084,10 @@ pub fn active_days_for_range(store: &Store, days: i64) -> DbResult<i64> {
 pub fn daily(store: &Store, days: i64) -> DbResult<Vec<DailyRow>> {
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, source, COALESCE(SUM({T}),0), SUM(cost_usd)
-         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY d, source ORDER BY d",
+         FROM {R} u WHERE {H} GROUP BY d, source ORDER BY d",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -988,10 +1103,11 @@ pub fn daily_by_model(store: &Store, days: i64) -> DbResult<Vec<DailyModelRow>> 
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(SUM({T}),0)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {H} GROUP BY 1, 2 ORDER BY d",
+         FROM {R} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {H} GROUP BY 1, 2 ORDER BY d",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -1009,8 +1125,9 @@ pub fn daily_cache(store: &Store, days: i64) -> DbResult<Vec<DailyCacheRow>> {
         "SELECT date(ts/1000,'unixepoch') AS d,
                 COALESCE(SUM(input_tokens),0), COALESCE(SUM(cache_write_tokens),0),
                 COALESCE(SUM(cache_read_tokens),0)
-         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY d ORDER BY d",
-        H = NOT_HIDDEN
+         FROM {R} u WHERE {H} GROUP BY d ORDER BY d",
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     ))?;
     let rows: Vec<DailyCacheRow> = stmt
         .query_map([cutoff(days)], |r| {
@@ -1022,12 +1139,13 @@ pub fn daily_cache(store: &Store, days: i64) -> DbResult<Vec<DailyCacheRow>> {
 
 pub fn by_model(store: &Store, days: i64) -> DbResult<Vec<ModelRow>> {
     let sql = format!(
-        "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*),
-                SUM(cost_usd), MAX(ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 2 DESC",
+        "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), SUM(u.n),
+                SUM(cost_usd), MAX(u.max_ts)
+         FROM {R} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {H} GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -1044,13 +1162,14 @@ pub fn model_stats(store: &Store, days: i64) -> DbResult<Vec<ModelStatsRow>> {
         "SELECT COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
-                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
-                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source),
+                COALESCE(SUM({T}),0), SUM(u.n), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.min_ts), MAX(u.max_ts), GROUP_CONCAT(DISTINCT u.source),
                 COUNT(DISTINCT date(u.ts/1000, 'unixepoch'))
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 6 DESC",
+         FROM {R} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {H} GROUP BY 1 ORDER BY 6 DESC",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -1099,6 +1218,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
     };
 
     let cutoff_ts = cutoff(days);
+    let rows = usage_rows_where(Some("?1"), &model_rows(2));
 
     let sql = format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown'),
@@ -1106,10 +1226,10 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
                 COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
                 COALESCE(SUM(u.reasoning_tokens),0),
-                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
-                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+                COALESCE(SUM({T}),0), SUM(u.n), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.min_ts), MAX(u.max_ts)
+         FROM {rows} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {SHOWS_AS_2} AND {H}
          GROUP BY 1",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -1142,9 +1262,9 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
 
     // by source
     let sql_src = format!(
-        "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+        "SELECT u.source, COALESCE(SUM({T}),0), SUM(u.n), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
+         FROM {rows} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {SHOWS_AS_2} AND {H}
          GROUP BY u.source ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -1164,12 +1284,12 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
 
     // by project
     let sql_proj = format!(
-        "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
-                COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
-         FROM usage_event u
+        "SELECT {P}, COALESCE(SUM({T}),0), SUM(u.n),
+                COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.min_ts), MAX(u.max_ts)
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+         WHERE {SHOWS_AS_2} AND {H}
          GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN,
@@ -1193,8 +1313,8 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
     // daily series → active days, streaks, peak day
     let sql_daily = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+         FROM {rows} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {SHOWS_AS_2} AND {H}
          GROUP BY d ORDER BY d",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -1211,13 +1331,7 @@ pub fn model_detail(store: &Store, model: &str, days: i64) -> DbResult<Option<Mo
     let (current_streak, longest_streak) = streaks(&dates);
     let peak = daily.iter().max_by_key(|d| d.tokens);
 
-    let total_sql = format!(
-        "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ?1 AND {H}",
-        T = TOKENS,
-        H = NOT_HIDDEN
-    );
-    let mut total_stmt = conn.prepare(&total_sql)?;
-    let total_window_tokens: i64 = total_stmt.query_row([cutoff_ts], |r| r.get(0))?;
+    let total_window_tokens = window_tokens(&conn, cutoff_ts)?;
 
     Ok(Some(ModelDetail {
         model: name,
@@ -1328,24 +1442,25 @@ fn comparison_side(
     model: &str,
     cutoff_ts: i64,
 ) -> DbResult<(CompareModel, Vec<HeatmapCell>)> {
+    let rows = usage_rows_where(Some("?1"), &model_rows(2));
     let totals_sql = format!(
         "SELECT COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
                 COALESCE(SUM(CASE WHEN u.source = 'antigravity'
                                   THEN u.output_tokens + COALESCE(u.reasoning_tokens,0)
                                   ELSE u.output_tokens END),0),
-                COALESCE(SUM(u.reasoning_tokens),0), COALESCE(SUM({T}),0), COUNT(*),
+                COALESCE(SUM(u.reasoning_tokens),0), COALESCE(SUM({T}),0), COALESCE(SUM(u.n),0),
                 COUNT(DISTINCT u.source || char(31) || u.session_id),
                 COALESCE(SUM(CASE WHEN u.is_subagent = 1 THEN {T} ELSE 0 END),0),
-                MIN(u.ts), MAX(u.ts),
+                MIN(u.min_ts), MAX(u.max_ts),
                 COALESCE(SUM(CASE WHEN u.estimated = 0 THEN {T} ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN u.estimated = 1 THEN {T} ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN {T} ELSE 0 END),0),
-                COALESCE(SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN u.n ELSE 0 END),0),
                 SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN u.cost_usd END)
-         FROM usage_event u
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}",
+         WHERE {SHOWS_AS_2} AND {H}",
         T = TOKENS,
         H = NOT_HIDDEN
     );
@@ -1379,12 +1494,12 @@ fn comparison_side(
     })?;
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*),
+        "SELECT u.source, COALESCE(SUM({T}),0), SUM(u.n),
                 COUNT(DISTINCT u.session_id),
                 SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN u.cost_usd END)
-         FROM usage_event u
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+         WHERE {SHOWS_AS_2} AND {H}
          GROUP BY u.source ORDER BY 2 DESC, 1",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -1402,14 +1517,14 @@ fn comparison_side(
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
+        "SELECT {P}, COALESCE(SUM({T}),0), SUM(u.n),
                 COUNT(DISTINCT u.source || char(31) || u.session_id),
                 SUM(CASE WHEN u.estimated = 0 AND u.cost_usd IS NOT NULL THEN u.cost_usd END),
-                MIN(u.ts), MAX(u.ts)
-         FROM usage_event u
+                MIN(u.min_ts), MAX(u.max_ts)
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+         WHERE {SHOWS_AS_2} AND {H}
          GROUP BY 1 ORDER BY 2 DESC, 1",
         P = PROJECT,
         T = TOKENS,
@@ -1432,9 +1547,9 @@ fn comparison_side(
     let daily: Vec<HeatmapCell> = {
         let mut stmt = conn.prepare(&format!(
             "SELECT date(u.ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-             FROM usage_event u
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-             WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+             WHERE {SHOWS_AS_2} AND {H}
              GROUP BY d ORDER BY d",
             T = TOKENS,
             H = NOT_HIDDEN
@@ -1460,9 +1575,9 @@ fn comparison_side(
     let sparse_hours: Vec<HourRow> = {
         let mut stmt = conn.prepare(&format!(
             "SELECT CAST(strftime('%H', u.ts/1000, 'unixepoch') AS INTEGER), COALESCE(SUM({T}),0)
-             FROM usage_event u
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-             WHERE u.ts >= ?1 AND {MODEL_IS_2} AND {H}
+             WHERE {SHOWS_AS_2} AND {H}
              GROUP BY 1 ORDER BY 1",
             T = TOKENS,
             H = NOT_HIDDEN
@@ -1561,14 +1676,14 @@ pub fn model_comparison(
     let known: HashSet<String> = {
         let mut stmt = conn.prepare(&format!(
             "SELECT DISTINCT COALESCE(a.canonical, u.model, 'unknown')
-             FROM usage_event u
+             FROM {R} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-             WHERE COALESCE(a.canonical, u.model, 'unknown') IN (?1, ?2)
-               AND (u.model IN (SELECT ?1 UNION SELECT ?2
-                                UNION SELECT alias FROM model_alias WHERE canonical IN (?1, ?2))
-                    OR u.model IS NULL)
-               AND {H}",
-            H = NOT_HIDDEN
+             WHERE COALESCE(a.canonical, u.model, 'unknown') IN (?1, ?2) AND {H}",
+            H = NOT_HIDDEN,
+            R = usage_rows_where(None, &|row| {
+                let (one, two) = (model_rows(1)(row), model_rows(2)(row));
+                format!("({one} OR {two})")
+            })
         ))?;
         let rows = stmt.query_map(rusqlite::params![model_a, model_b], |r| r.get(0))?
             .collect::<Result<HashSet<_>, _>>()?;
@@ -1598,15 +1713,7 @@ pub fn model_comparison(
         })
         .collect();
     let rivalry = comparison_rivalry(&daily);
-    let total_window_tokens = conn.query_row(
-        &format!(
-            "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ?1 AND {H}",
-            T = TOKENS,
-            H = NOT_HIDDEN
-        ),
-        [cutoff_ts],
-        |r| r.get(0),
-    )?;
+    let total_window_tokens = window_tokens(&conn, cutoff_ts)?;
 
     let rate_a = blended_rate(a.priced_tokens, a.priced_cost_usd);
     let rate_b = blended_rate(b.priced_tokens, b.priced_cost_usd);
@@ -1666,6 +1773,116 @@ fn format_tokens(n: i64) -> String {
     }
 }
 
+/// Token Milestones and Big Spender tiers for the rows `shows_as` picks out
+/// (`narrow` is its `usage_rows_where` narrowing; `params` bind both), each
+/// stamped with the call that crossed it — what a walk over every event in
+/// time order would find, without walking every event. Hourly running totals
+/// come from the rollup; only an hour in which a tier is crossed is read event
+/// by event, in order, to find the crossing call. Tokens and costs never go
+/// down, so a tier crossed inside an hour is crossed by that hour's total too.
+fn milestone_achievements(
+    conn: &rusqlite::Connection,
+    shows_as: &str,
+    narrow: &dyn Fn(&str) -> String,
+    params: &[rusqlite::types::Value],
+) -> DbResult<Vec<Achievement>> {
+    const TOKEN_TIERS: [(i64, &str, &str, &str); 3] = [
+        (100_000_000, "100m", "100M Tokens", "100M tokens"),
+        (500_000_000, "500m", "500M Tokens", "500M tokens"),
+        (1_000_000_000, "1b", "1B Tokens", "1B tokens"),
+    ];
+    const COST_TIERS: [(f64, &str, &str, &str); 3] = [
+        (100.0, "100", "$100 Spent", "$100 spent"),
+        (500.0, "500", "$500 Spent", "$500 spent"),
+        (1000.0, "1k", "$1K Spent", "$1,000 spent"),
+    ];
+    use rusqlite::types::Value;
+
+    // `ts / 3600000` truncates, like the rollup's hour, and orders the same way
+    // `ts` does — including the odd row before 1970, which reads as events.
+    let hours: Vec<(i64, i64, f64)> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT u.ts / 3600000 AS h, COALESCE(SUM({T}),0), TOTAL(u.cost_usd)
+             FROM {R} u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             WHERE {shows_as} AND {H}
+             GROUP BY h ORDER BY h",
+            T = TOKENS,
+            H = NOT_HIDDEN,
+            R = usage_rows_where(None, narrow)
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let k = params.len();
+    let mut hour_events = conn.prepare(&format!(
+        "SELECT u.ts, {T}, COALESCE(u.cost_usd, 0.0)
+         FROM usage_event u
+         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE u.ts > ?{lo} AND u.ts < ?{hi} AND u.ts / 3600000 = ?{h}
+           AND {shows_as} AND {N} AND {H}
+         ORDER BY u.ts ASC",
+        T = TOKENS,
+        H = NOT_HIDDEN,
+        N = narrow("u"),
+        lo = k + 1,
+        hi = k + 2,
+        h = k + 3
+    ))?;
+
+    let (mut tokens, mut cost) = (0i64, 0.0f64);
+    let (mut next_token, mut next_cost) = (0, 0);
+    let (mut earned_tokens, mut earned_cost) = (Vec::new(), Vec::new());
+    for (h, hour_tokens, hour_cost) in hours {
+        if next_token >= TOKEN_TIERS.len() && next_cost >= COST_TIERS.len() {
+            break;
+        }
+        let crosses = TOKEN_TIERS.get(next_token).is_some_and(|t| tokens + hour_tokens >= t.0)
+            || COST_TIERS.get(next_cost).is_some_and(|t| cost + hour_cost >= t.0);
+        if !crosses {
+            tokens += hour_tokens;
+            cost += hour_cost;
+            continue;
+        }
+        let mut bind = params.to_vec();
+        bind.extend([
+            Value::Integer((h - 1) * 3_600_000),
+            Value::Integer((h + 1) * 3_600_000),
+            Value::Integer(h),
+        ]);
+        let mut rows = hour_events.query(rusqlite::params_from_iter(bind.iter()))?;
+        while let Some(row) = rows.next()? {
+            let ts: i64 = row.get(0)?;
+            tokens += row.get::<_, i64>(1)?;
+            cost += row.get::<_, f64>(2)?;
+            while let Some(&(_, tier, title, value)) = TOKEN_TIERS.get(next_token).filter(|t| tokens >= t.0) {
+                earned_tokens.push(Achievement {
+                    kind: "token_milestone".to_string(),
+                    tier: Some(tier.to_string()),
+                    title: title.to_string(),
+                    value: value.to_string(),
+                    earned_ts: Some(ts),
+                });
+                next_token += 1;
+            }
+            while let Some(&(_, tier, title, value)) = COST_TIERS.get(next_cost).filter(|t| cost >= t.0) {
+                earned_cost.push(Achievement {
+                    kind: "big_spender".to_string(),
+                    tier: Some(tier.to_string()),
+                    title: title.to_string(),
+                    value: value.to_string(),
+                    earned_ts: Some(ts),
+                });
+                next_cost += 1;
+            }
+        }
+    }
+    earned_tokens.extend(earned_cost);
+    Ok(earned_tokens)
+}
+
 pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievement>> {
     let exists_sql = format!(
         "SELECT COALESCE(a.canonical, u.model, 'unknown')
@@ -1685,12 +1902,13 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
     };
 
     let mut achievements = Vec::new();
+    let rows = usage_rows_where(None, &model_rows(1));
 
     // 1. Daily usage for Peak Day and Longest Streak
     let sql_daily = format!(
-        "SELECT date(ts/1000, 'unixepoch') AS d, COALESCE(SUM({T}), 0), MIN(ts)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE {MODEL_IS_1} AND {H}
+        "SELECT date(ts/1000, 'unixepoch') AS d, COALESCE(SUM({T}), 0), MIN(u.min_ts)
+         FROM {rows} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {SHOWS_AS_1} AND {H}
          GROUP BY d ORDER BY d",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -1752,9 +1970,9 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
 
     // 2. Multi-Harness
     let sql_sources = format!(
-        "SELECT u.source, MIN(u.ts) as first_ts
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE {MODEL_IS_1} AND {H}
+        "SELECT u.source, MIN(u.min_ts) as first_ts
+         FROM {rows} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+         WHERE {SHOWS_AS_1} AND {H}
          GROUP BY u.source
          ORDER BY first_ts ASC",
         H = NOT_HIDDEN
@@ -1802,84 +2020,21 @@ pub fn model_achievements(store: &Store, model: &str) -> DbResult<Vec<Achievemen
         }
     }
 
-    // 4. Token Milestones & Big Spender (scanned in chronological order)
-    let sql_events = format!(
-        "SELECT u.ts, {T}, COALESCE(u.cost_usd, 0.0)
-         FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE {MODEL_IS_1} AND {H}
-         ORDER BY u.ts ASC",
-        T = TOKENS,
-        H = NOT_HIDDEN
-    );
-    let mut stmt_events = conn.prepare(&sql_events)?;
-    let mut event_rows = stmt_events.query(rusqlite::params![&canonical_name])?;
-
-    let token_tiers: &[(i64, &str, &str, &str)] = &[
-        (100_000_000, "100m", "100M Tokens", "100M tokens"),
-        (500_000_000, "500m", "500M Tokens", "500M tokens"),
-        (1_000_000_000, "1b", "1B Tokens", "1B tokens"),
-    ];
-    let mut next_token_tier = 0;
-    let mut earned_token_milestones = Vec::new();
-
-    let cost_tiers: &[(f64, &str, &str, &str)] = &[
-        (100.0, "100", "$100 Spent", "$100 spent"),
-        (500.0, "500", "$500 Spent", "$500 spent"),
-        (1000.0, "1k", "$1K Spent", "$1,000 spent"),
-    ];
-    let mut next_cost_tier = 0;
-    let mut earned_cost_milestones = Vec::new();
-
-    let mut running_tokens: i64 = 0;
-    let mut running_cost: f64 = 0.0;
-
-    while let Some(row) = event_rows.next()? {
-        let ts: i64 = row.get(0)?;
-        let tokens: i64 = row.get(1)?;
-        let cost: f64 = row.get(2)?;
-
-        running_tokens += tokens;
-        running_cost += cost;
-
-        while next_token_tier < token_tiers.len() && running_tokens >= token_tiers[next_token_tier].0 {
-            let (_, tier, title, val) = token_tiers[next_token_tier];
-            earned_token_milestones.push(Achievement {
-                kind: "token_milestone".to_string(),
-                tier: Some(tier.to_string()),
-                title: title.to_string(),
-                value: val.to_string(),
-                earned_ts: Some(ts),
-            });
-            next_token_tier += 1;
-        }
-
-        while next_cost_tier < cost_tiers.len() && running_cost >= cost_tiers[next_cost_tier].0 {
-            let (_, tier, title, val) = cost_tiers[next_cost_tier];
-            earned_cost_milestones.push(Achievement {
-                kind: "big_spender".to_string(),
-                tier: Some(tier.to_string()),
-                title: title.to_string(),
-                value: val.to_string(),
-                earned_ts: Some(ts),
-            });
-            next_cost_tier += 1;
-        }
-
-        if next_token_tier >= token_tiers.len() && next_cost_tier >= cost_tiers.len() {
-            break;
-        }
-    }
-
-    achievements.extend(earned_token_milestones);
-    achievements.extend(earned_cost_milestones);
+    // 4. Token Milestones & Big Spender
+    achievements.extend(milestone_achievements(
+        &conn,
+        SHOWS_AS_1,
+        &model_rows(1),
+        &[rusqlite::types::Value::Text(canonical_name.clone())],
+    )?);
 
     // 5. First Project & Project Explorer
     let sql_projects = format!(
-        "SELECT {P} as p, MIN(u.ts) as first_ts
-         FROM usage_event u
+        "SELECT {P} as p, MIN(u.min_ts) as first_ts
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE {MODEL_IS_1} AND {H}
+         WHERE {SHOWS_AS_1} AND {H}
            AND u.project IS NOT NULL AND u.project != '' AND u.project != 'unknown'
            AND {P} != 'unknown'
          GROUP BY p
@@ -2025,21 +2180,29 @@ fn family_raw_names(conn: &rusqlite::Connection, names: &[String]) -> DbResult<V
     Ok(raw.into_iter().collect())
 }
 
-/// "This row displays as a family member": one `?` per member name, then one
-/// per raw name from `family_raw_names`. Needs the `a` alias join. As with
-/// `MODEL_IS_1`, the `COALESCE … IN` is the exact test and the raw-name `IN`
-/// (plus NULL models, which show as 'unknown') only lets SQLite walk
-/// `idx_usage_model` instead of every event.
-fn family_name_filter(names: &[String], raw: &[String]) -> String {
-    let holes = vec!["?"; names.len()].join(",");
-    let raw_holes = vec!["?"; raw.len()].join(",");
-    format!(
-        "COALESCE(a.canonical, u.model, 'unknown') IN ({holes})
-         AND (u.model IN ({raw_holes}) OR u.model IS NULL)"
-    )
+/// `?first, ?first+1, …`: `n` numbered holes. Numbered rather than bare `?`,
+/// which bind by position in the text and so cannot appear twice.
+fn holes(first: usize, n: usize) -> String {
+    (first..first + n).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",")
 }
 
-/// Values for `family_name_filter`'s holes, in the same order.
+/// "This row displays as a family member", for the member names bound from
+/// `?first` on (`family_name_params`' order). Needs the `a` alias join. The
+/// exact test; `family_rows` is its narrowing.
+fn family_shows_as(names: &[String], first: usize) -> String {
+    format!("COALESCE(a.canonical, u.model, 'unknown') IN ({})", holes(first, names.len()))
+}
+
+/// The `usage_rows_where` narrowing for `family_shows_as`: rows whose raw name
+/// is one of `family_raw_names` (bound right after the member names), plus
+/// NULL models, which show as 'unknown'. As with `MODEL_IS_1`, it only lets
+/// SQLite skip rows that cannot match.
+fn family_rows(names: &[String], raw: &[String], first: usize) -> impl Fn(&str) -> String {
+    let raw_holes = holes(first + names.len(), raw.len());
+    move |row| format!("({row}.model IN ({raw_holes}) OR {row}.model IS NULL)")
+}
+
+/// Values for the family holes: member names, then raw names.
 fn family_name_params(names: &[String], raw: &[String]) -> Vec<rusqlite::types::Value> {
     names
         .iter()
@@ -2065,7 +2228,9 @@ pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<
 
     let cutoff_ts = cutoff(days);
     let raw = family_raw_names(&conn, &names)?;
-    let filter = family_name_filter(&names, &raw);
+    // ?1 is the window start; the names follow it.
+    let filter = family_shows_as(&names, 2);
+    let rows = usage_rows_where(Some("?1"), &family_rows(&names, &raw, 2));
     let mut params = vec![rusqlite::types::Value::Integer(cutoff_ts)];
     params.extend(family_name_params(&names, &raw));
 
@@ -2074,11 +2239,11 @@ pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<
                 COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
                 COALESCE(SUM(u.reasoning_tokens),0),
-                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
-                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
-         FROM usage_event u
+                COALESCE(SUM({T}),0), COALESCE(SUM(u.n),0), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.min_ts), MAX(u.max_ts)
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ? AND {F} AND {H}",
+         WHERE {F} AND {H}",
         T = TOKENS,
         F = filter,
         H = NOT_HIDDEN
@@ -2106,12 +2271,12 @@ pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<
         "SELECT COALESCE(a.canonical, u.model, 'unknown'),
                 COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
-                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
-                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts), GROUP_CONCAT(DISTINCT u.source),
+                COALESCE(SUM({T}),0), SUM(u.n), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.min_ts), MAX(u.max_ts), GROUP_CONCAT(DISTINCT u.source),
                 COUNT(DISTINCT date(u.ts/1000, 'unixepoch'))
-         FROM usage_event u
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ? AND {F} AND {H}
+         WHERE {F} AND {H}
          GROUP BY 1 ORDER BY 6 DESC",
         T = TOKENS,
         F = filter,
@@ -2144,10 +2309,10 @@ pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<
 
     let by_source = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
-             FROM usage_event u
+            "SELECT u.source, COALESCE(SUM({T}),0), SUM(u.n), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-             WHERE u.ts >= ? AND {F} AND {H}
+             WHERE {F} AND {H}
              GROUP BY u.source ORDER BY 2 DESC",
             T = TOKENS,
             F = filter,
@@ -2169,12 +2334,12 @@ pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<
 
     let by_project = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
-                    COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
-             FROM usage_event u
+            "SELECT {P}, COALESCE(SUM({T}),0), SUM(u.n),
+                    COUNT(DISTINCT u.session_id), SUM(u.cost_usd), MIN(u.min_ts), MAX(u.max_ts)
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              LEFT JOIN project_alias pj ON pj.alias = u.project
-             WHERE u.ts >= ? AND {F} AND {H}
+             WHERE {F} AND {H}
              GROUP BY 1 ORDER BY 2 DESC",
             P = PROJECT,
             T = TOKENS,
@@ -2200,9 +2365,9 @@ pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<
     let daily: Vec<HeatmapCell> = {
         let mut stmt = conn.prepare(&format!(
             "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-             FROM usage_event u
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-             WHERE u.ts >= ? AND {F} AND {H}
+             WHERE {F} AND {H}
              GROUP BY d ORDER BY d",
             T = TOKENS,
             F = filter,
@@ -2221,15 +2386,7 @@ pub fn family_detail(store: &Store, family: &str, days: i64) -> DbResult<Option<
     let (current_streak, longest_streak) = streaks(&dates);
     let peak = daily.iter().max_by_key(|d| d.tokens);
 
-    let total_window_tokens: i64 = conn.query_row(
-        &format!(
-            "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ? AND {H}",
-            T = TOKENS,
-            H = NOT_HIDDEN
-        ),
-        [cutoff_ts],
-        |r| r.get(0),
-    )?;
+    let total_window_tokens = window_tokens(&conn, cutoff_ts)?;
 
     Ok(Some(FamilyDetail {
         family: fam.to_string(),
@@ -2272,7 +2429,9 @@ pub fn family_achievements(store: &Store, family: &str) -> DbResult<Vec<Achievem
         return Ok(Vec::new());
     }
     let raw = family_raw_names(&conn, &names)?;
-    let filter = family_name_filter(&names, &raw);
+    let filter = family_shows_as(&names, 1);
+    let narrow = family_rows(&names, &raw, 1);
+    let rows = usage_rows_where(None, &narrow);
     let name_values = family_name_params(&names, &raw);
 
     let mut achievements = Vec::new();
@@ -2280,8 +2439,8 @@ pub fn family_achievements(store: &Store, family: &str) -> DbResult<Vec<Achievem
     // 1. Daily usage for Peak Day and Longest Streak
     let daily_rows: Vec<(String, i64, i64)> = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT date(ts/1000, 'unixepoch') AS d, COALESCE(SUM({T}), 0), MIN(ts)
-             FROM usage_event u
+            "SELECT date(ts/1000, 'unixepoch') AS d, COALESCE(SUM({T}), 0), MIN(u.min_ts)
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              WHERE {F} AND {H}
              GROUP BY d ORDER BY d",
@@ -2348,8 +2507,8 @@ pub fn family_achievements(store: &Store, family: &str) -> DbResult<Vec<Achievem
     // 2. Multi-Harness
     let sources: Vec<(String, i64)> = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT u.source, MIN(u.ts) AS first_ts
-             FROM usage_event u
+            "SELECT u.source, MIN(u.min_ts) AS first_ts
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              WHERE {F} AND {H}
              GROUP BY u.source ORDER BY first_ts ASC",
@@ -2399,83 +2558,14 @@ pub fn family_achievements(store: &Store, family: &str) -> DbResult<Vec<Achievem
         }
     }
 
-    // 4. Token Milestones & Big Spender (scanned in chronological order)
-    let mut stmt_events = conn.prepare(&format!(
-        "SELECT u.ts, {T}, COALESCE(u.cost_usd, 0.0)
-         FROM usage_event u
-         LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE {F} AND {H}
-         ORDER BY u.ts ASC",
-        T = TOKENS,
-        F = filter,
-        H = NOT_HIDDEN
-    ))?;
-    let mut event_rows = stmt_events.query(rusqlite::params_from_iter(name_values.iter()))?;
-
-    let token_tiers: &[(i64, &str, &str, &str)] = &[
-        (100_000_000, "100m", "100M Tokens", "100M tokens"),
-        (500_000_000, "500m", "500M Tokens", "500M tokens"),
-        (1_000_000_000, "1b", "1B Tokens", "1B tokens"),
-    ];
-    let mut next_token_tier = 0;
-    let mut earned_token_milestones = Vec::new();
-
-    let cost_tiers: &[(f64, &str, &str, &str)] = &[
-        (100.0, "100", "$100 Spent", "$100 spent"),
-        (500.0, "500", "$500 Spent", "$500 spent"),
-        (1000.0, "1k", "$1K Spent", "$1,000 spent"),
-    ];
-    let mut next_cost_tier = 0;
-    let mut earned_cost_milestones = Vec::new();
-
-    let mut running_tokens: i64 = 0;
-    let mut running_cost: f64 = 0.0;
-
-    while let Some(row) = event_rows.next()? {
-        let ts: i64 = row.get(0)?;
-        let tokens: i64 = row.get(1)?;
-        let cost: f64 = row.get(2)?;
-
-        running_tokens += tokens;
-        running_cost += cost;
-
-        while next_token_tier < token_tiers.len() && running_tokens >= token_tiers[next_token_tier].0 {
-            let (_, tier, title, val) = token_tiers[next_token_tier];
-            earned_token_milestones.push(Achievement {
-                kind: "token_milestone".to_string(),
-                tier: Some(tier.to_string()),
-                title: title.to_string(),
-                value: val.to_string(),
-                earned_ts: Some(ts),
-            });
-            next_token_tier += 1;
-        }
-
-        while next_cost_tier < cost_tiers.len() && running_cost >= cost_tiers[next_cost_tier].0 {
-            let (_, tier, title, val) = cost_tiers[next_cost_tier];
-            earned_cost_milestones.push(Achievement {
-                kind: "big_spender".to_string(),
-                tier: Some(tier.to_string()),
-                title: title.to_string(),
-                value: val.to_string(),
-                earned_ts: Some(ts),
-            });
-            next_cost_tier += 1;
-        }
-
-        if next_token_tier >= token_tiers.len() && next_cost_tier >= cost_tiers.len() {
-            break;
-        }
-    }
-
-    achievements.extend(earned_token_milestones);
-    achievements.extend(earned_cost_milestones);
+    // 4. Token Milestones & Big Spender
+    achievements.extend(milestone_achievements(&conn, &filter, &narrow, &name_values)?);
 
     // 5. First Project & Project Explorer
     let projects: Vec<(String, i64)> = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT {P} AS p, MIN(u.ts) AS first_ts
-             FROM usage_event u
+            "SELECT {P} AS p, MIN(u.min_ts) AS first_ts
+             FROM {rows} u
              LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              LEFT JOIN project_alias pj ON pj.alias = u.project
              WHERE {F} AND {H}
@@ -2520,14 +2610,15 @@ pub fn family_achievements(store: &Store, family: &str) -> DbResult<Vec<Achievem
 
 pub fn by_project(store: &Store, days: i64) -> DbResult<Vec<ProjectRow>> {
     let sql = format!(
-        "SELECT {P}, COALESCE(SUM({T}),0), COUNT(*),
-                COUNT(DISTINCT session_id), SUM(cost_usd), MIN(ts), MAX(ts)
-         FROM usage_event u
+        "SELECT {P}, COALESCE(SUM({T}),0), SUM(u.n),
+                COUNT(DISTINCT session_id), SUM(cost_usd), MIN(u.min_ts), MAX(u.max_ts)
+         FROM {R} u
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {H} GROUP BY 1 ORDER BY 2 DESC",
+         WHERE {H} GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN,
-        P = PROJECT
+        P = PROJECT,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -2576,11 +2667,12 @@ pub fn project_suggestions(store: &Store) -> DbResult<Vec<ProjectSuggestion>> {
     const MAX_SUGGESTIONS: usize = 20;
     let conn = store.read_conn();
     let sql = format!(
-        "SELECT {P}, COALESCE(SUM({T}),0), MAX(u.ts)
-         FROM usage_event u LEFT JOIN project_alias pj ON pj.alias = u.project
+        "SELECT {P}, COALESCE(SUM({T}),0), MAX(u.max_ts)
+         FROM {R} u LEFT JOIN project_alias pj ON pj.alias = u.project
          WHERE {P} != 'unknown' GROUP BY 1",
         T = TOKENS,
-        P = PROJECT
+        P = PROJECT,
+        R = usage_rows(None)
     );
     let rows: Vec<(String, i64, Option<i64>)> = {
         let mut stmt = conn.prepare(&sql)?;
@@ -2717,15 +2809,16 @@ pub fn daily_by_project(store: &Store, days: i64) -> DbResult<Vec<DailyProjectRo
                 {P},
                 COALESCE(SUM({T}),0),
                 SUM(cost_usd)
-         FROM usage_event u
+         FROM {R} u
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {H}
+         WHERE {H}
            AND {P} != '' AND {P} != 'unknown'
          GROUP BY d, {P}
          ORDER BY d, {P}",
         T = TOKENS,
         H = NOT_HIDDEN,
-        P = PROJECT
+        P = PROJECT,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -2762,7 +2855,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
              WHERE {P} = ?1 AND {N} AND {H} LIMIT 1",
             H = NOT_HIDDEN,
             P = PROJECT,
-            N = project_rows(1)
+            N = project_rows("u", 1)
         )
     };
     let conn = store.read_conn();
@@ -2779,10 +2872,13 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
     }
 
     let cutoff_ts = cutoff(days);
-    let proj_filter = if is_unknown {
-        "(u.project IS NULL OR u.project = 'unknown')".to_string()
+    // 'unknown' is matched on the raw folder, so its filter is its own narrowing.
+    let unknown_rows = |row: &str| format!("({row}.project IS NULL OR {row}.project = 'unknown')");
+    let named_rows = |row: &str| project_rows(row, 2);
+    let (proj_filter, rows) = if is_unknown {
+        (unknown_rows("u"), usage_rows_where(Some("?1"), &unknown_rows))
     } else {
-        format!("{P} = ?2 AND {N}", P = PROJECT, N = project_rows(2))
+        (format!("{PROJECT} = ?2"), usage_rows_where(Some("?1"), &named_rows))
     };
 
     let sql = format!(
@@ -2790,11 +2886,11 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
                 COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
                 COALESCE(SUM(u.cache_read_tokens),0), COALESCE(SUM(u.cache_write_tokens),0),
                 COALESCE(SUM(u.reasoning_tokens),0),
-                COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
-                SUM(u.cost_usd), MIN(u.ts), MAX(u.ts)
-         FROM usage_event u
+                COALESCE(SUM({T}),0), COALESCE(SUM(u.n),0), COUNT(DISTINCT u.session_id),
+                SUM(u.cost_usd), MIN(u.min_ts), MAX(u.max_ts)
+         FROM {rows} u
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {proj_filter} AND {H}",
+         WHERE {proj_filter} AND {H}",
         T = TOKENS,
         H = NOT_HIDDEN
     );
@@ -2832,15 +2928,15 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
                 COALESCE(SUM({T}),0),
                 COALESCE(SUM(u.input_tokens),0),
                 COALESCE(SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0) ELSE u.output_tokens END),0),
-                COUNT(*),
+                SUM(u.n),
                 COUNT(DISTINCT u.session_id),
                 SUM(u.cost_usd),
-                MIN(u.ts),
-                MAX(u.ts)
-         FROM usage_event u
+                MIN(u.min_ts),
+                MAX(u.max_ts)
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         WHERE {proj_filter} AND {H}
          GROUP BY 1 ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -2867,10 +2963,10 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
 
     // by_source
     let sql_src = format!(
-        "SELECT u.source, COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
-         FROM usage_event u
+        "SELECT u.source, COALESCE(SUM({T}),0), SUM(u.n), COUNT(DISTINCT u.session_id), SUM(u.cost_usd)
+         FROM {rows} u
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         WHERE {proj_filter} AND {H}
          GROUP BY u.source ORDER BY 2 DESC",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -2894,9 +2990,9 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
     // daily series
     let sql_daily = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-         FROM usage_event u
+         FROM {rows} u
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         WHERE {proj_filter} AND {H}
          GROUP BY d ORDER BY d",
         T = TOKENS,
         H = NOT_HIDDEN
@@ -2920,18 +3016,18 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
     let sql_sessions = format!(
         "SELECT COALESCE(u.session_id, 'unknown'),
                 u.source,
-                COUNT(*),
+                SUM(u.n),
                 COALESCE(SUM({T}),0),
                 SUM(u.cost_usd),
-                MIN(u.ts),
-                MAX(u.ts),
+                MIN(u.min_ts),
+                MAX(u.max_ts),
                 GROUP_CONCAT(DISTINCT COALESCE(a.canonical, u.model, 'unknown'))
-         FROM usage_event u
+         FROM {rows} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          LEFT JOIN project_alias pj ON pj.alias = u.project
-         WHERE u.ts >= ?1 AND {proj_filter} AND {H}
+         WHERE {proj_filter} AND {H}
          GROUP BY COALESCE(u.session_id, 'unknown'), u.source
-         ORDER BY MAX(u.ts) DESC",
+         ORDER BY MAX(u.max_ts) DESC",
         T = TOKENS,
         H = NOT_HIDDEN
     );
@@ -2960,13 +3056,7 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
     };
 
     // total window tokens across all projects
-    let total_sql = format!(
-        "SELECT COALESCE(SUM({T}),0) FROM usage_event u WHERE u.ts >= ?1 AND {H}",
-        T = TOKENS,
-        H = NOT_HIDDEN
-    );
-    let mut total_stmt = conn.prepare(&total_sql)?;
-    let total_window_tokens: i64 = total_stmt.query_row([cutoff_ts], |r| r.get(0))?;
+    let total_window_tokens = window_tokens(&conn, cutoff_ts)?;
 
     Ok(Some(ProjectDetail {
         project: project.to_string(),
@@ -2997,9 +3087,10 @@ pub fn project_detail(store: &Store, project: &str, days: i64) -> DbResult<Optio
 pub fn heatmap(store: &Store, days: i64) -> DbResult<Vec<HeatmapCell>> {
     let sql = format!(
         "SELECT date(ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-         FROM usage_event u WHERE u.ts >= ?1 AND {H} GROUP BY d ORDER BY d",
+         FROM {R} u WHERE {H} GROUP BY d ORDER BY d",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -3014,9 +3105,10 @@ pub fn heatmap(store: &Store, days: i64) -> DbResult<Vec<HeatmapCell>> {
 pub fn hourly(store: &Store) -> DbResult<Vec<HourRow>> {
     let sql = format!(
         "SELECT CAST(strftime('%H', ts/1000, 'unixepoch') AS INTEGER), COALESCE(SUM({T}),0)
-         FROM usage_event u WHERE {H} GROUP BY 1 ORDER BY 1",
+         FROM {R} u WHERE {H} GROUP BY 1 ORDER BY 1",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(None)
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -3032,15 +3124,16 @@ pub fn peak_days(store: &Store, days: i64) -> DbResult<Vec<PeakDayRow>> {
                 date(u.ts/1000, 'unixepoch') AS d,
                 COALESCE(SUM({T}), 0) AS tokens,
                 COALESCE(SUM(u.cost_usd), 0.0) AS cost
-         FROM usage_event u
+         FROM {R} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
-         WHERE u.ts >= ?1 AND {H}
+         WHERE {H}
          GROUP BY 1, 2
          HAVING SUM({T}) > 0
          ORDER BY tokens DESC, d DESC
          LIMIT 5",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(Some("?1"))
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -3063,17 +3156,18 @@ pub fn peak_days(store: &Store, days: i64) -> DbResult<Vec<PeakDayRow>> {
 /// same alias-resolving, hidden-model-excluding lens as every other aggregate.
 pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
     let cut = cutoff(days);
-    let w = format!("u.ts >= ?1 AND {H}", H = NOT_HIDDEN);
+    let w = NOT_HIDDEN;
+    let rows = usage_rows(Some("?1"));
     let conn = store.read_conn();
 
     // One row of totals, always present (aggregates without GROUP BY never skip).
     let (total_tokens, events, sessions, first_ts, last_ts, estimated_tokens) = conn
         .query_row(
             &format!(
-                "SELECT COALESCE(SUM({T}),0), COUNT(*), COUNT(DISTINCT u.session_id),
-                        MIN(u.ts), MAX(u.ts),
+                "SELECT COALESCE(SUM({T}),0), COALESCE(SUM(u.n),0), COUNT(DISTINCT u.session_id),
+                        MIN(u.min_ts), MAX(u.max_ts),
                         COALESCE(SUM(CASE WHEN u.estimated = 1 THEN {T} ELSE 0 END),0)
-                 FROM usage_event u WHERE {w}",
+                 FROM {rows} u WHERE {w}",
                 T = TOKENS
             ),
             [cut],
@@ -3091,8 +3185,8 @@ pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
 
     let top_models = {
         let mut stmt = conn.prepare(&format!(
-            "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), COUNT(*)
-             FROM usage_event u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+            "SELECT COALESCE(a.canonical, u.model, 'unknown'), COALESCE(SUM({T}),0), SUM(u.n)
+             FROM {rows} u LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
              WHERE {w} GROUP BY 1 ORDER BY 2 DESC LIMIT 6",
             T = TOKENS
         ))?;
@@ -3107,7 +3201,7 @@ pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
     let by_source = {
         let mut stmt = conn.prepare(&format!(
             "SELECT u.source, COALESCE(SUM({T}),0)
-             FROM usage_event u WHERE {w} GROUP BY 1 ORDER BY 2 DESC",
+             FROM {rows} u WHERE {w} GROUP BY 1 ORDER BY 2 DESC",
             T = TOKENS
         ))?;
         let rows = stmt
@@ -3122,7 +3216,7 @@ pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
     let daily: Vec<HeatmapCell> = {
         let mut stmt = conn.prepare(&format!(
             "SELECT date(u.ts/1000,'unixepoch') AS d, COALESCE(SUM({T}),0)
-             FROM usage_event u WHERE {w} GROUP BY d ORDER BY d",
+             FROM {rows} u WHERE {w} GROUP BY d ORDER BY d",
             T = TOKENS
         ))?;
         let rows = stmt
@@ -3143,7 +3237,7 @@ pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
     let hours: Vec<HourRow> = {
         let mut stmt = conn.prepare(&format!(
             "SELECT CAST(strftime('%H', u.ts/1000, 'unixepoch') AS INTEGER), COALESCE(SUM({T}),0)
-             FROM usage_event u WHERE {w} GROUP BY 1 ORDER BY 1",
+             FROM {rows} u WHERE {w} GROUP BY 1 ORDER BY 1",
             T = TOKENS
         ))?;
         let rows = stmt
@@ -3166,7 +3260,7 @@ pub fn wrapped_summary(store: &Store, days: i64) -> DbResult<WrappedSummary> {
     let (top_project, top_project_tokens) = {
         let mut stmt = conn.prepare(&format!(
             "SELECT {PROJECT}, COALESCE(SUM({T}),0)
-             FROM usage_event u LEFT JOIN project_alias pj ON pj.alias = u.project
+             FROM {rows} u LEFT JOIN project_alias pj ON pj.alias = u.project
              WHERE {w} AND {PROJECT} != 'unknown' GROUP BY 1 ORDER BY 2 DESC LIMIT 1",
             T = TOKENS
         ))?;
@@ -3222,9 +3316,10 @@ pub struct EstimatedShare {
 
 pub fn estimated_share(store: &Store) -> DbResult<Vec<EstimatedShare>> {
     let sql = format!(
-        "SELECT source, COUNT(*), COALESCE(SUM(estimated),0)
-         FROM usage_event u WHERE {H} GROUP BY source HAVING SUM(estimated) > 0",
-        H = NOT_HIDDEN
+        "SELECT source, SUM(u.n), COALESCE(SUM(estimated * u.n),0)
+         FROM {R} u WHERE {H} GROUP BY source HAVING SUM(estimated) > 0",
+        H = NOT_HIDDEN,
+        R = usage_rows(None)
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -3314,13 +3409,14 @@ fn compute_daily_standings(store: &Store) -> DbResult<Standings> {
         "SELECT date(ts/1000,'unixepoch') AS d,
                 COALESCE(a.canonical, u.model, 'unknown') AS model,
                 COALESCE(SUM({T}),0) AS tokens
-         FROM usage_event u
+         FROM {R} u
          LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
          WHERE {H}
          GROUP BY 1, 2
          ORDER BY d ASC",
         T = TOKENS,
-        H = NOT_HIDDEN
+        H = NOT_HIDDEN,
+        R = usage_rows(None)
     );
     let conn = store.read_conn();
     let mut stmt = conn.prepare(&sql)?;
@@ -6503,5 +6599,246 @@ mod tests {
         assert_eq!(tied.ties, 1);
         assert!(tied.biggest_gap.is_none());
     }
-}
 
+    /// Events around a mid-hour alias cutover — `flash` shows as `Flash 1`
+    /// (hidden) until 30 minutes into the first hour and `Flash 2` after it —
+    /// in two sessions, with subagent, reasoning, estimated, priced and
+    /// unpriced, NULL-model and pre-1970 rows, over two projects.
+    fn rollup_fixture() -> (Store, Vec<UsageEvent>, i64, i64) {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let hour = 3_600_000;
+        let h0 = 1_750_000_000_000 / hour * hour;
+        let cut = h0 + 1_800_000;
+        let mut events = Vec::new();
+        for (i, offset) in [0, 59_000, 1_200_000, 1_800_000, 2_400_000, 3_599_999, 3_600_000, 5_000_000, 9_000_000]
+            .into_iter()
+            .enumerate()
+        {
+            for (model, session) in [("flash", Some("s1")), ("flash", Some("s2")), ("pro", None)] {
+                // The cutover hour stays in one project, so its straddling
+                // buckets have siblings that differ only by subagent or price.
+                let project = if i >= 6 { "/repo/b" } else { "/repo/a" };
+                let mut e = wrapped_event(
+                    &format!("{model}-{i}-{session:?}"),
+                    model,
+                    h0 + offset,
+                    10 + i as i64,
+                    session,
+                    Some(project),
+                    i == 4,
+                );
+                e.is_subagent = session == Some("s2") && i % 2 == 1;
+                e.reasoning_tokens = (i % 3 == 1).then_some(i as i64);
+                e.output_tokens = 2 * i as i64;
+                events.push(e);
+            }
+        }
+        events.push(wrapped_event("old", "flash", -1_000, 7, None, None, false));
+        events.push(UsageEvent { model: None, ..wrapped_event("anon", "x", h0 + 700_000, 5, Some("s1"), Some("/repo/a"), false) });
+        store.insert_events(&events).unwrap();
+        store
+            .read_conn()
+            .execute_batch(&format!(
+                "INSERT INTO model_alias(alias, canonical, from_ts, until_ts) VALUES
+                   ('flash', 'Flash 1', 0, {cut}), ('flash', 'Flash 2', {cut}, 9223372036854775807);
+                 INSERT INTO hidden_model(name) VALUES ('Flash 1');
+                 UPDATE usage_event SET cost_usd = input_tokens * 0.001 WHERE ts % 2 = 0 AND estimated = 0;"
+            ))
+            .unwrap();
+        (store, events, h0, cut)
+    }
+
+    /// Rows as `Value`s, binding `params` by position.
+    fn read_values(store: &Store, sql: &str, params: &[rusqlite::types::Value]) -> Vec<Vec<rusqlite::types::Value>> {
+        let conn = store.read_conn();
+        let mut st = conn.prepare(sql).unwrap();
+        let n = st.column_count();
+        st.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            (0..n).map(|i| r.get::<_, rusqlite::types::Value>(i)).collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// `want` and `got` row for row, floats to 1e-9, ignoring the last `skip` columns.
+    fn assert_same_rows(want: &[Vec<rusqlite::types::Value>], got: &[Vec<rusqlite::types::Value>], skip: usize, what: &str) {
+        use rusqlite::types::Value;
+        assert_eq!(want.len(), got.len(), "{what}: {want:?} vs {got:?}");
+        for (w, g) in want.iter().zip(got) {
+            for (a, b) in w[..w.len() - skip].iter().zip(&g[..g.len() - skip]) {
+                match (a, b) {
+                    (Value::Real(a), Value::Real(b)) => assert!((a - b).abs() < 1e-9, "{what}: {w:?} vs {g:?}"),
+                    _ => assert_eq!(a, b, "{what}: {w:?} vs {g:?}"),
+                }
+            }
+        }
+    }
+
+    /// Every way a query can group a row, and everything it can add up.
+    fn grouped(from: &str, filter: &str) -> String {
+        format!(
+            "SELECT u.source, u.model, u.project, u.session_id, u.estimated, u.is_subagent,
+                    u.cost_usd IS NOT NULL, date(u.ts/1000,'unixepoch'), strftime('%H', u.ts/1000,'unixepoch'),
+                    COALESCE(a.canonical, u.model, 'unknown'), {NOT_HIDDEN},
+                    SUM(u.n), SUM({TOKENS}), SUM(u.cost_usd), COALESCE(SUM(u.reasoning_tokens), 0),
+                    SUM(CASE WHEN u.source = 'antigravity' THEN u.output_tokens + COALESCE(u.reasoning_tokens,0)
+                             ELSE u.output_tokens END),
+                    MIN(u.min_ts), MAX(u.max_ts), COUNT(*)
+             FROM {from} u
+             LEFT JOIN model_alias a ON a.alias = u.model AND u.ts >= a.from_ts AND u.ts < a.until_ts
+             LEFT JOIN project_alias pj ON pj.alias = u.project
+             WHERE {filter}
+             GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11"
+        )
+    }
+
+    /// `usage_event` as `usage_rows` columns, from `?1` on (or all of it).
+    fn events_as_rows(since: Option<i64>) -> &'static str {
+        match since {
+            Some(_) => "(SELECT *, 1 AS n, ts AS min_ts, ts AS max_ts FROM usage_event WHERE ts >= ?1)",
+            None => "(SELECT *, 1 AS n, ts AS min_ts, ts AS max_ts FROM usage_event)",
+        }
+    }
+
+    /// `usage_rows` reads as the events it stands for. Grouped by everything a
+    /// query groups by — display name across a mid-hour alias cutover, hidden
+    /// or not, UTC day and hour, session, project, source, subagent, priced —
+    /// it gives the events' own counts, sums and spans for any window start: on
+    /// an hour, inside one, on the cutover, before 1970, or none.
+    #[test]
+    fn usage_rows_read_as_events() {
+        use rusqlite::types::Value;
+        let (store, events, h0, cut) = rollup_fixture();
+        let hour = 3_600_000;
+        let mut read_rows = 0;
+        for since in [None, Some(i64::MIN), Some(0), Some(h0), Some(h0 + 1), Some(cut), Some(h0 + hour - 1), Some(h0 + hour), Some(h0 + 10 * hour)] {
+            let params: Vec<Value> = since.map(Value::Integer).into_iter().collect();
+            let want = read_values(&store, &grouped(events_as_rows(since), "1"), &params);
+            let got = read_values(&store, &grouped(&usage_rows(since.map(|_| "?1")), "1"), &params);
+            // The last column counts rows read, which is the point of the rollup.
+            assert_same_rows(&want, &got, 1, &format!("since {since:?}"));
+            if since.is_none() {
+                read_rows = got.iter().map(|g| if let Value::Integer(n) = g[g.len() - 1] { n } else { 0 }).sum();
+            }
+        }
+        // All time read buckets, not events — except the hour the cutover splits.
+        assert!(read_rows < events.len() as i64, "{read_rows} rows for {} events", events.len());
+
+        // And the list queries agree: `Flash 1` is hidden, the rest show.
+        let models = by_model(&store, 0).unwrap();
+        let names: Vec<&str> = models.iter().map(|m| m.model.as_str()).collect();
+        assert!(names.contains(&"Flash 2") && names.contains(&"pro") && !names.contains(&"Flash 1"), "{names:?}");
+        let flash2: i64 = events
+            .iter()
+            .filter(|e| e.model.as_deref() == Some("flash") && e.ts >= cut)
+            .map(|e| e.input_tokens + e.output_tokens)
+            .sum();
+        assert_eq!(models.iter().find(|m| m.model == "Flash 2").unwrap().tokens, flash2);
+    }
+
+    /// A one-model, family or project query narrows inside `usage_rows_where`
+    /// and keeps its exact test outside: it reads what the same test over the
+    /// events reads, for each kind of narrowing the detail pages use.
+    #[test]
+    fn narrowed_rows_read_as_events() {
+        use rusqlite::types::Value;
+        let (store, _, h0, cut) = rollup_fixture();
+        let names = vec!["Flash 2".to_string(), "pro".to_string()];
+        let raw = family_raw_names(&store.read_conn(), &names).unwrap();
+        let shows_family = family_shows_as(&names, 2);
+        let family_narrow = family_rows(&names, &raw, 2);
+        let model_narrow = model_rows(2);
+        let project_narrow = |row: &str| project_rows(row, 2);
+        let unknown_narrow = |row: &str| format!("({row}.project IS NULL OR {row}.project = 'unknown')");
+        let shows_project = format!("{PROJECT} = ?2");
+        // (what, exact test, narrowing, values bound after the window start)
+        type Case<'a> = (&'a str, &'a str, &'a dyn Fn(&str) -> String, Vec<Value>);
+        let cases: Vec<Case> = vec![
+            ("Flash 2", SHOWS_AS_2, &model_narrow, vec![Value::Text("Flash 2".into())]),
+            ("Flash 1", SHOWS_AS_2, &model_narrow, vec![Value::Text("Flash 1".into())]),
+            ("unknown model", SHOWS_AS_2, &model_narrow, vec![Value::Text("unknown".into())]),
+            ("family", &shows_family, &family_narrow, family_name_params(&names, &raw)),
+            ("project", &shows_project, &project_narrow, vec![Value::Text("/repo/a".into())]),
+            ("unknown project", "(u.project IS NULL OR u.project = 'unknown')", &unknown_narrow, vec![]),
+        ];
+        for (what, shows, narrow, values) in &cases {
+            for since in [None, Some(h0 + 1), Some(cut), Some(h0 + 3_600_000)] {
+                let mut params = vec![Value::Integer(since.unwrap_or(0))];
+                params.extend(values.iter().cloned());
+                // The exact test alone; the no-op `IN` only names every bound
+                // parameter, which SQLite counts by the highest one used.
+                let exact = format!("{shows} AND 1 IN (1, {})", holes(1, params.len()));
+                let want = read_values(&store, &grouped(events_as_rows(since), &exact), &params);
+                let got = read_values(
+                    &store,
+                    &grouped(&usage_rows_where(since.map(|_| "?1"), *narrow), &exact),
+                    &params,
+                );
+                assert!(since.is_some() || !want.is_empty(), "{what} matched nothing");
+                assert_same_rows(&want, &got, 1, &format!("{what} since {since:?}"));
+            }
+        }
+    }
+
+    /// The milestone walk reads hourly totals and only the crossing hour's
+    /// events, yet names the same call a walk over every event would: across a
+    /// mid-hour cutover (only `Flash 2`'s calls count), with several tiers
+    /// crossed inside one hour and one call crossing two at once.
+    #[test]
+    fn milestones_name_the_crossing_call() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let hour = 3_600_000;
+        let h0 = 1_750_000_000_000 / hour * hour;
+        let cut = h0 + 1_800_000;
+        let mut events = Vec::new();
+        for i in 0..40i64 {
+            let ts = h0 + i * 290_000;
+            let input = match i {
+                21 => 450_000_000,
+                _ if ts < cut => 40_000_000,
+                _ => 30_000_000,
+            };
+            events.push(test_event("flash", ts, input));
+        }
+        store.insert_events(&events).unwrap();
+        store
+            .read_conn()
+            .execute_batch(&format!(
+                "INSERT INTO model_alias(alias, canonical, from_ts, until_ts) VALUES
+                   ('flash', 'Flash 1', 0, {cut}), ('flash', 'Flash 2', {cut}, 9223372036854775807);
+                 UPDATE usage_event SET cost_usd = input_tokens / 1000000.0;"
+            ))
+            .unwrap();
+
+        // The reference: every Flash 2 call in time order.
+        let mut want: Vec<(String, String, i64)> = Vec::new();
+        let (mut tokens, mut cost) = (0i64, 0.0f64);
+        let token_tiers = [(100_000_000, "100m"), (500_000_000, "500m"), (1_000_000_000, "1b")];
+        let cost_tiers = [(100.0, "100"), (500.0, "500"), (1000.0, "1k")];
+        let (mut nt, mut nc) = (0, 0);
+        let mut earned_cost = Vec::new();
+        for e in events.iter().filter(|e| e.ts >= cut) {
+            tokens += e.input_tokens;
+            cost += e.input_tokens as f64 / 1_000_000.0;
+            while nt < 3 && tokens >= token_tiers[nt].0 {
+                want.push(("token_milestone".into(), token_tiers[nt].1.into(), e.ts));
+                nt += 1;
+            }
+            while nc < 3 && cost >= cost_tiers[nc].0 {
+                earned_cost.push(("big_spender".into(), cost_tiers[nc].1.into(), e.ts));
+                nc += 1;
+            }
+        }
+        want.extend(earned_cost);
+        assert_eq!(want.len(), 6, "the fixture crosses every tier");
+
+        let got: Vec<(String, String, i64)> = model_achievements(&store, "Flash 2")
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.kind == "token_milestone" || a.kind == "big_spender")
+            .map(|a| (a.kind, a.tier.unwrap(), a.earned_ts.unwrap()))
+            .collect();
+        assert_eq!(got, want);
+    }
+}
