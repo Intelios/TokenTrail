@@ -41,7 +41,6 @@
   const PREF_DAYS = 'tt.compare.days';
   const PREF_ANCHOR = 'tt.compare.anchorTokens';
   const PREF_RACE = 'tt.compare.raceMode';
-  const PREF_PAIR = 'tt.compare.pair';
 
   type RaceMode = 'daily' | 'cumulative';
   type Side = 'a' | 'b';
@@ -52,63 +51,56 @@
   let days = $state(readPref(PREF_DAYS, 90, (v) => RANGES.some(([d]) => d === v)));
   let anchorTokens = $state(readPref(PREF_ANCHOR, 10_000_000, (v) => ANCHORS.includes(v as number)));
   let raceMode = $state<RaceMode>(readPref(PREF_RACE, 'daily', (v) => v === 'daily' || v === 'cumulative'));
-  let loading = $state(true);
+  let loading = $state(false);
   let busy = $state(false);
   let error = $state('');
   let notice = $state('');
   let sequence = 0;
+  let catalogSequence = 0;
 
   const urlA = $derived($page.url.searchParams.get('a') ?? '');
   const urlB = $derived($page.url.searchParams.get('b') ?? '');
-  const colors = $derived(result ? compareColors(result.a.model, result.b.model) : ['#ff4d00', '#00c2c2']);
-
-  function validPair(a: string, b: string, rows: ModelStatsRow[]): boolean {
-    return a !== b && rows.some((m) => m.model === a) && rows.some((m) => m.model === b);
-  }
+  /** A matchup needs both sides named, and they must differ. */
+  const paired = $derived(!!urlA && !!urlB && urlA !== urlB);
+  const colors = $derived(paired ? compareColors(urlA, urlB) : ['#ff4d00', '#00c2c2']);
 
   async function navigatePair(a: string, b: string, replace = false) {
     const query = new URLSearchParams($page.url.search);
-    query.set('a', a);
-    query.set('b', b);
-    await goto(`${$page.url.pathname}?${query}`, { replaceState: replace, noScroll: true, keepFocus: true });
+    if (a) query.set('a', a);
+    else query.delete('a');
+    if (b) query.set('b', b);
+    else query.delete('b');
+    const search = query.toString();
+    const href = `${$page.url.pathname}${search ? `?${search}` : ''}`;
+    if (href === `${$page.url.pathname}${$page.url.search}`) return;
+    await goto(href, { replaceState: replace, noScroll: true, keepFocus: true });
   }
 
-  async function loadCatalog() {
+  /** The URL is the only record of a matchup, so a stale name clears the pair. */
+  async function loadCatalog(): Promise<boolean> {
+    const request = ++catalogSequence;
     try {
       const rows = (await api.modelStats(3650)).filter((m) => m.model !== 'unknown');
+      if (request !== catalogSequence) return false;
       catalog = rows;
-      if (rows.length < 2) {
-        catalogReady = true;
-        loading = false;
-        return;
+      const params = $page.url.searchParams;
+      const a = params.get('a') ?? '';
+      const b = params.get('b') ?? '';
+      const known = new Set(rows.map((m) => m.model));
+      const stale =
+        (params.has('a') && !known.has(a)) || (params.has('b') && !known.has(b)) || (!!a && a === b);
+      if (stale) {
+        if (rows.length >= 2) notice = 'That matchup is unavailable. Choose two models.';
+        await navigatePair('', '', true);
       }
-
-      let a = urlA;
-      let b = urlB;
-      if (!validPair(a, b, rows)) {
-        const remembered = readPref(PREF_PAIR, { a: '', b: '' }, (v): v is { a: string; b: string } => {
-          if (typeof v !== 'object' || v === null) return false;
-          const pair = v as Record<string, unknown>;
-          return typeof pair.a === 'string' && typeof pair.b === 'string';
-        });
-        a = remembered.a;
-        b = remembered.b;
-      }
-      if (!validPair(a, b, rows)) {
-        a = rows[0].model;
-        b = rows[1].model;
-      }
-      if (a !== urlA || b !== urlB) {
-        notice = urlA || urlB ? 'That matchup is unavailable. Restored your latest valid pair.' : '';
-        await navigatePair(a, b, true);
-      }
-      writePref(PREF_PAIR, { a, b });
       catalogReady = true;
       error = '';
+      return true;
     } catch (e) {
+      if (request !== catalogSequence) return false;
       error = String(e);
       catalogReady = true;
-      loading = false;
+      return false;
     }
   }
 
@@ -123,7 +115,6 @@
       const next = await api.modelComparison(modelA, modelB, range, anchor);
       if (request !== sequence) return;
       result = next;
-      writePref(PREF_PAIR, { a: modelA, b: modelB });
       error = '';
     } catch (e) {
       if (request === sequence) error = String(e);
@@ -135,17 +126,32 @@
     }
   }
 
+  /** Drop whatever is on screen when the pair stops being a matchup. */
+  function resetComparison() {
+    sequence++;
+    result = null;
+    loading = false;
+    busy = false;
+    error = '';
+  }
+
+  /** Read the pair still in the URL; `loadCatalog` may have just cleared it. */
+  function currentPair(): [string, string] {
+    const params = $page.url.searchParams;
+    return [params.get('a') ?? '', params.get('b') ?? ''];
+  }
+
   async function retry() {
-    await loadCatalog();
-    if (urlA && urlB && urlA !== urlB) await loadComparison(urlA, urlB, days, anchorTokens);
+    if (!(await loadCatalog())) return;
+    const [a, b] = currentPair();
+    if (a && b && a !== b) await loadComparison(a, b, days, anchorTokens);
   }
 
   function changeSide(side: Side, event: Event) {
     const value = (event.currentTarget as HTMLSelectElement).value;
-    if (!value) return;
     const a = side === 'a' ? value : urlA;
     const b = side === 'b' ? value : urlB;
-    if (a === b) return;
+    if (a && b && a === b) return;
     notice = '';
     void navigatePair(a, b);
   }
@@ -161,8 +167,17 @@
     const b = urlB;
     const range = days;
     const anchor = anchorTokens;
-    if (!catalogReady || !a || !b || a === b) return;
-    untrack(() => void loadComparison(a, b, range, anchor));
+    if (!catalogReady) return;
+    // `catalog` is refreshed by sync; reading it here would re-fire the
+    // comparison on every refresh, so only the pair and controls drive this.
+    untrack(() => {
+      if (!a || !b || a === b) {
+        resetComparison();
+        return;
+      }
+      if (catalog.length < 2) return;
+      void loadComparison(a, b, range, anchor);
+    });
   });
 
   $effect(() => {
@@ -174,12 +189,16 @@
   onMount(() => {
     void loadCatalog();
     const sync = async () => {
-      await loadCatalog();
-      if (urlA && urlB && urlA !== urlB) await loadComparison(urlA, urlB, days, anchorTokens, true);
+      // A failed catalog read already surfaced its error; a quiet comparison
+      // would only overwrite it with a success.
+      if (!(await loadCatalog())) return;
+      const [a, b] = currentPair();
+      if (a && b && a !== b) await loadComparison(a, b, days, anchorTokens, true);
     };
     window.addEventListener('tt-sync', sync);
     return () => {
       sequence++;
+      catalogSequence++;
       window.removeEventListener('tt-sync', sync);
     };
   });
@@ -490,11 +509,13 @@
     </div>
     <div class="head-controls up">
       {#if busy}<span class="updating" aria-live="polite">updating…</span>{/if}
-      <div class="pills" aria-label="Comparison range">
-        {#each RANGES as [value, label]}
-          <button class="pill" class:on={days === value} aria-pressed={days === value} onclick={() => (days = value)}>{label}</button>
-        {/each}
-      </div>
+      {#if paired}
+        <div class="pills" aria-label="Comparison range">
+          {#each RANGES as [value, label]}
+            <button class="pill" class:on={days === value} aria-pressed={days === value} onclick={() => (days = value)}>{label}</button>
+          {/each}
+        </div>
+      {/if}
     </div>
   </header>
 
@@ -511,15 +532,17 @@
       <div class="sidepick" style="--side:{colors[0]}">
         <label for="compare-a"><span>A</span> First model</label>
         <select id="compare-a" value={urlA} onchange={(e) => changeSide('a', e)}>
+          <option value="">Choose a model…</option>
           {#each catalog as model}
             <option value={model.model} disabled={model.model === urlB}>{model.model} · {fmtTokens(model.tokens)}</option>
           {/each}
         </select>
       </div>
-      <button class="swap" onclick={swap} disabled={!urlA || !urlB} aria-label="Swap models" title="Swap models">⇄</button>
+      <button class="swap" onclick={swap} disabled={!paired} aria-label="Swap models" title="Swap models">⇄</button>
       <div class="sidepick" style="--side:{colors[1]}">
         <label for="compare-b"><span>B</span> Second model</label>
         <select id="compare-b" value={urlB} onchange={(e) => changeSide('b', e)}>
+          <option value="">Choose a model…</option>
           {#each catalog as model}
             <option value={model.model} disabled={model.model === urlA}>{model.model} · {fmtTokens(model.tokens)}</option>
           {/each}
@@ -528,16 +551,29 @@
     </section>
   {/if}
 
-  {#if !catalogReady || (loading && !result)}
+  {#if !catalogReady}
+    <div class="loading" role="status">reading models…</div>
+  {:else if catalog.length < 2}
+    {#if !error}
+      <div class="empty">
+        <strong>Two models make a matchup.</strong>
+        <p>Use at least two visible models in your harnesses, then come back here.</p>
+        <a href="/models">Open Models</a>
+      </div>
+    {/if}
+  {:else if !paired}
+    <div class="empty blank up">
+      <div class="blank-sides" aria-hidden="true">
+        <span style="--side:{colors[0]}">A</span><i>⇄</i><span style="--side:{colors[1]}">B</span>
+      </div>
+      <strong>Choose two models</strong>
+      <p aria-live="polite">{urlA || urlB ? 'Now choose the second model.' : 'Pick a model for each side above to build a head-to-head matchup.'}</p>
+      <span class="blank-count">{catalog.length} models available</span>
+    </div>
+  {:else if loading && !result}
     <div class="skeleton" aria-label="Loading comparison">
       <div></div><div></div><div></div><div></div>
       <span>building the matchup…</span>
-    </div>
-  {:else if catalog.length < 2}
-    <div class="empty">
-      <strong>Two models make a matchup.</strong>
-      <p>Use at least two visible models in your harnesses, then come back here.</p>
-      <a href="/models">Open Models</a>
     </div>
   {:else if result}
     {@const a = result.a}
@@ -876,6 +912,13 @@
   .empty strong { display: block; font: 400 clamp(28px, 3vw, 52px)/1 var(--font-disp); text-transform: uppercase; }
   .empty p { color: var(--dim); }
   .empty a { display: inline-block; padding: 9px 13px; border: 2px solid var(--ink); background: var(--org); color: #fff; font: 600 11px/1 var(--font-ui); text-transform: uppercase; }
+  .blank { padding: clamp(30px, 3.4vw, 54px); }
+  .blank-sides { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .blank-sides span { display: inline-flex; align-items: center; justify-content: center; width: 46px; height: 46px; background: var(--side); font: 400 27px/1 var(--font-disp); }
+  .blank-sides i { font: 500 17px/1 var(--font-mono); font-style: normal; color: var(--dim); }
+  .blank strong { font-size: clamp(30px, 3.4vw, 58px); line-height: 0.95; }
+  .blank p { max-width: 46ch; margin: 14px 0 0; font: 400 13px/1.5 var(--font-ui); }
+  .blank-count { display: block; margin-top: 22px; padding-top: 13px; border-top: 2px solid var(--hair); font: 500 10px/1 var(--font-mono); letter-spacing: 1.2px; text-transform: uppercase; color: var(--dim); }
 
   @media (max-width: 1100px) {
     .split2 { grid-template-columns: 1fr; }
