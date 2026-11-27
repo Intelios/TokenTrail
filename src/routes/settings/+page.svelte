@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import { ALIAS_OPEN_END, api, type EstimatedShare, type IngestStats, type ModelAlias, type ProjectAlias, type ProjectAutoLink, type ProjectColor, type ProjectIgnore, type ProjectPathRow, type ProjectSuggestion, type SourceStatus } from '$lib/api';
   import { basename, normalizeModelName, sourceSwatch } from '$lib/format';
   import ProjectColorPicker from '$lib/ProjectColorPicker.svelte';
@@ -10,6 +11,7 @@
 
   let sources = $state<SourceStatus[]>([]);
   let estimated = $state<EstimatedShare[]>([]);
+  let revealingSource = $state('');
   let syncing = $state(false);
   let stats = $state<IngestStats[] | null>(null);
   let exportPath = $state('');
@@ -142,6 +144,19 @@
     window.addEventListener('tt-sync', h);
     return () => window.removeEventListener('tt-sync', h);
   });
+
+  async function revealSource(source: SourceStatus) {
+    if (!source.found || revealingSource) return;
+    revealingSource = source.source;
+    error = '';
+    try {
+      await revealItemInDir(source.path);
+    } catch (e) {
+      error = `Could not open ${source.display} in Finder: ${String(e)}`;
+    } finally {
+      revealingSource = '';
+    }
+  }
 
   async function sync() {
     syncing = true;
@@ -648,6 +663,15 @@
                 </span>
               {/if}
               {#if s.found}
+                <button
+                  class="source-open"
+                  onclick={() => revealSource(s)}
+                  disabled={revealingSource !== ''}
+                  title="Reveal {s.path} in Finder"
+                  aria-label="Open {s.display} in Finder"
+                >
+                  {revealingSource === s.source ? 'Opening…' : 'Open in Finder'}
+                </button>
                 <span class="tag ok">installed</span>
               {:else}
                 <span class="tag miss">not found</span>
@@ -1455,6 +1479,20 @@
   .src-item .meta { flex: 1; min-width: 0; }
   .src-item .nm { font: 600 12px/1.2 var(--font-ui); color: var(--ink); }
   .src-item .p { font: 400 10px/1.3 var(--font-mono); color: var(--dim); margin-top: 3px; word-break: break-all; }
+  .source-open {
+    flex: none;
+    padding: 5px 8px;
+    border: 1px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    font: 600 9px/1 var(--font-ui);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .source-open:hover:not(:disabled) { background: var(--ink); color: var(--bone); }
+  .source-open:disabled { opacity: 0.45; cursor: default; }
 
   .action-card {
     border: 1px solid var(--hair);
