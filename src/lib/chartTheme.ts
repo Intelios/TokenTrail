@@ -66,7 +66,20 @@ export const TOOLTIP = {
   extraCssText: 'box-shadow:none;',
 };
 
-export const AXIS_LABEL = { color: DIM, fontFamily: MONO, fontSize: 9.5 };
+/** Hover band for column charts (`tooltip.axisPointer`) that glides from one
+ *  column to the next instead of jumping. ECharts only animates the pointer by
+ *  itself when a column is wider than 15px, which a few months of days never
+ *  is, so `animation` is forced on here. That also outranks the root
+ *  `animation: false`, so `Chart.svelte` turns it back off for reduced motion. */
+export const SHADOW_POINTER = {
+  type: 'shadow' as const,
+  shadowStyle: { color: 'rgba(13,13,11,0.06)' },
+  animation: true,
+  animationDurationUpdate: 320,
+  animationEasingUpdate: 'cubicOut' as const,
+};
+
+export const AXIS_LABEL ={ color: DIM, fontFamily: MONO, fontSize: 9.5 };
 export const AXIS_LINE = { lineStyle: { color: INK, width: 2 } };
 export const SPLIT_LINE = { lineStyle: { color: HAIR, width: 1 } };
 

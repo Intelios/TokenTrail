@@ -5,7 +5,7 @@
  */
 import type { EChartsOption } from "echarts";
 import { fmtTokens, fmtCost } from "$lib/format";
-import { ANIM, AXIS_LABEL, AXIS_LINE, BONE, DIM, HAIR, INK, MONO, SPLIT_LINE, TOOLTIP } from "$lib/chartTheme";
+import { ANIM, AXIS_LABEL, AXIS_LINE, BONE, DIM, HAIR, INK, MONO, SHADOW_POINTER, SPLIT_LINE, TOOLTIP } from "$lib/chartTheme";
 import type { Call, DailyFeature, Flow } from "./types";
 import { ESTIMATED, featureColor, featureLabel, OUTCOME_COLORS, count, duration } from "./labels";
 
@@ -531,7 +531,7 @@ export function generations(rows: DailyFeature[]): EChartsOption {
     tooltip: {
       ...TOOLTIP,
       trigger: "axis",
-      axisPointer: { type: "shadow" },
+      axisPointer: SHADOW_POINTER,
       valueFormatter: (v: any) => (typeof v === "number" ? fmtTokens(v) : String(v)),
     },
     legend: {

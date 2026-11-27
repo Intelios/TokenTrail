@@ -17,6 +17,7 @@ import {
   SPLIT_LINE,
   DIM,
   MONO,
+  SHADOW_POINTER,
   stackedColumn,
   type ChartColor,
 } from './chartTheme';
@@ -151,7 +152,7 @@ export function dailyOption(
       trigger: 'axis',
       ...TOOLTIP,
       confine: true,
-      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(13,13,11,0.06)' } },
+      axisPointer: SHADOW_POINTER,
       formatter: (params: unknown) => {
         type TipParam = { dataIndex: number; marker: string; seriesName: string; value?: number };
         const all = params as TipParam[];
@@ -304,7 +305,7 @@ export function singleDailyOption(
       trigger: 'axis',
       ...TOOLTIP,
       confine: true,
-      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(13,13,11,0.06)' } },
+      axisPointer: SHADOW_POINTER,
       formatter: (params: unknown) => {
         type TipParam = { dataIndex: number; marker: string; seriesIndex: number; value?: number };
         const all = params as TipParam[];
@@ -479,7 +480,7 @@ export function projectDailyOption(
       trigger: 'axis',
       ...TOOLTIP,
       confine: true,
-      axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(13,13,11,0.06)' } },
+      axisPointer: SHADOW_POINTER,
       formatter: (params: unknown) => {
         type TipParam = { dataIndex: number; marker: string; seriesName: string; value?: number };
         const all = params as TipParam[];

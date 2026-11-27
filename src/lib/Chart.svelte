@@ -27,6 +27,23 @@
     }
   };
 
+  // Reduced motion: the root `animation: false` stops entrances, but a pointer
+  // that sets its own `animation` (SHADOW_POINTER) outranks it, and the tooltip
+  // box slides on a CSS transition of its own. Both are switched off here.
+  type Tip = echarts.TooltipComponentOption;
+  const stillTip = (t: Tip): Tip => ({
+    ...t,
+    transitionDuration: 0,
+    ...(t.axisPointer ? { axisPointer: { ...t.axisPointer, animation: false } } : {}),
+  });
+  const still = (o: echarts.EChartsOption): echarts.EChartsOption => ({
+    ...o,
+    animation: false,
+    ...(o.tooltip
+      ? { tooltip: Array.isArray(o.tooltip) ? o.tooltip.map(stillTip) : stillTip(o.tooltip) }
+      : {}),
+  });
+
   onMount(() => {
     if (!el) return;
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -55,7 +72,7 @@
       if (content !== null && JSON.stringify([content, reducedMotion]) === lastKey)
         return;
       lastKey = content === null ? '' : JSON.stringify([content, reducedMotion]);
-      chart.setOption({ ...option, animation: reducedMotion ? false : option.animation }, true);
+      chart.setOption(reducedMotion ? still(option) : option, true);
       chart.resize();
     }
   });
