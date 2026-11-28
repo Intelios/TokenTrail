@@ -902,7 +902,12 @@
                 ].filter((_, i) => args.days === 30 ? i < 4 : true);
               }
               case 'get_source_status':
-                return SOURCES.map((s, i) => ({ source: s, display: s.replace('_', ' '), path: '/home/dev/.config/' + s, found: i !== 5 }));
+                return [
+                  ...SOURCES.filter((s) => s !== 'wackcode').map((s, i) => ({ source: s, display: s.replace('_', ' '), path: '/home/dev/.config/' + s, found: i !== 5 })),
+                  // WackCode's release and dev builds keep separate ledgers: one row each.
+                  { source: 'wackcode', display: 'WackCode', path: '/home/dev/Library/Application Support/com.wackcode.desktop/usage/v1', found: true },
+                  { source: 'wackcode', display: 'WackCode 3.0', path: '/home/dev/Library/Application Support/com.wackcode.desktop.dev/usage/v1', found: true },
+                ];
               // Usage Wrapped mock: the same fixtures the other cards use,
               // folded into one summary so ?mock can preview and export.
               case 'get_wrapped_summary': {

@@ -10,6 +10,10 @@
   let activeTab = $state<Tab>('sources');
 
   let sources = $state<SourceStatus[]>([]);
+  // A harness can have more than one row (WackCode's release and dev ledgers), so the
+  // header counts harnesses, and a row is told apart by its path.
+  const harnessCount = $derived(new Set(sources.map((s) => s.source)).size);
+  const installedCount = $derived(new Set(sources.filter((s) => s.found).map((s) => s.source)).size);
   let estimated = $state<EstimatedShare[]>([]);
   let revealingSource = $state('');
   let syncing = $state(false);
@@ -147,7 +151,7 @@
 
   async function revealSource(source: SourceStatus) {
     if (!source.found || revealingSource) return;
-    revealingSource = source.source;
+    revealingSource = source.path;
     error = '';
     try {
       await revealItemInDir(source.path);
@@ -644,13 +648,13 @@
       <div class="col">
         <div class="col-hd">
           <h2>Harness Sources</h2>
-          <span class="cnt">{sources.filter((s) => s.found).length} of {sources.length} installed</span>
+          <span class="cnt">{installedCount} of {harnessCount} installed</span>
         </div>
         <p class="note">
           TokenTrail only ever <b>reads</b> these locations. Everything it learns is copied into its own database, so history survives even if a harness wipes or rotates its files.
         </p>
         <div class="srclist">
-          {#each sources as s}
+          {#each sources as s (s.path)}
             <div class="src-item">
               <span class="dot" style="background:{sourceSwatch(s.source)}"></span>
               <div class="meta">
@@ -670,7 +674,7 @@
                   title="Reveal {s.path} in Finder"
                   aria-label="Open {s.display} in Finder"
                 >
-                  {revealingSource === s.source ? 'Opening…' : 'Open in Finder'}
+                  {revealingSource === s.path ? 'Opening…' : 'Open in Finder'}
                 </button>
                 <span class="tag ok">installed</span>
               {:else}

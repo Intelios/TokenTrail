@@ -1,6 +1,8 @@
 # WackCode usage ledger v1
 
 WackCode owns `~/Library/Application Support/com.wackcode.desktop/usage/v1/YYYY-MM/<writer-uuid>.jsonl`.
+Dev builds write the same contract to `com.wackcode.desktop.dev/usage/v1/` instead. Version 2
+(Tauri) and version 3 (native Rust) both write this contract, and TokenTrail reads both folders.
 TokenTrail reads complete newline-terminated records only, incrementally and read-only.
 Files are retained indefinitely, including after chat deletion. Recording is enabled by
 default and can be disabled in WackCode Settings > Integrations. No older chats are exported.

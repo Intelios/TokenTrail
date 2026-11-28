@@ -1,4 +1,11 @@
 //! Purpose-built, usage-only WackCode ledger. Never open conversation files.
+//!
+//! Both WackCode generations write the same v1 contract (`docs/wackcode-usage-v1.md`): 2.x
+//! (Tauri and React) and 3.0 (the native Rust remake) share its record shape byte for byte.
+//! The app's bundle decides where it writes: a release build of either generation writes
+//! `com.wackcode.desktop`, and a dev build `com.wackcode.desktop.dev`, which is every 3.0
+//! build so far. Both folders are read, each file on its own cursor, and every writer names
+//! its own file, so a record lives in one folder only; identity is still `(wackcode, id)`.
 use super::sorted_glob;
 use crate::{
     models::{Source, UsageEvent},
@@ -13,8 +20,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub fn root(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/com.wackcode.desktop/usage/v1")
+/// The app folders that hold a ledger, with the name Settings shows for each.
+const APPS: [(&str, &str); 2] = [
+    ("com.wackcode.desktop", "WackCode"),
+    ("com.wackcode.desktop.dev", "WackCode 3.0"),
+];
+
+/// Every ledger folder WackCode may write, release first, with its display name.
+pub fn roots(home: &Path) -> Vec<(&'static str, PathBuf)> {
+    APPS.iter()
+        .map(|(bundle, name)| {
+            let root = home.join("Library/Application Support").join(bundle).join("usage/v1");
+            (*name, root)
+        })
+        .collect()
 }
 const MAX_BATCH: u64 = 4 * 1024 * 1024;
 #[derive(Deserialize)]
@@ -110,11 +129,13 @@ fn parse(line: &str) -> Result<Option<UsageEvent>, String> {
 pub fn collect(store: &Store, home: &Path) -> Result<usize, String> {
     let mut processed = 0;
     let mut errors = Vec::new();
-    for path in sorted_glob(&format!("{}/*/*.jsonl", root(home).display()))? {
-        let result = collect_file(store, &path);
-        match result {
-            Ok(n) => processed += n,
-            Err(e) => errors.push(e),
+    // A folder that is missing reads as empty: most machines have only one of them.
+    for (name, root) in roots(home) {
+        for path in sorted_glob(&format!("{}/*/*.jsonl", root.display()))? {
+            match collect_file(store, &path) {
+                Ok(n) => processed += n,
+                Err(e) => errors.push(format!("{name}: {e}")),
+            }
         }
     }
     if errors.is_empty() {
@@ -213,11 +234,19 @@ mod tests {
     use crate::collectors::{test_home, test_store};
     use std::{fs, io::Write};
     const FIXTURE: &str = include_str!("../../fixtures/wackcode_usage_v1.jsonl");
+    /// Records as WackCode 3.0's writer lays them out: `connection-…` providers, `chat-…`
+    /// sessions, `<chat>/<id>` sub-agents and a Chat-area call with no project.
+    const V3_FIXTURE: &str = include_str!("../../fixtures/wackcode_usage_v1_v3.jsonl");
+    /// One month folder in the release ledger (`dev: false`) or the dev ledger.
+    fn month_dir(home: &Path, dev: bool) -> PathBuf {
+        let dir = roots(home)[usize::from(dev)].1.join("2026-09");
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
     fn setup(tag: &str) -> (PathBuf, Store, PathBuf) {
         let home = test_home(tag);
         let store = test_store(tag);
-        let dir = root(&home).join("2026-09");
-        fs::create_dir_all(&dir).unwrap();
+        let dir = month_dir(&home, false);
         (home, store, dir.join("a.jsonl"))
     }
     fn count(store: &Store) -> i64 {
@@ -305,6 +334,85 @@ mod tests {
         fs::write(file.with_file_name("b.jsonl"), FIXTURE).unwrap();
         assert!(collect(&store, &home).is_err());
         assert_eq!(count(&store), 7);
+    }
+    #[test]
+    fn roots_are_the_release_and_dev_app_folders() {
+        let home = Path::new("/Users/you");
+        let support = home.join("Library/Application Support");
+        assert_eq!(
+            roots(home),
+            [
+                ("WackCode", support.join("com.wackcode.desktop/usage/v1")),
+                ("WackCode 3.0", support.join("com.wackcode.desktop.dev/usage/v1")),
+            ]
+        );
+    }
+    #[test]
+    fn reads_the_release_and_dev_ledgers_on_their_own_cursors() {
+        let (home, store, release) = setup("wackcode-both");
+        fs::write(&release, FIXTURE).unwrap();
+        // 3.0 dev builds name their files by writer uuid like 2.x does.
+        let dev = month_dir(&home, true).join("b.jsonl");
+        fs::write(&dev, V3_FIXTURE).unwrap();
+        // 7 from 2.x; 3 of the 4 3.0 records carry counts.
+        assert_eq!(collect(&store, &home).unwrap(), 10);
+        assert_eq!(collect(&store, &home).unwrap(), 0);
+        assert_eq!(count(&store), 10);
+        // A new 3.0 record is picked up alone; the release cursor stays where it was.
+        let mut next: serde_json::Value =
+            serde_json::from_str(V3_FIXTURE.lines().next().unwrap()).unwrap();
+        next["id"] = "00000000-0000-4000-8000-000000000305".into();
+        next["ts"] = (next["ts"].as_i64().unwrap() + 60_000).into();
+        let mut f = fs::OpenOptions::new().append(true).open(&dev).unwrap();
+        writeln!(f, "{next}").unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 1);
+        assert_eq!(count(&store), 11);
+        // 3.0's sub-agent and Chat-area calls land like 2.x's.
+        let detail = crate::aggregate::wackcode_detail(&store, 3650).unwrap();
+        let chat_mode = detail.by_mode.iter().find(|m| m.name == "chat").unwrap();
+        assert_eq!((chat_mode.events, chat_mode.tokens), (2, 56));
+        let children: i64 = store
+            .read_conn()
+            .query_row(
+                "SELECT COUNT(*) FROM usage_event WHERE subagent_id = 'chat-18ebfc16098b93e8/a1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(children, 1);
+        // Settings shows each folder as its own row under the one source.
+        let rows: Vec<_> = crate::collectors::source_status(&home)
+            .into_iter()
+            .filter(|s| s.source == "wackcode")
+            .map(|s| (s.display, s.found))
+            .collect();
+        assert_eq!(rows, [("WackCode".to_string(), true), ("WackCode 3.0".to_string(), true)]);
+    }
+    #[test]
+    fn a_broken_dev_segment_holds_back_nothing_else_and_names_its_folder() {
+        let (home, store, release) = setup("wackcode-dev-broken");
+        fs::write(&release, FIXTURE).unwrap();
+        let dev = month_dir(&home, true);
+        fs::write(dev.join("a.jsonl"), "{broken}\n").unwrap();
+        // The same record seen in both folders is still one call.
+        fs::write(dev.join("b.jsonl"), FIXTURE.lines().next().unwrap().to_string() + "\n").unwrap();
+        let err = collect(&store, &home).unwrap_err();
+        assert!(err.contains("1 segment(s)"), "{err}");
+        assert!(err.contains("WackCode 3.0: Malformed usage record."), "{err}");
+        assert_eq!(count(&store), 7);
+    }
+    #[test]
+    fn a_machine_with_only_the_dev_ledger_reads_it() {
+        let home = test_home("wackcode-dev-only");
+        let store = test_store("wackcode-dev-only");
+        fs::write(month_dir(&home, true).join("a.jsonl"), V3_FIXTURE).unwrap();
+        assert_eq!(collect(&store, &home).unwrap(), 3);
+        let found: Vec<_> = crate::collectors::source_status(&home)
+            .into_iter()
+            .filter(|s| s.source == "wackcode")
+            .map(|s| s.found)
+            .collect();
+        assert_eq!(found, [false, true]);
     }
     #[test]
     fn migration_is_idempotent_and_preserves_existing_rows() {

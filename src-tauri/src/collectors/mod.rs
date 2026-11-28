@@ -53,9 +53,8 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
         (Source::Vibe, vibe::root(home)),
         // Discovery and retained usage live here; the library itself can move.
         (Source::WackChatter, home.join(".wackchatter")),
-        (Source::WackCode, wackcode::root(home)),
     ];
-    paths
+    let mut rows: Vec<SourceStatus> = paths
         .into_iter()
         .map(|(s, p)| SourceStatus {
             source: s.as_str().into(),
@@ -63,7 +62,16 @@ pub fn source_status(home: &Path) -> Vec<SourceStatus> {
             path: p.display().to_string(),
             found: p.exists(),
         })
-        .collect()
+        .collect();
+    // WackCode's release and dev builds keep separate ledgers, so each folder gets its own
+    // row under the one source.
+    rows.extend(wackcode::roots(home).into_iter().map(|(name, p)| SourceStatus {
+        source: Source::WackCode.as_str().into(),
+        display: name.into(),
+        path: p.display().to_string(),
+        found: p.exists(),
+    }));
+    rows
 }
 
 /// Read only the complete new lines appended since `offset`.
